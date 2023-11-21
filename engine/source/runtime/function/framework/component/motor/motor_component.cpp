@@ -38,7 +38,11 @@ namespace Piccolo
         m_target_position = transform_component->getPosition();
     }
 
-    void MotorComponent::getOffStuckDead() { LOG_INFO("Some get off stuck dead logic"); }
+    void MotorComponent::getOffStuckDead()
+    {
+	    //LOG_INFO("Some get off stuck dead logic");
+    }
+
     MotorComponent::~MotorComponent()
     {
         if (m_controller_type == ControllerType::physics)
@@ -80,13 +84,12 @@ namespace Piccolo
         calculateDesiredDisplacement(delta_time);
         calculateTargetPosition(transform_component->getPosition());
 
-        if (/*is root motion*/ true)
+        if (animation_component->HasRootMotion())
         {
             animation_component->tick(delta_time);
             Piccolo::Transform rt = animation_component->GetRootMotion();
             auto               pos = Math::RightHandYUpToZUp(rt.m_position);
             transform_component->setPosition(pos);
-            // transform_component->setRotation(rt.m_rotation);
             return;
         }
 

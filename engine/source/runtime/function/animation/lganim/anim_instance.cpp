@@ -13,6 +13,6 @@ namespace Piccolo
 
 	bool CAnimInstanceBase::HasRootMotion()
 	{
-		return true;
+		return false;
 	}
 } // namespace Piccolo
