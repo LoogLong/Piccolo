@@ -13,8 +13,8 @@ namespace Piccolo
     {
         m_parent_object = parent_object;
 
-        m_anim_instance = std::make_shared<CSingleAnimInstance>(&m_animation_res);
-        // m_anim_instance = std::make_shared<CAnimInstanceMotionMatching>(&m_animation_res);
+        // m_anim_instance = std::make_shared<CSingleAnimInstance>(&m_animation_res);
+        m_anim_instance = std::make_shared<CAnimInstanceMotionMatching>(&m_animation_res);
        
         m_skeleton = m_anim_instance->GetSkeleton();
     }

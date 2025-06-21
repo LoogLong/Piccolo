@@ -108,7 +108,7 @@ namespace Piccolo{
 
 		// Pose & Inertializer Data
 		int m_frame_index{0};
-		float m_inertialize_blending_halflife{0.1f};
+		float m_inertialize_blending_halflife{0.27f};
 		Array1D<Vector3> m_curr_bone_positions;
 		Array1D<Vector3> m_curr_bone_velocities;
 		Array1D<Quaternion> m_curr_bone_rotations;
@@ -293,7 +293,7 @@ namespace Piccolo{
 		                                                const Slice1D<Quaternion> trajectory_rotations);
 		int database_trajectory_index_clamp(CDataBase& db, int frame, int offset);
 		void forward_kinematic_full();
-		void inertialize_pose_reset(Slice1D<Vector3> bone_offset_positions,
+		void InertializePoseReset(Slice1D<Vector3> bone_offset_positions,
 		                            Slice1D<Vector3> bone_offset_velocities,
 		                            Slice1D<Quaternion> bone_offset_rotations,
 		                            Slice1D<Vector3> bone_offset_angular_velocities,
@@ -303,7 +303,7 @@ namespace Piccolo{
 		                            Quaternion& transition_dst_rotation,
 		                            const Vector3 root_position,
 		                            const Quaternion root_rotation);
-		void inertialize_pose_transition(Slice1D<Vector3> bone_offset_positions,
+		void InertializePoseTransition(Slice1D<Vector3> bone_offset_positions,
 		                                 Slice1D<Vector3> bone_offset_velocities,
 		                                 Slice1D<Quaternion> bone_offset_rotations,
 		                                 Slice1D<Vector3> bone_offset_angular_velocities,
@@ -324,7 +324,7 @@ namespace Piccolo{
 		                                 const Slice1D<Quaternion> bone_dst_rotations,
 		                                 const Slice1D<Vector3> bone_dst_angular_velocities);
 
-		void inertialize_pose_update(Slice1D<Vector3> bone_positions,
+		void InertializePoseUpdate(Slice1D<Vector3> bone_positions,
 		                             Slice1D<Vector3> bone_velocities,
 		                             Slice1D<Quaternion> bone_rotations,
 		                             Slice1D<Vector3> bone_angular_velocities,

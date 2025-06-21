@@ -6,7 +6,7 @@
 
 namespace Piccolo
 {
-    class EditorFileNode;
+    struct EditorFileNode;
     using EditorFileNodeArray = std::vector<std::shared_ptr<EditorFileNode>>;
 
     struct EditorFileNode

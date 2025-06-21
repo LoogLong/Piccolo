@@ -83,9 +83,9 @@ namespace Piccolo
 		m_transition_dst_position = Vector3::ZERO;
 		m_transition_dst_rotation = Quaternion::IDENTITY;
 
-		inertialize_pose_reset(m_bone_offset_positions, m_bone_offset_velocities, m_bone_offset_rotations, m_bone_offset_angular_velocities, m_transition_src_position, m_transition_src_rotation, m_transition_dst_position, m_transition_dst_rotation, m_bone_positions(0), m_bone_rotations(0));
+		InertializePoseReset(m_bone_offset_positions, m_bone_offset_velocities, m_bone_offset_rotations, m_bone_offset_angular_velocities, m_transition_src_position, m_transition_src_rotation, m_transition_dst_position, m_transition_dst_rotation, m_bone_positions(0), m_bone_rotations(0));
 
-		inertialize_pose_update(m_bone_positions, m_bone_velocities, m_bone_rotations, m_bone_angular_velocities, m_bone_offset_positions, m_bone_offset_velocities, m_bone_offset_rotations, m_bone_offset_angular_velocities, m_data_base.m_bone_positions(m_frame_index), m_data_base.m_bone_velocities(m_frame_index), m_data_base.m_bone_rotations(m_frame_index), m_data_base.m_bone_angular_velocities(m_frame_index), m_transition_src_position, m_transition_src_rotation, m_transition_dst_position, m_transition_dst_rotation, m_inertialize_blending_halflife, 0.0f);
+		InertializePoseUpdate(m_bone_positions, m_bone_velocities, m_bone_rotations, m_bone_angular_velocities, m_bone_offset_positions, m_bone_offset_velocities, m_bone_offset_rotations, m_bone_offset_angular_velocities, m_data_base.m_bone_positions(m_frame_index), m_data_base.m_bone_velocities(m_frame_index), m_data_base.m_bone_rotations(m_frame_index), m_data_base.m_bone_angular_velocities(m_frame_index), m_transition_src_position, m_transition_src_rotation, m_transition_dst_position, m_transition_dst_rotation, m_inertialize_blending_halflife, 0.0f);
 
 		// Trajectory & Gameplay Data
 		m_search_timer       = m_search_time;
@@ -341,6 +341,32 @@ namespace Piccolo
 			if (best_index != m_frame_index)
 			{
 				m_frame_index = best_index;
+
+				m_trns_bone_positions          = m_data_base.m_bone_positions(best_index);
+				m_trns_bone_velocities         = m_data_base.m_bone_velocities(best_index);
+				m_trns_bone_rotations          = m_data_base.m_bone_rotations(best_index);
+				m_trns_bone_angular_velocities = m_data_base.m_bone_angular_velocities(best_index);
+
+				InertializePoseTransition(m_bone_offset_positions,
+                                          m_bone_offset_velocities,
+                                          m_bone_offset_rotations,
+                                          m_bone_offset_angular_velocities,
+                                          m_transition_src_position,
+                                          m_transition_src_rotation,
+                                          m_transition_dst_position,
+                                          m_transition_dst_rotation,
+                                          m_bone_positions(0),
+                                          m_bone_velocities(0),
+                                          m_bone_rotations(0),
+                                          m_bone_angular_velocities(0),
+                                          m_curr_bone_positions,
+                                          m_curr_bone_velocities,
+                                          m_curr_bone_rotations,
+                                          m_curr_bone_angular_velocities,
+                                          m_trns_bone_positions,
+                                          m_trns_bone_velocities,
+                                          m_trns_bone_rotations,
+                                          m_trns_bone_angular_velocities);
 			}
 			// Reset search timer
 			m_search_timer = m_search_time;
@@ -471,6 +497,24 @@ namespace Piccolo
 			Slice1D<Vector3>    curr_frame_bone_positions = m_data_base.m_bone_positions(m_frame_index);
 			Slice1D<Quaternion> curr_frame_bone_rotations = m_data_base.m_bone_rotations(m_frame_index);
 #endif
+            InertializePoseUpdate(m_bone_positions,
+                                  m_bone_velocities,
+                                  m_bone_rotations,
+                                  m_bone_angular_velocities,
+                                  m_bone_offset_positions,
+                                  m_bone_offset_velocities,
+                                  m_bone_offset_rotations,
+                                  m_bone_offset_angular_velocities,
+                                  m_data_base.m_bone_positions(m_frame_index),
+                                  m_data_base.m_bone_velocities(m_frame_index),
+                                  m_data_base.m_bone_rotations(m_frame_index),
+                                  m_data_base.m_bone_angular_velocities(m_frame_index),
+                                  m_transition_src_position,
+                                  m_transition_src_rotation,
+                                  m_transition_dst_position,
+                                  m_transition_dst_rotation,
+                                  m_inertialize_blending_halflife,
+                                  delta_time);
 
 			// 当前模拟的root位置
 			Vector3    curr_root_position = m_bone_positions(0);
@@ -983,7 +1027,7 @@ namespace Piccolo
 		}
 	}
 
-	void CAnimInstanceMotionMatching::inertialize_pose_reset(Slice1D<Vector3> bone_offset_positions, Slice1D<Vector3> bone_offset_velocities, Slice1D<Quaternion> bone_offset_rotations, Slice1D<Vector3> bone_offset_angular_velocities, Vector3& transition_src_position, Quaternion& transition_src_rotation, Vector3& transition_dst_position, Quaternion& transition_dst_rotation, const Vector3 root_position, const Quaternion root_rotation)
+	void CAnimInstanceMotionMatching::InertializePoseReset(Slice1D<Vector3> bone_offset_positions, Slice1D<Vector3> bone_offset_velocities, Slice1D<Quaternion> bone_offset_rotations, Slice1D<Vector3> bone_offset_angular_velocities, Vector3& transition_src_position, Quaternion& transition_src_rotation, Vector3& transition_dst_position, Quaternion& transition_dst_rotation, const Vector3 root_position, const Quaternion root_rotation)
 	{
 		bone_offset_positions.zero();
 		bone_offset_velocities.zero();
@@ -1003,7 +1047,7 @@ namespace Piccolo
 	// for the pose being transitioned from (src) as well
 	// as the pose being transitioned to (dst) in their
 	// own animation spaces.
-	void CAnimInstanceMotionMatching::inertialize_pose_transition(Slice1D<Vector3> bone_offset_positions, Slice1D<Vector3> bone_offset_velocities, Slice1D<Quaternion> bone_offset_rotations, Slice1D<Vector3> bone_offset_angular_velocities, Vector3& transition_src_position, Quaternion& transition_src_rotation, Vector3& transition_dst_position, Quaternion& transition_dst_rotation, const Vector3 root_position, const Vector3 root_velocity, const Quaternion root_rotation, const Vector3 root_angular_velocity, const Slice1D<Vector3> bone_src_positions, const Slice1D<Vector3> bone_src_velocities, const Slice1D<Quaternion> bone_src_rotations, const Slice1D<Vector3> bone_src_angular_velocities, const Slice1D<Vector3> bone_dst_positions, const Slice1D<Vector3> bone_dst_velocities, const Slice1D<Quaternion> bone_dst_rotations, const Slice1D<Vector3> bone_dst_angular_velocities)
+	void CAnimInstanceMotionMatching::InertializePoseTransition(Slice1D<Vector3> bone_offset_positions, Slice1D<Vector3> bone_offset_velocities, Slice1D<Quaternion> bone_offset_rotations, Slice1D<Vector3> bone_offset_angular_velocities, Vector3& transition_src_position, Quaternion& transition_src_rotation, Vector3& transition_dst_position, Quaternion& transition_dst_rotation, const Vector3 root_position, const Vector3 root_velocity, const Quaternion root_rotation, const Vector3 root_angular_velocity, const Slice1D<Vector3> bone_src_positions, const Slice1D<Vector3> bone_src_velocities, const Slice1D<Quaternion> bone_src_rotations, const Slice1D<Vector3> bone_src_angular_velocities, const Slice1D<Vector3> bone_dst_positions, const Slice1D<Vector3> bone_dst_velocities, const Slice1D<Quaternion> bone_dst_rotations, const Slice1D<Vector3> bone_dst_angular_velocities)
 	{
 		// First we record the root position and rotation
 		// in the animation data for the source and destination
@@ -1039,7 +1083,24 @@ namespace Piccolo
 	// as well as updating the offsets themselves. It takes
 	// as input the current playing animation as well as the
 	// root transition locations, a halflife, and a dt
-	void CAnimInstanceMotionMatching::inertialize_pose_update(Slice1D<Vector3> bone_positions, Slice1D<Vector3> bone_velocities, Slice1D<Quaternion> bone_rotations, Slice1D<Vector3> bone_angular_velocities, Slice1D<Vector3> bone_offset_positions, Slice1D<Vector3> bone_offset_velocities, Slice1D<Quaternion> bone_offset_rotations, Slice1D<Vector3> bone_offset_angular_velocities, const Slice1D<Vector3> bone_input_positions, const Slice1D<Vector3> bone_input_velocities, const Slice1D<Quaternion> bone_input_rotations, const Slice1D<Vector3> bone_input_angular_velocities, const Vector3 transition_src_position, const Quaternion transition_src_rotation, const Vector3 transition_dst_position, const Quaternion transition_dst_rotation, const float halflife, const float dt)
+	void CAnimInstanceMotionMatching::InertializePoseUpdate(
+		Slice1D<Vector3> bone_positions, 
+		Slice1D<Vector3> bone_velocities, 
+		Slice1D<Quaternion> bone_rotations, 
+		Slice1D<Vector3> bone_angular_velocities, 
+		Slice1D<Vector3> bone_offset_positions, 
+		Slice1D<Vector3> bone_offset_velocities, 
+		Slice1D<Quaternion> bone_offset_rotations, 
+		Slice1D<Vector3> bone_offset_angular_velocities, 
+		const Slice1D<Vector3> bone_input_positions, 
+		const Slice1D<Vector3> bone_input_velocities, 
+		const Slice1D<Quaternion> bone_input_rotations, 
+		const Slice1D<Vector3> bone_input_angular_velocities, 
+		const Vector3 transition_src_position, 
+		const Quaternion transition_src_rotation, 
+		const Vector3 transition_dst_position, 
+		const Quaternion transition_dst_rotation, 
+		const float halflife, const float dt)
 	{
 		// First we find the next root position, velocity, rotation
 		// and rotational velocity in the world space by transforming
