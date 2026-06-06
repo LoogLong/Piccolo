@@ -1010,32 +1010,6 @@ namespace Piccolo
                 throw std::runtime_error("create compute pass pipe layout");
             LOG_INFO("compute pipe layout done");
         }
-        /*
-        VkPipelineCache           pipelineCache;
-        VkPipelineCacheCreateInfo pipelineCacheCreateInfo = {};
-        pipelineCacheCreateInfo.sType                     = RHI_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-        if (RHI_SUCCESS != vkCreatePipelineCache(m_vulkan_rhi->m_device, &pipelineCacheCreateInfo, nullptr,
-        &pipelineCache))
-        {
-            throw std::runtime_error("create particle cache");
-        }*/
-
-        struct SpecializationData
-        {
-            uint32_t BUFFER_ELEMENT_COUNT = 32;
-        } specializationData;
-
-        VkSpecializationMapEntry specializationMapEntry {};
-        specializationMapEntry.constantID = 0;
-        specializationMapEntry.offset     = 0;
-        specializationMapEntry.size       = sizeof(uint32_t);
-
-        VkSpecializationInfo specializationInfo {};
-        specializationInfo.mapEntryCount = 1;
-        specializationInfo.pMapEntries   = &specializationMapEntry;
-        specializationInfo.dataSize      = sizeof(specializationData);
-        specializationInfo.pData         = &specializationData;
-
         RHIComputePipelineCreateInfo computePipelineCreateInfo {};
 
         computePipelineCreateInfo.sType  = RHI_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -1046,42 +1020,40 @@ namespace Piccolo
         shaderStage.sType                            = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         shaderStage.stage                            = RHI_SHADER_STAGE_COMPUTE_BIT;
         shaderStage.pName                            = "main";
+        shaderStage.pSpecializationInfo              = RHI_NULL_HANDLE;
 
         {
-            shaderStage.module              = m_rhi->createShaderModule(PARTICLE_KICKOFF_COMP);
-            shaderStage.pSpecializationInfo = nullptr;
+            shaderStage.module = m_rhi->createShaderModule(PARTICLE_KICKOFF_COMP);
             assert(shaderStage.module != RHI_NULL_HANDLE);
 
             computePipelineCreateInfo.pStages = &shaderStage;
-            if (RHI_SUCCESS != m_rhi->createComputePipelines(
-                                   /*pipelineCache*/ nullptr, 1, &computePipelineCreateInfo, m_kickoff_pipeline))
+            if (RHI_SUCCESS !=
+                m_rhi->createComputePipelines(RHI_NULL_HANDLE, 1, &computePipelineCreateInfo, m_kickoff_pipeline))
             {
                 throw std::runtime_error("create particle kickoff pipe");
             }
         }
 
         {
-            shaderStage.module              = m_rhi->createShaderModule(PARTICLE_EMIT_COMP);
-            shaderStage.pSpecializationInfo = nullptr;
+            shaderStage.module = m_rhi->createShaderModule(PARTICLE_EMIT_COMP);
             assert(shaderStage.module != RHI_NULL_HANDLE);
 
             computePipelineCreateInfo.pStages = &shaderStage;
-            if (RHI_SUCCESS != m_rhi->createComputePipelines(
-                                   /*pipelineCache*/ nullptr, 1, &computePipelineCreateInfo, m_emit_pipeline))
+            if (RHI_SUCCESS !=
+                m_rhi->createComputePipelines(RHI_NULL_HANDLE, 1, &computePipelineCreateInfo, m_emit_pipeline))
             {
                 throw std::runtime_error("create particle emit pipe");
             }
         }
 
         {
-            shaderStage.module              = m_rhi->createShaderModule(PARTICLE_SIMULATE_COMP);
-            shaderStage.pSpecializationInfo = nullptr;
+            shaderStage.module = m_rhi->createShaderModule(PARTICLE_SIMULATE_COMP);
             assert(shaderStage.module != RHI_NULL_HANDLE);
 
             computePipelineCreateInfo.pStages = &shaderStage;
 
-            if (RHI_SUCCESS != m_rhi->createComputePipelines(
-                                   /*pipelineCache*/ nullptr, 1, &computePipelineCreateInfo, m_simulate_pipeline))
+            if (RHI_SUCCESS !=
+                m_rhi->createComputePipelines(RHI_NULL_HANDLE, 1, &computePipelineCreateInfo, m_simulate_pipeline))
             {
                 throw std::runtime_error("create particle simulate pipe");
             }
