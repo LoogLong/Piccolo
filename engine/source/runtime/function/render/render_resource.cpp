@@ -15,6 +15,18 @@
 
 namespace Piccolo
 {
+    namespace
+    {
+        VmaAllocator getAssetAllocator(RHI* rhi)
+        {
+            if (rhi != nullptr && rhi->getBackendType() == RHIBackendType::Vulkan)
+            {
+                return static_cast<VulkanRHI*>(rhi)->m_assets_allocator;
+            }
+            return nullptr;
+        }
+    } // namespace
+
     void RenderResource::clear()
     {
     }
@@ -168,8 +180,6 @@ namespace Piccolo
 
     void RenderResource::createIBLSamplers(std::shared_ptr<RHI> rhi)
     {
-        VulkanRHI* raw_rhi = static_cast<VulkanRHI*>(rhi.get());
-
         RHIPhysicalDeviceProperties physical_device_properties{};
         rhi->getPhysicalDeviceProperties(&physical_device_properties);
 
@@ -329,7 +339,7 @@ namespace Piccolo
         RenderEntity         entity,
         RenderMaterialData   material_data)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
+        VmaAllocator asset_allocator = getAssetAllocator(rhi.get());
 
         size_t assetid = entity.m_material_asset_id;
 
@@ -457,7 +467,7 @@ namespace Piccolo
                 allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
                 rhi->createBufferWithAlignmentVMA(
-                    vulkan_context->m_assets_allocator,
+                    asset_allocator,
                     &bufferInfo,
                     &allocInfo,
                     m_global_render_resource._storage_buffer._min_uniform_buffer_offset_alignment,
@@ -501,7 +511,7 @@ namespace Piccolo
             RHIDescriptorSetAllocateInfo material_descriptor_set_alloc_info;
             material_descriptor_set_alloc_info.sType = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             material_descriptor_set_alloc_info.pNext = NULL;
-            material_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            material_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             material_descriptor_set_alloc_info.descriptorSetCount = 1;
             material_descriptor_set_alloc_info.pSetLayouts        = m_material_descriptor_set_layout;
 
@@ -624,7 +634,7 @@ namespace Piccolo
                                             uint16_t*                              index_buffer_data,
                                             VulkanMesh&                            now_mesh)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
+        VmaAllocator asset_allocator = getAssetAllocator(rhi.get());
 
         if (enable_vertex_blending)
         {
@@ -735,21 +745,21 @@ namespace Piccolo
 
             bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_position_buffer,
                                  &now_mesh.mesh_vertex_position_buffer_allocation,
                                  NULL);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_varying_enable_blending_buffer,
                                  &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
                                  NULL);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_varying_buffer,
@@ -758,7 +768,7 @@ namespace Piccolo
 
             bufferInfo.usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_joint_binding_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_joint_binding_buffer,
@@ -796,7 +806,7 @@ namespace Piccolo
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.sType =
                 RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pNext = NULL;
-            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pSetLayouts        = m_mesh_descriptor_set_layout;
 
@@ -912,21 +922,21 @@ namespace Piccolo
             allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_position_buffer,
                                  &now_mesh.mesh_vertex_position_buffer_allocation,
                                  NULL);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_varying_enable_blending_buffer,
                                  &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
                                  NULL);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+            rhi->createBufferVMA(asset_allocator,
                                  &bufferInfo,
                                  &allocInfo,
                                  now_mesh.mesh_vertex_varying_buffer,
@@ -959,7 +969,7 @@ namespace Piccolo
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.sType =
                 RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pNext = NULL;
-            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pSetLayouts        = m_mesh_descriptor_set_layout;
 
@@ -1008,7 +1018,7 @@ namespace Piccolo
                                            void*                index_buffer_data,
                                            VulkanMesh&          now_mesh)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
+        VmaAllocator asset_allocator = getAssetAllocator(rhi.get());
 
         // temp staging buffer
         RHIDeviceSize buffer_size = index_buffer_size;
@@ -1034,7 +1044,7 @@ namespace Piccolo
         VmaAllocationCreateInfo allocInfo = {};
         allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-        rhi->createBufferVMA(vulkan_context->m_assets_allocator,
+        rhi->createBufferVMA(asset_allocator,
                              &bufferInfo,
                              &allocInfo,
                              now_mesh.mesh_index_buffer,
@@ -1135,9 +1145,8 @@ namespace Piccolo
 
     void RenderResource::createAndMapStorageBuffer(std::shared_ptr<RHI> rhi)
     {
-        VulkanRHI* raw_rhi = static_cast<VulkanRHI*>(rhi.get());
         StorageBuffer& _storage_buffer = m_global_render_resource._storage_buffer;
-        uint32_t       frames_in_flight = raw_rhi->k_max_frames_in_flight;
+        uint32_t       frames_in_flight = rhi->getMaxFramesInFlight();
 
         RHIPhysicalDeviceProperties properties;
         rhi->getPhysicalDeviceProperties(&properties);
