@@ -2,6 +2,8 @@
 
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 
+#include "runtime/core/base/macro.h"
+
 #include "runtime/resource/config_manager/config_manager.h"
 
 #include "runtime/function/ui/window_ui.h"
@@ -21,6 +23,12 @@ namespace Piccolo
     void UIPass::initializeUIRenderBackend(WindowUI* window_ui)
     {
         m_window_ui = window_ui;
+
+        if (m_rhi->getBackendType() != RHIBackendType::Vulkan)
+        {
+            LOG_WARN("UI backend is only implemented for Vulkan currently; skip UI backend initialization");
+            return;
+        }
 
         ImGui_ImplGlfw_InitForVulkan(std::static_pointer_cast<VulkanRHI>(m_rhi)->m_window, true);
         ImGui_ImplVulkan_InitInfo init_info = {};
@@ -43,6 +51,11 @@ namespace Piccolo
 
     void UIPass::uploadFonts()
     {
+        if (m_rhi->getBackendType() != RHIBackendType::Vulkan)
+        {
+            return;
+        }
+
         RHICommandBufferAllocateInfo allocInfo = {};
         allocInfo.sType                       = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level                       = RHI_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -88,6 +101,11 @@ namespace Piccolo
     {
         if (m_window_ui)
         {
+            if (m_rhi->getBackendType() != RHIBackendType::Vulkan)
+            {
+                return;
+            }
+
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();

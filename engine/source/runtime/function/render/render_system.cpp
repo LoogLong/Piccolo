@@ -18,7 +18,77 @@
 #include "runtime/function/render/passes/main_camera_pass.h"
 #include "runtime/function/render/passes/particle_pass.h"
 
+#include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
+
+#include <algorithm>
+#include <cctype>
+#include <exception>
+#include <stdexcept>
+#include <string>
+
+namespace
+{
+    using namespace Piccolo;
+
+    std::string toLowerCopy(const std::string& value)
+    {
+        std::string lower = value;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return lower;
+    }
+
+    RHIBackendType parseBackendFromConfig(const std::string& backend)
+    {
+        const std::string lower = toLowerCopy(backend);
+        if (lower == "vulkan")
+        {
+            return RHIBackendType::Vulkan;
+        }
+        if (lower == "d3d12" || lower == "dx12")
+        {
+            return RHIBackendType::D3D12;
+        }
+        return RHIBackendType::Auto;
+    }
+
+    const char* backendToString(RHIBackendType backend)
+    {
+        switch (backend)
+        {
+            case RHIBackendType::Vulkan:
+                return "Vulkan";
+            case RHIBackendType::D3D12:
+                return "D3D12";
+            case RHIBackendType::Auto:
+            default:
+                return "Auto";
+        }
+    }
+
+    RHIBackendType getPlatformDefaultBackend()
+    {
+#ifdef _WIN32
+        return RHIBackendType::D3D12;
+#else
+        return RHIBackendType::Vulkan;
+#endif
+    }
+
+    std::shared_ptr<RHI> createRHIBackend(RHIBackendType backend)
+    {
+        switch (backend)
+        {
+            case RHIBackendType::Vulkan:
+                return std::make_shared<VulkanRHI>();
+            case RHIBackendType::D3D12:
+                return std::make_shared<D3D12RHI>();
+            case RHIBackendType::Auto:
+            default:
+                return nullptr;
+        }
+    }
+}
 
 namespace Piccolo
 {
@@ -37,9 +107,57 @@ namespace Piccolo
         // render context initialize
         RHIInitInfo rhi_init_info;
         rhi_init_info.window_system = init_info.window_system;
+        rhi_init_info.allow_fallback_to_vulkan = config_manager->getRenderBackendAllowFallback();
 
-        m_rhi = std::make_shared<VulkanRHI>();
-        m_rhi->initialize(rhi_init_info);
+        const RHIBackendType configured_backend = parseBackendFromConfig(config_manager->getRenderBackend());
+        RHIBackendType       requested_backend  = configured_backend;
+        if (requested_backend == RHIBackendType::Auto)
+        {
+            requested_backend = getPlatformDefaultBackend();
+        }
+
+        auto tryInitializeBackend = [&](RHIBackendType backend) -> bool {
+            std::shared_ptr<RHI> rhi = createRHIBackend(backend);
+            if (!rhi)
+            {
+                LOG_WARN(std::string("RHI backend ") + backendToString(backend) + " is not implemented in this build");
+                return false;
+            }
+
+            rhi_init_info.requested_backend = backend;
+            try
+            {
+                rhi->initialize(rhi_init_info);
+                m_rhi = std::move(rhi);
+                LOG_INFO(std::string("Initialized RHI backend: ") + backendToString(backend));
+                return true;
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR(std::string("RHI backend initialization failed for ") + backendToString(backend) + ": " + e.what());
+            }
+            catch (...)
+            {
+                LOG_ERROR(std::string("RHI backend initialization failed for ") + backendToString(backend) + ": unknown exception");
+            }
+            return false;
+        };
+
+        if (!tryInitializeBackend(requested_backend))
+        {
+            if (rhi_init_info.allow_fallback_to_vulkan && requested_backend != RHIBackendType::Vulkan)
+            {
+                LOG_WARN(std::string("Falling back to Vulkan backend from ") + backendToString(requested_backend));
+                if (!tryInitializeBackend(RHIBackendType::Vulkan))
+                {
+                    throw std::runtime_error("Failed to initialize both primary and fallback RHI backends");
+                }
+            }
+            else
+            {
+                throw std::runtime_error(std::string("Failed to initialize RHI backend: ") + backendToString(requested_backend));
+            }
+        }
 
         // global rendering resource
         GlobalRenderingRes global_rendering_res;
@@ -166,23 +284,15 @@ namespace Piccolo
 
     void RenderSystem::updateEngineContentViewport(float offset_x, float offset_y, float width, float height)
     {
-        std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.x        = offset_x;
-        std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.y        = offset_y;
-        std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.width    = width;
-        std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.height   = height;
-        std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.minDepth = 0.0f;
-        std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.maxDepth = 1.0f;
+        m_rhi->setViewport(offset_x, offset_y, width, height, 0.0f, 1.0f);
 
         m_render_camera->setAspect(width / height);
     }
 
     EngineContentViewport RenderSystem::getEngineContentViewport() const
     {
-        float x      = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.x;
-        float y      = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.y;
-        float width  = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.width;
-        float height = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_viewport.height;
-        return {x, y, width, height};
+        const RHIViewport viewport = m_rhi->getViewport();
+        return {viewport.x, viewport.y, viewport.width, viewport.height};
     }
 
     uint32_t RenderSystem::getGuidOfPickedMesh(const Vector2& picked_uv)

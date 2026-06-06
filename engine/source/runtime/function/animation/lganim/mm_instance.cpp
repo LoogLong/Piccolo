@@ -146,7 +146,7 @@ namespace Piccolo
 		m_retarget_map[32] = Bone_LeftHand;
 		m_retarget_map[8]  = Bone_RightShoulder;
 		m_retarget_map[9]  = Bone_RightArm;
-		m_retarget_map[28]  = Bone_RightArm;
+		m_retarget_map[28] = Bone_RightArm;
 		m_retarget_map[10] = Bone_RightForeArm;
 		m_retarget_map[27] = Bone_RightForeArm;
 		m_retarget_map[11] = Bone_RightHand;
@@ -1175,17 +1175,18 @@ namespace Piccolo
 			auto&      bone                     = dest_skeleton.getBones()[i];
 			const auto index                    = static_cast<int>(bone.getID());
 			retargeted_result.node[index].index = index + 1;
-			target_rest_ls_transforms[index]         = Transform(bone.m_position, bone.m_orientation, bone.m_scale);
-			translate[index]                    = bone.m_position;
-			scaling[index]                      = bone.m_scale;
-			rotation[index]                     = bone.m_orientation;
-			names[index]                        = bone.m_name;
+			target_rest_ls_transforms[index]    = Transform(bone.getPosition(), bone.getOrientation(), bone.getScale());
+			translate[index]                    = bone.getPosition();
+			scaling[index]                      = bone.getScale();
+			rotation[index]                     = bone.getOrientation();
+			names[index]                        = bone.getName();
 			inv_t_pose[index]                   = bone._getInverseTpose();
 
 			const auto parent_node = bone.getParent();
 			const auto parent_bone = dynamic_cast<Piccolo::Bone*>(parent_node);
 			parent_indices[index]  = parent_bone ? static_cast<int>(parent_bone->getID()) : INDEX_NONE;
 		}
+		/*
         if (first_update)
 		{
             first_update = false;
@@ -1208,9 +1209,9 @@ namespace Piccolo
                 }
                 printf("%llu-%s\n", i, names[i].c_str());
             }
-			
 		}
-
+		*/
+	
 		// re-targeting
 		std::vector<Transform> mm_anim_cs_trans;
         std::vector<Transform> mm_rest_cs_trans;

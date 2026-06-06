@@ -1,3 +1,23 @@
+# 渲染后端迁移说明（进行中）
+
+## D3D12 后端选择与回退（2026-06）
+
+### 已完成
+- 新增运行时渲染后端配置项：`RenderBackend`、`RenderBackendAllowFallback`
+- 启动流程支持后端工厂选择：`Auto / Vulkan / D3D12`
+- Windows 平台 `Auto` 默认请求 `D3D12`
+- D3D12 初始化失败时可按配置自动回退到 Vulkan
+- `RenderSystem` 的 viewport 读写已通过 RHI 抽象接口统一
+
+### 当前状态
+- D3D12 后端已接入最小初始化链路（Factory / Device / Queue / Swapchain / Fence）
+- D3D12 渲染主路径尚未完成，当前会显式抛错并触发回退，不会静默进入未完成路径
+
+### 后续迁移清单
+- `RenderResource` 中 Vulkan 强耦合迁移
+- `RenderPipeline` 中 Vulkan 强耦合迁移
+- `UIPass` 的 D3D12 原生 ImGui 渲染后端接入
+
 # Pilot引擎 0.0.8 版本发布说明
 ✨ 大家好！Pilot引擎自4月4日发布以来，我们很高兴得到很多开发者朋友们的关注，非常感谢社区开发者们的贡献！
 在整合了开发者社区贡献的更改和我们内部开发更改之后，在此我们激动地发布**Pilot引擎0.0.8版本**！

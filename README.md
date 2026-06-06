@@ -111,3 +111,17 @@ cmake -S . -B build -DENABLE_PHYSICS_DEBUG_RENDERER=ON
 Note:
 1. Please clean the build directory before regenerating the solution. We've encountered building problems in regenerating directly with previous CMakeCache.
 2. Physics Debug Renderer will run when you start PiccoloEditor. We've synced the camera position between both scenes. But the initial camera mode in Physics Debug Renderer is wrong. Scrolling down the mouse wheel once will change the camera of Physics Debug Renderer to the correct mode.
+
+### Render Backend Selection
+
+Piccolo runtime now supports backend selection from config files:
+
+```ini
+RenderBackend=Auto
+RenderBackendAllowFallback=true
+```
+
+- `RenderBackend` supports `Auto`, `Vulkan`, `D3D12`.
+- On Windows, `Auto` defaults to `D3D12`.
+- If `RenderBackendAllowFallback=true`, failed `D3D12` initialization will automatically fall back to `Vulkan`.
+- On non-Windows platforms, the D3D12 path is disabled and Vulkan remains the active backend.

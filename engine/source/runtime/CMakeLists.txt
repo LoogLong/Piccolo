@@ -52,7 +52,11 @@ target_link_libraries(${TARGET_NAME} PRIVATE $<BUILD_INTERFACE:json11>)
 
 if(ENABLE_PHYSICS_DEBUG_RENDERER)
   add_compile_definitions(ENABLE_PHYSICS_DEBUG_RENDERER)
-  target_link_libraries(${TARGET_NAME} PUBLIC TestFramework d3d12.lib shcore.lib)
+  target_link_libraries(${TARGET_NAME} PUBLIC TestFramework shcore.lib)
+endif()
+
+if(WIN32)
+  target_link_libraries(${TARGET_NAME} PUBLIC d3d12.lib dxgi.lib)
 endif()
 
 target_include_directories(

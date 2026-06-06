@@ -13,9 +13,18 @@ namespace Piccolo
 {
     class WindowSystem;
 
+    enum class RHIBackendType
+    {
+        Auto,
+        Vulkan,
+        D3D12
+    };
+
     struct RHIInitInfo
     {
         std::shared_ptr<WindowSystem> window_system;
+        RHIBackendType                requested_backend {RHIBackendType::Auto};
+        bool                          allow_fallback_to_vulkan {true};
     };
     
     class RHI
@@ -116,6 +125,7 @@ namespace Piccolo
         virtual void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) = 0;
         virtual bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) = 0;
         virtual bool queueWaitIdle(RHIQueue* queue) = 0;
+        virtual RHIBackendType getBackendType() const = 0;
         virtual void resetCommandPool() = 0;
         virtual void waitForFences() = 0;
 
@@ -131,6 +141,8 @@ namespace Piccolo
         virtual RHIQueue* getComputeQueue() const = 0;
         virtual RHISwapChainDesc getSwapchainInfo() = 0;
         virtual RHIDepthImageDesc getDepthImageInfo() const = 0;
+        virtual void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) = 0;
+        virtual RHIViewport getViewport() const = 0;
         virtual uint8_t getMaxFramesInFlight() const = 0;
         virtual uint8_t getCurrentFrameIndex() const = 0;
         virtual void setCurrentFrameIndex(uint8_t index) = 0;

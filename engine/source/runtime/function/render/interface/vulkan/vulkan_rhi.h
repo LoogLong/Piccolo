@@ -14,12 +14,12 @@ namespace Piccolo
 {
     
 
-    class VulkanRHI final : public RHI
+    class VulkanRHI : public RHI
     {
     public:
         // initialize
-        virtual void initialize(RHIInitInfo init_info) override final;
-        virtual void prepareContext() override final;
+        virtual void initialize(RHIInitInfo init_info) override;
+        virtual void prepareContext() override;
 
         // allocate and create
         bool allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers) override;
@@ -109,6 +109,7 @@ namespace Piccolo
         void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) override;
         bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) override;
         bool queueWaitIdle(RHIQueue* queue) override;
+        RHIBackendType getBackendType() const override;
         void resetCommandPool() override;
         void waitForFences() override;
         bool waitForFences(uint32_t fenceCount, const RHIFence* const* pFences, RHIBool32 waitAll, uint64_t timeout);
@@ -125,6 +126,8 @@ namespace Piccolo
         RHIQueue* getComputeQueue() const override;
         RHISwapChainDesc getSwapchainInfo() override;
         RHIDepthImageDesc getDepthImageInfo() const override;
+        void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) override;
+        RHIViewport getViewport() const override;
         uint8_t getMaxFramesInFlight() const override;
         uint8_t getCurrentFrameIndex() const override;
         void setCurrentFrameIndex(uint8_t index) override;
@@ -138,7 +141,7 @@ namespace Piccolo
         void popEvent(RHICommandBuffer* commond_buffer) override;
 
         // destory
-        virtual ~VulkanRHI() override final;
+        virtual ~VulkanRHI() override;
         void clear() override;
         void clearSwapchain() override;
         void destroyDefaultSampler(RHIDefaultSamplerType type) override;

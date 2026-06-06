@@ -2408,6 +2408,11 @@ namespace Piccolo
         }
     }
 
+    RHIBackendType VulkanRHI::getBackendType() const
+    {
+        return RHIBackendType::Vulkan;
+    }
+
     void VulkanRHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer,
         RHIPipelineStageFlags srcStageMask,
         RHIPipelineStageFlags dstStageMask,
@@ -3593,6 +3598,14 @@ namespace Piccolo
         desc.depth_image_view = m_depth_image_view;
         desc.depth_image = m_depth_image;
         return desc;
+    }
+    void VulkanRHI::setViewport(float x, float y, float width, float height, float min_depth, float max_depth)
+    {
+        m_viewport = {x, y, width, height, min_depth, max_depth};
+    }
+    RHIViewport VulkanRHI::getViewport() const
+    {
+        return m_viewport;
     }
     uint8_t VulkanRHI::getMaxFramesInFlight() const
     {
