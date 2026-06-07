@@ -211,6 +211,11 @@ namespace Piccolo
 
     void RenderSystem::clear()
     {
+        if (m_render_pipeline)
+        {
+            m_render_pipeline->shutdownUIRenderBackend();
+        }
+
         if (m_rhi)
         {
             m_rhi->clear();

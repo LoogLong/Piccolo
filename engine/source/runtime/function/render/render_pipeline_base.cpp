@@ -24,4 +24,11 @@ namespace Piccolo
     {
         m_ui_pass->initializeUIRenderBackend(window_ui);
     }
+    void RenderPipelineBase::shutdownUIRenderBackend()
+    {
+        if (m_ui_pass)
+        {
+            m_ui_pass->shutdownUIRenderBackend();
+        }
+    }
 } // namespace Piccolo

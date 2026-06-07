@@ -28,13 +28,19 @@ namespace Piccolo
 
     void UIPass::initializeUIRenderBackend(WindowUI* window_ui)
     {
-        m_window_ui = window_ui;
+        shutdownUIRenderBackend();
 
         switch (m_rhi->getBackendType())
         {
             case RHIBackendType::Vulkan:
             {
-                ImGui_ImplGlfw_InitForVulkan(std::static_pointer_cast<VulkanRHI>(m_rhi)->m_window, true);
+                if (!ImGui_ImplGlfw_InitForVulkan(std::static_pointer_cast<VulkanRHI>(m_rhi)->m_window, true))
+                {
+                    LOG_WARN("Failed to initialize ImGui GLFW backend for Vulkan");
+                    break;
+                }
+                m_platform_backend_initialized = true;
+
                 ImGui_ImplVulkan_InitInfo init_info = {};
                 init_info.Instance                  = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_instance;
                 init_info.PhysicalDevice            = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_physical_device;
@@ -48,7 +54,15 @@ namespace Piccolo
                 // see ImGui_ImplVulkanH_GetMinImageCountFromPresentMode
                 init_info.MinImageCount = 3;
                 init_info.ImageCount    = 3;
-                ImGui_ImplVulkan_Init(&init_info, ((VulkanRenderPass*)m_framebuffer.render_pass)->getResource());
+                if (!ImGui_ImplVulkan_Init(&init_info, ((VulkanRenderPass*)m_framebuffer.render_pass)->getResource()))
+                {
+                    LOG_WARN("Failed to initialize ImGui Vulkan renderer backend");
+                    shutdownUIRenderBackend();
+                    break;
+                }
+                m_renderer_backend_initialized = true;
+                m_initialized_backend          = RHIBackendType::Vulkan;
+                m_window_ui                    = window_ui;
 
                 uploadFonts();
                 break;
@@ -57,13 +71,27 @@ namespace Piccolo
             {
 #ifdef _WIN32
                 auto d3d12_rhi = std::static_pointer_cast<D3D12RHI>(m_rhi);
-                ImGui_ImplGlfw_InitForOther(d3d12_rhi->getWindow(), true);
-                ImGui_ImplDX12_Init(d3d12_rhi->getD3D12Device(),
-                                    d3d12_rhi->getMaxFramesInFlight(),
-                                    DXGI_FORMAT_R16G16B16A16_FLOAT,
-                                    d3d12_rhi->getD3D12ImGuiSrvHeap(),
-                                    d3d12_rhi->getD3D12ImGuiSrvCpuHandle(),
-                                    d3d12_rhi->getD3D12ImGuiSrvGpuHandle());
+                if (!ImGui_ImplGlfw_InitForOther(d3d12_rhi->getWindow(), true))
+                {
+                    LOG_WARN("Failed to initialize ImGui GLFW backend for D3D12");
+                    break;
+                }
+                m_platform_backend_initialized = true;
+
+                if (!ImGui_ImplDX12_Init(d3d12_rhi->getD3D12Device(),
+                                         d3d12_rhi->getMaxFramesInFlight(),
+                                         DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                         d3d12_rhi->getD3D12ImGuiSrvHeap(),
+                                         d3d12_rhi->getD3D12ImGuiSrvCpuHandle(),
+                                         d3d12_rhi->getD3D12ImGuiSrvGpuHandle()))
+                {
+                    LOG_WARN("Failed to initialize ImGui D3D12 renderer backend");
+                    shutdownUIRenderBackend();
+                    break;
+                }
+                m_renderer_backend_initialized = true;
+                m_initialized_backend          = RHIBackendType::D3D12;
+                m_window_ui                    = window_ui;
 #else
                 LOG_WARN("D3D12 UI backend is only available on Windows");
 #endif
@@ -73,6 +101,36 @@ namespace Piccolo
                 LOG_WARN("Unsupported UI render backend; skip UI backend initialization");
                 break;
         }
+    }
+
+    void UIPass::shutdownUIRenderBackend()
+    {
+        if (m_renderer_backend_initialized)
+        {
+            switch (m_initialized_backend)
+            {
+                case RHIBackendType::Vulkan:
+                    ImGui_ImplVulkan_Shutdown();
+                    break;
+                case RHIBackendType::D3D12:
+#ifdef _WIN32
+                    ImGui_ImplDX12_Shutdown();
+#endif
+                    break;
+                default:
+                    break;
+            }
+            m_renderer_backend_initialized = false;
+        }
+
+        if (m_platform_backend_initialized)
+        {
+            ImGui_ImplGlfw_Shutdown();
+            m_platform_backend_initialized = false;
+        }
+
+        m_initialized_backend = RHIBackendType::Auto;
+        m_window_ui           = nullptr;
     }
 
     void UIPass::uploadFonts()
