@@ -4,15 +4,11 @@
 #include "runtime/function/render/render_pass_base.h"
 #include "runtime/function/render/render_resource.h"
 
-#include <vulkan/vulkan.h>
-
 #include <memory>
 #include <vector>
 
 namespace Piccolo
 {
-    class VulkanRHI;
-
     enum
     {
         _main_camera_pass_gbuffer_a                     = 0,
