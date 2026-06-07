@@ -22,7 +22,7 @@
 ### 后续迁移清单
 - D3D12 queue submit 已接入 fence-backed queue/fence/semaphore 语义，支持按具体 RHI fence 等待、重置和提交 signal
 - D3D12 render pass 已保留 begin info/clear values，按 subpass 绑定 input/color/depth/resolve attachment layout，loadOp 只在附件首次使用时应用，并在 subpass 边界执行 resolve/copy
-- 继续完善 D3D12 resource barrier 的 per-subresource 状态跟踪
+- D3D12 image resource barrier 已接入 per-subresource 状态跟踪，copy、upload、render pass 与显式 image barrier 可按 mip/layer 范围转换
 
 # Pilot引擎 0.0.8 版本发布说明
 ✨ 大家好！Pilot引擎自4月4日发布以来，我们很高兴得到很多开发者朋友们的关注，非常感谢社区开发者们的贡献！

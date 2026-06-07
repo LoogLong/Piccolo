@@ -49,6 +49,7 @@ namespace Piccolo
             RHIImageTiling         tiling {RHI_IMAGE_TILING_OPTIMAL};
             RHIMemoryPropertyFlags memory_properties {0};
             D3D12_RESOURCE_STATES  current_state {D3D12_RESOURCE_STATE_COMMON};
+            std::vector<D3D12_RESOURCE_STATES> subresource_states;
             uint32_t               source_bytes_per_pixel {0};
             uint32_t               resource_bytes_per_pixel {0};
         };
@@ -1611,6 +1612,171 @@ namespace Piccolo
             current_state = target_state;
         }
 
+        uint32_t d3d12SubresourceCount(const D3D12RHIImage& image)
+        {
+            return (std::max)(1U, image.mip_levels) * (std::max)(1U, image.array_layers);
+        }
+
+        void syncImageCurrentState(D3D12RHIImage& image)
+        {
+            if (image.subresource_states.empty())
+            {
+                image.subresource_states.assign(d3d12SubresourceCount(image), image.current_state);
+                return;
+            }
+
+            const D3D12_RESOURCE_STATES first_state = image.subresource_states.front();
+            const bool uniform_state =
+                std::all_of(image.subresource_states.begin(),
+                            image.subresource_states.end(),
+                            [first_state](D3D12_RESOURCE_STATES state)
+                            {
+                                return state == first_state;
+                            });
+            if (uniform_state)
+            {
+                image.current_state = first_state;
+            }
+        }
+
+        void initializeImageSubresourceStates(D3D12RHIImage& image, D3D12_RESOURCE_STATES initial_state)
+        {
+            image.current_state = initial_state;
+            image.subresource_states.assign(d3d12SubresourceCount(image), initial_state);
+        }
+
+        void ensureImageSubresourceStates(D3D12RHIImage& image)
+        {
+            const uint32_t subresource_count = d3d12SubresourceCount(image);
+            if (image.subresource_states.size() != subresource_count)
+            {
+                image.subresource_states.assign(subresource_count, image.current_state);
+            }
+        }
+
+        bool transitionImageSubresource(ID3D12GraphicsCommandList* command_list,
+                                        D3D12RHIImage& image,
+                                        uint32_t subresource,
+                                        D3D12_RESOURCE_STATES target_state)
+        {
+            if (command_list == nullptr || image.resource == nullptr)
+            {
+                return false;
+            }
+
+            ensureImageSubresourceStates(image);
+            if (subresource >= image.subresource_states.size())
+            {
+                return false;
+            }
+
+            D3D12_RESOURCE_STATES& current_state = image.subresource_states[subresource];
+            if (current_state == target_state)
+            {
+                syncImageCurrentState(image);
+                return false;
+            }
+
+            D3D12_RESOURCE_BARRIER barrier {};
+            barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier.Transition.pResource   = image.resource.Get();
+            barrier.Transition.StateBefore = current_state;
+            barrier.Transition.StateAfter  = target_state;
+            barrier.Transition.Subresource = subresource;
+            command_list->ResourceBarrier(1, &barrier);
+            current_state = target_state;
+            syncImageCurrentState(image);
+            return true;
+        }
+
+        uint32_t normalizedSubresourceCount(uint32_t total_count, uint32_t base_index, uint32_t requested_count)
+        {
+            if (base_index >= total_count)
+            {
+                return 0;
+            }
+            if (requested_count == 0 || requested_count == (std::numeric_limits<uint32_t>::max)())
+            {
+                return total_count - base_index;
+            }
+            return (std::min)(requested_count, total_count - base_index);
+        }
+
+        uint32_t transitionImageSubresourceRange(ID3D12GraphicsCommandList* command_list,
+                                                 D3D12RHIImage& image,
+                                                 uint32_t base_mip_level,
+                                                 uint32_t level_count,
+                                                 uint32_t base_array_layer,
+                                                 uint32_t layer_count,
+                                                 D3D12_RESOURCE_STATES target_state)
+        {
+            const uint32_t mip_count = (std::max)(1U, image.mip_levels);
+            const uint32_t array_count = (std::max)(1U, image.array_layers);
+            const uint32_t normalized_level_count =
+                normalizedSubresourceCount(mip_count, base_mip_level, level_count);
+            const uint32_t normalized_layer_count =
+                normalizedSubresourceCount(array_count, base_array_layer, layer_count);
+            uint32_t transitioned_count = 0;
+            for (uint32_t layer = 0; layer < normalized_layer_count; ++layer)
+            {
+                for (uint32_t mip = 0; mip < normalized_level_count; ++mip)
+                {
+                    if (transitionImageSubresource(command_list,
+                                                   image,
+                                                   d3d12SubresourceIndex(image,
+                                                                         base_mip_level + mip,
+                                                                         base_array_layer + layer),
+                                                   target_state))
+                    {
+                        ++transitioned_count;
+                    }
+                }
+            }
+            return transitioned_count;
+        }
+
+        uint32_t transitionImageSubresourceRange(ID3D12GraphicsCommandList* command_list,
+                                                 D3D12RHIImage& image,
+                                                 const RHIImageSubresourceRange& range,
+                                                 D3D12_RESOURCE_STATES target_state)
+        {
+            return transitionImageSubresourceRange(command_list,
+                                                   image,
+                                                   range.baseMipLevel,
+                                                   range.levelCount,
+                                                   range.baseArrayLayer,
+                                                   range.layerCount,
+                                                   target_state);
+        }
+
+        bool imageSubresourceRangeInState(D3D12RHIImage& image,
+                                          const RHIImageSubresourceRange& range,
+                                          D3D12_RESOURCE_STATES state)
+        {
+            ensureImageSubresourceStates(image);
+            const uint32_t mip_count = (std::max)(1U, image.mip_levels);
+            const uint32_t array_count = (std::max)(1U, image.array_layers);
+            const uint32_t normalized_level_count =
+                normalizedSubresourceCount(mip_count, range.baseMipLevel, range.levelCount);
+            const uint32_t normalized_layer_count =
+                normalizedSubresourceCount(array_count, range.baseArrayLayer, range.layerCount);
+            for (uint32_t layer = 0; layer < normalized_layer_count; ++layer)
+            {
+                for (uint32_t mip = 0; mip < normalized_level_count; ++mip)
+                {
+                    const uint32_t subresource =
+                        d3d12SubresourceIndex(image, range.baseMipLevel + mip, range.baseArrayLayer + layer);
+                    if (subresource >= image.subresource_states.size() ||
+                        image.subresource_states[subresource] != state)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return normalized_level_count > 0 && normalized_layer_count > 0;
+        }
+
         bool isValidAttachmentIndex(uint32_t attachment_index)
         {
             return attachment_index != RHI_SUBPASS_EXTERNAL;
@@ -1647,10 +1813,13 @@ namespace Piccolo
             {
                 return;
             }
-            transitionResource(command_list,
-                               view->image->resource.Get(),
-                               view->image->current_state,
-                               target_state);
+            transitionImageSubresourceRange(command_list,
+                                            *view->image,
+                                            0,
+                                            view->mip_levels,
+                                            0,
+                                            view->layer_count,
+                                            target_state);
         }
 
         void finishD3D12Subpass(ID3D12GraphicsCommandList* command_list,
@@ -2581,7 +2750,7 @@ void D3D12RHI::createSwapchainImageViews()
         image->format                  = RHI_FORMAT_R8G8B8A8_UNORM;
         image->dxgi_format             = DXGI_FORMAT_R8G8B8A8_UNORM;
         image->usage                   = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        image->current_state           = D3D12_RESOURCE_STATE_PRESENT;
+        initializeImageSubresourceStates(*image, D3D12_RESOURCE_STATE_PRESENT);
         image->source_bytes_per_pixel  = 4;
         image->resource_bytes_per_pixel = 4;
 
@@ -2938,7 +3107,7 @@ void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIForma
     d3d_image->memory_properties        = memory_property_flags;
 #ifdef _WIN32
     d3d_image->dxgi_format              = toResourceDXGIFormat(format);
-    d3d_image->current_state            = initialImageState(image_usage_flags);
+    initializeImageSubresourceStates(*d3d_image, initialImageState(image_usage_flags));
     d3d_image->source_bytes_per_pixel   = sourceBytesPerPixel(format);
     d3d_image->resource_bytes_per_pixel = resourceBytesPerPixel(format);
 
@@ -4392,10 +4561,7 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
                 toD3D12ResourceState(render_pass->attachments[attachment_index].finalLayout);
             if (view != nullptr && view->image != nullptr && view->image->resource != nullptr)
             {
-                transitionResource(command_list,
-                                   view->image->resource.Get(),
-                                   view->image->current_state,
-                                   final_state);
+                transitionImageView(command_list, view, final_state);
             }
             else if (view != nullptr &&
                      view->has_rtv &&
@@ -5005,11 +5171,6 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
         return;
     }
 
-    transitionResource(command_list,
-                       src->resource.Get(),
-                       src->current_state,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-
     const D3D12_RESOURCE_DESC texture_desc = src->resource->GetDesc();
     for (uint32_t region_index = 0; region_index < regionCount; ++region_index)
     {
@@ -5030,6 +5191,10 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
             }
 
             const uint32_t subresource = d3d12SubresourceIndex(*src, region.imageSubresource.mipLevel, array_layer);
+            transitionImageSubresource(command_list,
+                                       *src,
+                                       subresource,
+                                       D3D12_RESOURCE_STATE_COPY_SOURCE);
             D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};
             UINT row_count = 0;
             UINT64 row_size = 0;
@@ -5137,18 +5302,23 @@ void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* sr
         return;
     }
 
-    transitionResource(command_list, src->resource.Get(), src->current_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    transitionResource(command_list, dst->resource.Get(), dst->current_state, D3D12_RESOURCE_STATE_COPY_DEST);
-
     D3D12_TEXTURE_COPY_LOCATION src_location {};
     src_location.pResource        = src->resource.Get();
     src_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     src_location.SubresourceIndex = d3d12SubresourceIndex(*src, 0, 0);
+    transitionImageSubresource(command_list,
+                               *src,
+                               src_location.SubresourceIndex,
+                               D3D12_RESOURCE_STATE_COPY_SOURCE);
 
     D3D12_TEXTURE_COPY_LOCATION dst_location {};
     dst_location.pResource        = dst->resource.Get();
     dst_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     dst_location.SubresourceIndex = d3d12SubresourceIndex(*dst, 0, 0);
+    transitionImageSubresource(command_list,
+                               *dst,
+                               dst_location.SubresourceIndex,
+                               D3D12_RESOURCE_STATE_COPY_DEST);
 
     D3D12_BOX source_box {};
     source_box.left   = 0;
@@ -5421,22 +5591,34 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
             }
 
             const D3D12_RESOURCE_STATES target_state = toD3D12ResourceState(image_barrier.newLayout);
-            if (image->current_state == target_state &&
-                (hasFlag(image_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
-                 hasFlag(image_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT)))
+            const bool needs_uav_barrier =
+                hasFlag(image_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
+                hasFlag(image_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT);
+            if (imageSubresourceRangeInState(*image, image_barrier.subresourceRange, target_state))
             {
-                D3D12_RESOURCE_BARRIER barrier {};
-                barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-                barrier.UAV.pResource = image->resource.Get();
-                command_list->ResourceBarrier(1, &barrier);
+                if (needs_uav_barrier)
+                {
+                    D3D12_RESOURCE_BARRIER barrier {};
+                    barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                    barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                    barrier.UAV.pResource = image->resource.Get();
+                    command_list->ResourceBarrier(1, &barrier);
+                }
             }
             else
             {
-                transitionResource(command_list,
-                                   image->resource.Get(),
-                                   image->current_state,
-                                   target_state);
+                transitionImageSubresourceRange(command_list,
+                                                *image,
+                                                image_barrier.subresourceRange,
+                                                target_state);
+                if (needs_uav_barrier)
+                {
+                    D3D12_RESOURCE_BARRIER barrier {};
+                    barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                    barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                    barrier.UAV.pResource = image->resource.Get();
+                    command_list->ResourceBarrier(1, &barrier);
+                }
             }
         }
     }
@@ -6863,16 +7045,18 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         return executeImmediateCommands(
             [&](ID3D12GraphicsCommandList* command_list)
             {
-                transitionResource(command_list,
-                                   d3d_image->resource.Get(),
-                                   d3d_image->current_state,
-                                   D3D12_RESOURCE_STATE_COPY_DEST);
                 for (uint32_t layer = 0; layer < layer_count; ++layer)
                 {
+                    const uint32_t subresource = d3d12SubresourceIndex(*d3d_image, 0, layer);
+                    transitionImageSubresource(command_list,
+                                               *d3d_image,
+                                               subresource,
+                                               D3D12_RESOURCE_STATE_COPY_DEST);
+
                     D3D12_TEXTURE_COPY_LOCATION dst_location {};
                     dst_location.pResource        = d3d_image->resource.Get();
                     dst_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    dst_location.SubresourceIndex = layer;
+                    dst_location.SubresourceIndex = subresource;
 
                     D3D12_TEXTURE_COPY_LOCATION src_location {};
                     src_location.pResource       = upload_buffer.Get();
@@ -6880,11 +7064,12 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                     src_location.PlacedFootprint = footprints[layer];
 
                     command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nullptr);
+
+                    transitionImageSubresource(command_list,
+                                               *d3d_image,
+                                               subresource,
+                                               final_state);
                 }
-                transitionResource(command_list,
-                                   d3d_image->resource.Get(),
-                                   d3d_image->current_state,
-                                   final_state);
             });
     }
 
@@ -6935,10 +7120,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                     subpass.input_attachment_layouts[input_index] :
                     RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             const D3D12_RESOURCE_STATES shader_read_state = subpassAttachmentState(view, input_layout);
-            transitionResource(command_list,
-                               view->image->resource.Get(),
-                               view->image->current_state,
-                               shader_read_state);
+            transitionImageView(command_list, view, shader_read_state);
         }
 
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
@@ -6966,10 +7148,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                     color_slot < subpass.color_attachment_layouts.size() ?
                         subpass.color_attachment_layouts[color_slot] :
                         RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                transitionResource(command_list,
-                                   view->image->resource.Get(),
-                                   view->image->current_state,
-                                   subpassAttachmentState(view, color_layout));
+                transitionImageView(command_list, view, subpassAttachmentState(view, color_layout));
             }
             else
             {
@@ -7019,10 +7198,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) :
                             D3D12_RESOURCE_STATE_DEPTH_WRITE;
-                    transitionResource(command_list,
-                                       depth_view->image->resource.Get(),
-                                       depth_view->image->current_state,
-                                       depth_state);
+                    transitionImageView(command_list, depth_view, depth_state);
                 }
             }
         }
