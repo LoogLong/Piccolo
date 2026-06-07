@@ -20,8 +20,11 @@
 #include "runtime/function/render/passes/main_camera_pass.h"
 #include "runtime/function/render/passes/particle_pass.h"
 
-#include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
+
+#ifdef _WIN32
+#include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
+#endif
 
 #include <exception>
 #include <stdexcept>
@@ -38,7 +41,11 @@ namespace
             case RHIBackendType::Vulkan:
                 return std::make_shared<VulkanRHI>();
             case RHIBackendType::D3D12:
+#ifdef _WIN32
                 return std::make_shared<D3D12RHI>();
+#else
+                return nullptr;
+#endif
             case RHIBackendType::Auto:
             default:
                 return nullptr;

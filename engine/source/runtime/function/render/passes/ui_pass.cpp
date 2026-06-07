@@ -80,7 +80,7 @@ namespace Piccolo
 
                 if (!ImGui_ImplDX12_Init(d3d12_rhi->getD3D12Device(),
                                          d3d12_rhi->getMaxFramesInFlight(),
-                                         DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                         d3d12_rhi->getD3D12SwapchainFormat(),
                                          d3d12_rhi->getD3D12ImGuiSrvHeap(),
                                          d3d12_rhi->getD3D12ImGuiSrvCpuHandle(),
                                          d3d12_rhi->getD3D12ImGuiSrvGpuHandle()))

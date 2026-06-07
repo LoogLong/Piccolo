@@ -129,3 +129,15 @@ RenderBackendAllowFallback=true
 - If no hardware D3D12 adapter is available, the D3D12 backend can initialize through WARP for smoke validation.
 - `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan.
 - On non-Windows platforms, the D3D12 path is disabled.
+
+Windows backend smoke validation:
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Debug --target PiccoloEditor --parallel
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+```
+
+The smoke script temporarily overrides the built editor config and restores it after the run. On Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and Vulkan remains the active backend.

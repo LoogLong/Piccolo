@@ -1,7 +1,11 @@
 param(
     [string]$Configuration = 'Debug',
     [int]$TimeoutSeconds = 20,
-    [string]$EditorPath
+    [string]$EditorPath,
+    [ValidateSet('Auto', 'Vulkan', 'D3D12')]
+    [string]$RenderBackend = 'D3D12',
+    [ValidateSet('Vulkan', 'D3D12')]
+    [string]$ExpectedBackend
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,13 +31,31 @@ if (-not (Test-Path -LiteralPath $EditorPath -PathType Leaf)) {
     throw "PiccoloEditor executable not found: $EditorPath"
 }
 
+$editorConfigPath = Join-Path ([System.IO.Path]::GetDirectoryName($EditorPath)) 'PiccoloEditor.ini'
+if (-not (Test-Path -LiteralPath $editorConfigPath -PathType Leaf)) {
+    throw "PiccoloEditor config not found: $editorConfigPath"
+}
+
 if (-not (Test-Path -LiteralPath $buildDir -PathType Container)) {
     New-Item -ItemType Directory -Path $buildDir | Out-Null
 }
 
-$stdoutLog = Join-Path $buildDir 'test_d3d12_boot.stdout.log'
-$stderrLog = Join-Path $buildDir 'test_d3d12_boot.stderr.log'
-$combinedLog = Join-Path $buildDir 'test_d3d12_boot.log'
+if (-not $ExpectedBackend) {
+    if ($RenderBackend -eq 'Vulkan') {
+        $ExpectedBackend = 'Vulkan'
+    } else {
+        $ExpectedBackend = 'D3D12'
+    }
+}
+
+$logBackendName = if ($RenderBackend -eq $ExpectedBackend) {
+    $ExpectedBackend.ToLowerInvariant()
+} else {
+    ($RenderBackend.ToLowerInvariant() + '_' + $ExpectedBackend.ToLowerInvariant())
+}
+$stdoutLog = Join-Path $buildDir "test_${logBackendName}_boot.stdout.log"
+$stderrLog = Join-Path $buildDir "test_${logBackendName}_boot.stderr.log"
+$combinedLog = Join-Path $buildDir "test_${logBackendName}_boot.log"
 
 foreach ($logPath in @($stdoutLog, $stderrLog, $combinedLog)) {
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
@@ -42,24 +64,41 @@ foreach ($logPath in @($stdoutLog, $stderrLog, $combinedLog)) {
 Write-Host "Starting PiccoloEditor: $EditorPath"
 Write-Host "Working directory: $repoRoot"
 Write-Host "Timeout seconds: $TimeoutSeconds"
+Write-Host "Render backend override: $RenderBackend"
+Write-Host "Expected initialized backend: $ExpectedBackend"
 
-$process = Start-Process -FilePath $EditorPath `
-    -WorkingDirectory $repoRoot `
-    -RedirectStandardOutput $stdoutLog `
-    -RedirectStandardError $stderrLog `
-    -PassThru `
-    -WindowStyle Hidden
-
-$nonZeroExitCode = $null
-$exited = $process.WaitForExit($TimeoutSeconds * 1000)
-if (-not $exited) {
-    Write-Host "PiccoloEditor is still running after $TimeoutSeconds seconds; stopping it for smoke test cleanup."
-    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    $process.WaitForExit()
-} elseif ($process.ExitCode -ne 0) {
-    $nonZeroExitCode = $process.ExitCode
+$originalConfigBytes = [System.IO.File]::ReadAllBytes($editorConfigPath)
+$originalConfigText = [System.IO.File]::ReadAllText($editorConfigPath)
+if ($originalConfigText -match '(?m)^\s*RenderBackend\s*=') {
+    $updatedConfigText = $originalConfigText -replace '(?m)^\s*RenderBackend\s*=.*$', "RenderBackend=$RenderBackend"
 } else {
-    Write-Host "PiccoloEditor exited before timeout with exit code 0."
+    $updatedConfigText = $originalConfigText.TrimEnd([char[]]@("`r", "`n")) + [Environment]::NewLine + "RenderBackend=$RenderBackend" + [Environment]::NewLine
+}
+
+try {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($editorConfigPath, $updatedConfigText, $utf8NoBom)
+
+    $process = Start-Process -FilePath $EditorPath `
+        -WorkingDirectory $repoRoot `
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog `
+        -PassThru `
+        -WindowStyle Hidden
+
+    $nonZeroExitCode = $null
+    $exited = $process.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $exited) {
+        Write-Host "PiccoloEditor is still running after $TimeoutSeconds seconds; stopping it for smoke test cleanup."
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $process.WaitForExit()
+    } elseif ($process.ExitCode -ne 0) {
+        $nonZeroExitCode = $process.ExitCode
+    } else {
+        Write-Host "PiccoloEditor exited before timeout with exit code 0."
+    }
+} finally {
+    [System.IO.File]::WriteAllBytes($editorConfigPath, $originalConfigBytes)
 }
 
 if (-not (Test-Path -LiteralPath $stdoutLog -PathType Leaf)) {
@@ -78,7 +117,7 @@ if ($null -ne $nonZeroExitCode) {
 }
 
 $assertLog = Join-Path $PSScriptRoot 'assert_log.ps1'
-& $assertLog -LogPath $combinedLog -Pattern 'Initialized RHI backend: D3D12'
+& $assertLog -LogPath $combinedLog -Pattern "Initialized RHI backend: $ExpectedBackend"
 & $assertLog -LogPath $combinedLog -Pattern 'engine start'
 
 $fallbackFound = Select-String -LiteralPath $combinedLog -Pattern 'Falling back to Vulkan backend' -SimpleMatch -Quiet
@@ -86,4 +125,4 @@ if ($fallbackFound) {
     throw "Forbidden pattern found in log '$combinedLog': Falling back to Vulkan backend"
 }
 
-Write-Host "D3D12 backend boot smoke log checks passed: $combinedLog"
+Write-Host "$ExpectedBackend backend boot smoke log checks passed: $combinedLog"

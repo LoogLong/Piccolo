@@ -16,6 +16,10 @@ set_target_properties(json11 PROPERTIES FOLDER "ThirdParty/json11")
 file(GLOB_RECURSE HEADER_FILES "*.h")
 file(GLOB_RECURSE SOURCE_FILES "*.cpp")
 
+if(NOT WIN32)
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.cpp$")
+endif()
+
 #source_group(TREE "${ENGINE_ROOT_DIR}/schema" FILES ${SCHEMA_FILES})
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${HEADER_FILES} ${SOURCE_FILES})
 
