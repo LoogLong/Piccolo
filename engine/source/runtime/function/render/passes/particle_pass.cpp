@@ -106,13 +106,21 @@ namespace Piccolo
                                       1,
                                       &imagememorybarrier);
 
+            const RHIExtent2D swapchain_extent = m_rhi->getSwapchainInfo().extent;
+            RHIImageBlit copy_region {};
+            copy_region.srcSubresource = {static_cast<RHIImageAspectFlags>(RHI_IMAGE_ASPECT_DEPTH_BIT), 0, 0, 1};
+            copy_region.srcOffsets[0]  = {0, 0, 0};
+            copy_region.srcOffsets[1]  = {static_cast<int32_t>(swapchain_extent.width),
+                                          static_cast<int32_t>(swapchain_extent.height),
+                                          1};
+            copy_region.dstSubresource = {static_cast<RHIImageAspectFlags>(RHI_IMAGE_ASPECT_DEPTH_BIT), 0, 0, 1};
+            copy_region.dstOffsets[0]  = {0, 0, 0};
+            copy_region.dstOffsets[1]  = copy_region.srcOffsets[1];
             m_rhi->cmdCopyImageToImage(m_copy_command_buffer,
                                        m_src_depth_image,
-                                       RHI_IMAGE_ASPECT_DEPTH_BIT,
                                        m_dst_depth_image,
-                                       RHI_IMAGE_ASPECT_DEPTH_BIT,
-                                       m_rhi->getSwapchainInfo().extent.width,
-                                       m_rhi->getSwapchainInfo().extent.height);
+                                       1,
+                                       &copy_region);
 
             imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             imagememorybarrier.newLayout     = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -191,13 +199,21 @@ namespace Piccolo
                                       1,
                                       &imagememorybarrier);
 
+            const RHIExtent2D swapchain_extent = m_rhi->getSwapchainInfo().extent;
+            RHIImageBlit copy_region {};
+            copy_region.srcSubresource = {static_cast<RHIImageAspectFlags>(RHI_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+            copy_region.srcOffsets[0]  = {0, 0, 0};
+            copy_region.srcOffsets[1]  = {static_cast<int32_t>(swapchain_extent.width),
+                                          static_cast<int32_t>(swapchain_extent.height),
+                                          1};
+            copy_region.dstSubresource = {static_cast<RHIImageAspectFlags>(RHI_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+            copy_region.dstOffsets[0]  = {0, 0, 0};
+            copy_region.dstOffsets[1]  = copy_region.srcOffsets[1];
             m_rhi->cmdCopyImageToImage(m_copy_command_buffer,
                                        m_src_normal_image,
-                                       RHI_IMAGE_ASPECT_COLOR_BIT,
                                        m_dst_normal_image,
-                                       RHI_IMAGE_ASPECT_COLOR_BIT,
-                                       m_rhi->getSwapchainInfo().extent.width,
-                                       m_rhi->getSwapchainInfo().extent.height);
+                                       1,
+                                       &copy_region);
 
             imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             imagememorybarrier.newLayout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

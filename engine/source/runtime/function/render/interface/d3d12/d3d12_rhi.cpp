@@ -5308,10 +5308,8 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
     return;
 }
 
-void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height)
+void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImage* dstImage, uint32_t regionCount, const RHIImageBlit* pRegions)
 {
-    (void)srcFlag;
-    (void)dstFlag;
 #ifdef _WIN32
     auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* src = static_cast<D3D12RHIImage*>(srcImage);
@@ -5320,43 +5318,123 @@ void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* sr
         src == nullptr ||
         dst == nullptr ||
         src->resource == nullptr ||
-        dst->resource == nullptr)
+        dst->resource == nullptr ||
+        pRegions == nullptr ||
+        regionCount == 0)
     {
         return;
     }
 
-    D3D12_TEXTURE_COPY_LOCATION src_location {};
-    src_location.pResource        = src->resource.Get();
-    src_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    src_location.SubresourceIndex = d3d12SubresourceIndex(*src, 0, 0);
-    transitionImageSubresource(command_list,
-                               *src,
-                               src_location.SubresourceIndex,
-                               D3D12_RESOURCE_STATE_COPY_SOURCE);
+    const auto clamp_offset = [](int32_t value, uint32_t limit) -> UINT {
+        if (value <= 0)
+        {
+            return 0;
+        }
+        return static_cast<UINT>((std::min)(static_cast<uint32_t>(value), limit));
+    };
+    const auto mip_dimension = [](uint32_t base, uint32_t mip_level) -> uint32_t {
+        if (mip_level >= 31U)
+        {
+            return 1U;
+        }
+        return (std::max)(1U, base >> mip_level);
+    };
 
-    D3D12_TEXTURE_COPY_LOCATION dst_location {};
-    dst_location.pResource        = dst->resource.Get();
-    dst_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dst_location.SubresourceIndex = d3d12SubresourceIndex(*dst, 0, 0);
-    transitionImageSubresource(command_list,
-                               *dst,
-                               dst_location.SubresourceIndex,
-                               D3D12_RESOURCE_STATE_COPY_DEST);
+    for (uint32_t region_index = 0; region_index < regionCount; ++region_index)
+    {
+        const RHIImageBlit& region = pRegions[region_index];
+        if (region.srcSubresource.mipLevel >= src->mip_levels ||
+            region.dstSubresource.mipLevel >= dst->mip_levels)
+        {
+            continue;
+        }
 
-    D3D12_BOX source_box {};
-    source_box.left   = 0;
-    source_box.top    = 0;
-    source_box.front  = 0;
-    source_box.right  = (std::min)(width, src->width);
-    source_box.bottom = (std::min)(height, src->height);
-    source_box.back   = 1;
-    command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, &source_box);
+        const uint32_t layer_count =
+            (std::max)(1U,
+                       (std::min)((std::max)(1U, region.srcSubresource.layerCount),
+                                  (std::max)(1U, region.dstSubresource.layerCount)));
+        for (uint32_t layer = 0; layer < layer_count; ++layer)
+        {
+            const uint32_t src_layer = region.srcSubresource.baseArrayLayer + layer;
+            const uint32_t dst_layer = region.dstSubresource.baseArrayLayer + layer;
+            if (src_layer >= src->array_layers || dst_layer >= dst->array_layers)
+            {
+                continue;
+            }
+
+            const uint32_t src_width  = mip_dimension(src->width, region.srcSubresource.mipLevel);
+            const uint32_t src_height = mip_dimension(src->height, region.srcSubresource.mipLevel);
+            const uint32_t dst_width  = mip_dimension(dst->width, region.dstSubresource.mipLevel);
+            const uint32_t dst_height = mip_dimension(dst->height, region.dstSubresource.mipLevel);
+
+            D3D12_BOX source_box {};
+            source_box.left   = clamp_offset(region.srcOffsets[0].x, src_width);
+            source_box.top    = clamp_offset(region.srcOffsets[0].y, src_height);
+            source_box.front  = clamp_offset(region.srcOffsets[0].z, 1);
+            source_box.right  = clamp_offset(region.srcOffsets[1].x, src_width);
+            source_box.bottom = clamp_offset(region.srcOffsets[1].y, src_height);
+            source_box.back   = clamp_offset(region.srcOffsets[1].z, 1);
+            if (source_box.back <= source_box.front)
+            {
+                source_box.back = source_box.front + 1;
+            }
+            if (source_box.back > 1)
+            {
+                source_box.back = 1;
+            }
+            if (source_box.left >= source_box.right ||
+                source_box.top >= source_box.bottom ||
+                source_box.front >= source_box.back)
+            {
+                continue;
+            }
+
+            const UINT dst_x = clamp_offset(region.dstOffsets[0].x, dst_width);
+            const UINT dst_y = clamp_offset(region.dstOffsets[0].y, dst_height);
+            const UINT dst_z = clamp_offset(region.dstOffsets[0].z, 1);
+            if (dst_x >= dst_width || dst_y >= dst_height || dst_z >= 1)
+            {
+                continue;
+            }
+
+            const UINT copy_width  = (std::min)(source_box.right - source_box.left, static_cast<UINT>(dst_width - dst_x));
+            const UINT copy_height = (std::min)(source_box.bottom - source_box.top, static_cast<UINT>(dst_height - dst_y));
+            const UINT copy_depth  = (std::min)(source_box.back - source_box.front, static_cast<UINT>(1 - dst_z));
+            if (copy_width == 0 || copy_height == 0 || copy_depth == 0)
+            {
+                continue;
+            }
+            source_box.right  = source_box.left + copy_width;
+            source_box.bottom = source_box.top + copy_height;
+            source_box.back   = source_box.front + copy_depth;
+
+            D3D12_TEXTURE_COPY_LOCATION src_location {};
+            src_location.pResource        = src->resource.Get();
+            src_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            src_location.SubresourceIndex = d3d12SubresourceIndex(*src, region.srcSubresource.mipLevel, src_layer);
+            transitionImageSubresource(command_list,
+                                       *src,
+                                       src_location.SubresourceIndex,
+                                       D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+            D3D12_TEXTURE_COPY_LOCATION dst_location {};
+            dst_location.pResource        = dst->resource.Get();
+            dst_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            dst_location.SubresourceIndex = d3d12SubresourceIndex(*dst, region.dstSubresource.mipLevel, dst_layer);
+            transitionImageSubresource(command_list,
+                                       *dst,
+                                       dst_location.SubresourceIndex,
+                                       D3D12_RESOURCE_STATE_COPY_DEST);
+
+            command_list->CopyTextureRegion(&dst_location, dst_x, dst_y, dst_z, &src_location, &source_box);
+        }
+    }
 #else
     (void)commandBuffer;
     (void)srcImage;
     (void)dstImage;
-    (void)width;
-    (void)height;
+    (void)regionCount;
+    (void)pRegions;
 #endif
     return;
 }

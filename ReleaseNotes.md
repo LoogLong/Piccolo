@@ -31,6 +31,7 @@
 - D3D12 destroyDevice 已接管设备级 COM 资源释放，RenderSystem 清理顺序调整为先释放渲染资源与 pipeline，再关闭 RHI
 - D3D12 prepareBeforePass 已接入 framebuffer 尺寸变化检测，swapchain 重建成功后会触发 pipeline 的 framebuffer 依赖资源刷新
 - D3D12 submitRendering 已补充 Present/command list close 失败日志、device removed reason 记录与 swapchain 重建后 pass 资源刷新
+- D3D12 image-to-image copy 已通过 RHI region/subresource 接口支持显式 mip、array layer 与拷贝区域
 
 # Pilot引擎 0.0.8 版本发布说明
 ✨ 大家好！Pilot引擎自4月4日发布以来，我们很高兴得到很多开发者朋友们的关注，非常感谢社区开发者们的贡献！

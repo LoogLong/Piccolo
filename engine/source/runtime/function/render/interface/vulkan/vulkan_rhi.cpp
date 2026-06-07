@@ -2571,22 +2571,63 @@ namespace Piccolo
             vk_buffer_image_copy_list.data());
     }
 
-    void VulkanRHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height)
+    void VulkanRHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImage* dstImage, uint32_t regionCount, const RHIImageBlit* pRegions)
     {
-        VkImageCopy imagecopyRegion = {};
-        imagecopyRegion.srcSubresource = { (VkImageAspectFlags)srcFlag, 0, 0, 1 };
-        imagecopyRegion.srcOffset = { 0, 0, 0 };
-        imagecopyRegion.dstSubresource = { (VkImageAspectFlags)dstFlag, 0, 0, 1 };
-        imagecopyRegion.dstOffset = { 0, 0, 0 };
-        imagecopyRegion.extent = { width, height, 1 };
+        if (commandBuffer == nullptr ||
+            srcImage == nullptr ||
+            dstImage == nullptr ||
+            pRegions == nullptr ||
+            regionCount == 0)
+        {
+            return;
+        }
+
+        std::vector<VkImageCopy> image_copy_regions;
+        image_copy_regions.reserve(regionCount);
+        for (uint32_t region_index = 0; region_index < regionCount; ++region_index)
+        {
+            const RHIImageBlit& region = pRegions[region_index];
+            const int32_t width        = region.srcOffsets[1].x - region.srcOffsets[0].x;
+            const int32_t height       = region.srcOffsets[1].y - region.srcOffsets[0].y;
+            const int32_t depth        = region.srcOffsets[1].z - region.srcOffsets[0].z;
+            if (width <= 0 || height <= 0)
+            {
+                continue;
+            }
+
+            VkImageCopy image_copy {};
+            image_copy.srcSubresource = {static_cast<VkImageAspectFlags>(region.srcSubresource.aspectMask),
+                                         region.srcSubresource.mipLevel,
+                                         region.srcSubresource.baseArrayLayer,
+                                         (std::max)(1U, region.srcSubresource.layerCount)};
+            image_copy.srcOffset = {region.srcOffsets[0].x,
+                                    region.srcOffsets[0].y,
+                                    region.srcOffsets[0].z};
+            image_copy.dstSubresource = {static_cast<VkImageAspectFlags>(region.dstSubresource.aspectMask),
+                                         region.dstSubresource.mipLevel,
+                                         region.dstSubresource.baseArrayLayer,
+                                         (std::max)(1U, region.dstSubresource.layerCount)};
+            image_copy.dstOffset = {region.dstOffsets[0].x,
+                                    region.dstOffsets[0].y,
+                                    region.dstOffsets[0].z};
+            image_copy.extent = {static_cast<uint32_t>(width),
+                                 static_cast<uint32_t>(height),
+                                 static_cast<uint32_t>((std::max)(1, depth))};
+            image_copy_regions.push_back(image_copy);
+        }
+
+        if (image_copy_regions.empty())
+        {
+            return;
+        }
 
         vkCmdCopyImage(((VulkanCommandBuffer*)commandBuffer)->getResource(),
             ((VulkanImage*)srcImage)->getResource(),
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             ((VulkanImage*)dstImage)->getResource(),
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &imagecopyRegion);
+            static_cast<uint32_t>(image_copy_regions.size()),
+            image_copy_regions.data());
     }
 
     void VulkanRHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, uint32_t regionCount, RHIBufferCopy* pRegions)

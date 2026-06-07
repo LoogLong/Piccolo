@@ -111,7 +111,18 @@ namespace Piccolo
 
         virtual bool beginCommandBuffer(RHICommandBuffer* commandBuffer, const RHICommandBufferBeginInfo* pBeginInfo) = 0;
         virtual void cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageLayout srcImageLayout, RHIBuffer* dstBuffer, uint32_t regionCount, const RHIBufferImageCopy* pRegions) = 0;
-        virtual void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height) = 0;
+        virtual void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImage* dstImage, uint32_t regionCount, const RHIImageBlit* pRegions) = 0;
+        virtual void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height)
+        {
+            RHIImageBlit region {};
+            region.srcSubresource = {static_cast<RHIImageAspectFlags>(srcFlag), 0, 0, 1};
+            region.srcOffsets[0]  = {0, 0, 0};
+            region.srcOffsets[1]  = {static_cast<int32_t>(width), static_cast<int32_t>(height), 1};
+            region.dstSubresource = {static_cast<RHIImageAspectFlags>(dstFlag), 0, 0, 1};
+            region.dstOffsets[0]  = {0, 0, 0};
+            region.dstOffsets[1]  = {static_cast<int32_t>(width), static_cast<int32_t>(height), 1};
+            cmdCopyImageToImage(commandBuffer, srcImage, dstImage, 1, &region);
+        }
         virtual void cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, uint32_t regionCount, RHIBufferCopy* pRegions) = 0;
         virtual void cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
