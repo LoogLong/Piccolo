@@ -3,6 +3,7 @@
 #include "runtime/function/render/interface/rhi.h"
 
 #include <array>
+#include <map>
 
 #ifdef _WIN32
 #include <d3d12.h>
@@ -227,6 +228,9 @@ namespace Piccolo
         std::vector<RHIImage*> m_owned_swapchain_images;
         std::vector<RHIImageView*> m_owned_swapchain_image_views;
         RHIDepthImageDesc m_depth_desc {};
+        RHISampler*       m_linear_sampler {nullptr};
+        RHISampler*       m_nearest_sampler {nullptr};
+        std::map<uint32_t, RHISampler*> m_mipmap_sampler_map;
         bool              m_in_render_pass {false};
         bool              m_command_list_open {false};
         RHIPipeline*      m_bound_graphics_pipeline {nullptr};

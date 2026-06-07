@@ -2392,6 +2392,10 @@ namespace Piccolo
 #ifdef _WIN32
         waitForGpu();
 
+        destroyDefaultSampler(Default_Sampler_Linear);
+        destroyDefaultSampler(Default_Sampler_Nearest);
+        destroyMipmappedSampler();
+
         if (m_d3d12_fence_event)
         {
             CloseHandle(m_d3d12_fence_event);
@@ -2822,6 +2826,24 @@ void D3D12RHI::createFramebufferImageAndView()
 
 RHISampler* D3D12RHI::getOrCreateDefaultSampler(RHIDefaultSamplerType type)
 {
+    RHISampler** cached_sampler = nullptr;
+    switch (type)
+    {
+        case Piccolo::Default_Sampler_Linear:
+            cached_sampler = &m_linear_sampler;
+            break;
+        case Piccolo::Default_Sampler_Nearest:
+            cached_sampler = &m_nearest_sampler;
+            break;
+        default:
+            return nullptr;
+    }
+
+    if (*cached_sampler != nullptr)
+    {
+        return *cached_sampler;
+    }
+
     RHISamplerCreateInfo sampler_info {};
     sampler_info.sType                   = RHI_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampler_info.magFilter               = RHI_FILTER_LINEAR;
@@ -2847,13 +2869,25 @@ RHISampler* D3D12RHI::getOrCreateDefaultSampler(RHIDefaultSamplerType type)
         sampler_info.mipmapMode = RHI_SAMPLER_MIPMAP_MODE_NEAREST;
     }
 
-    RHISampler* sampler = nullptr;
-    createSampler(&sampler_info, sampler);
-    return sampler;
+    createSampler(&sampler_info, *cached_sampler);
+    return *cached_sampler;
 }
 
 RHISampler* D3D12RHI::getOrCreateMipmapSampler(uint32_t width, uint32_t height)
 {
+    if (width == 0 || height == 0)
+    {
+        LOG_ERROR("width == 0 || height == 0");
+        return nullptr;
+    }
+
+    const uint32_t mip_levels = calculateMipLevels(width, height, 0);
+    auto find_sampler = m_mipmap_sampler_map.find(mip_levels);
+    if (find_sampler != m_mipmap_sampler_map.end())
+    {
+        return find_sampler->second;
+    }
+
     RHISamplerCreateInfo sampler_info {};
     sampler_info.sType                   = RHI_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampler_info.magFilter               = RHI_FILTER_LINEAR;
@@ -2865,12 +2899,16 @@ RHISampler* D3D12RHI::getOrCreateMipmapSampler(uint32_t width, uint32_t height)
     sampler_info.maxAnisotropy           = 1.0f;
     sampler_info.compareOp               = RHI_COMPARE_OP_ALWAYS;
     sampler_info.minLod                  = 0.0f;
-    sampler_info.maxLod                  = static_cast<float>(calculateMipLevels(width, height, 0));
+    sampler_info.maxLod                  = static_cast<float>(mip_levels);
     sampler_info.borderColor             = RHI_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
     sampler_info.unnormalizedCoordinates = RHI_FALSE;
 
     RHISampler* sampler = nullptr;
     createSampler(&sampler_info, sampler);
+    if (sampler != nullptr)
+    {
+        m_mipmap_sampler_map.insert(std::make_pair(mip_levels, sampler));
+    }
     return sampler;
 }
 
@@ -6272,17 +6310,56 @@ void D3D12RHI::popEvent(RHICommandBuffer* commond_buffer)
 
 void D3D12RHI::clearSwapchain()
 {
+#ifdef _WIN32
+    waitForGpu();
+    for (auto& render_target : m_d3d12_render_targets)
+    {
+        render_target.Reset();
+    }
+    m_d3d12_swapchain.Reset();
+#endif
+    for (auto*& image_view : m_owned_swapchain_image_views)
+    {
+        delete static_cast<D3D12RHIImageView*>(image_view);
+        image_view = nullptr;
+    }
+    m_owned_swapchain_image_views.clear();
+    for (auto*& image : m_owned_swapchain_images)
+    {
+        delete static_cast<D3D12RHIImage*>(image);
+        image = nullptr;
+    }
+    m_owned_swapchain_images.clear();
+    m_swapchain_desc.imageViews.clear();
+    m_current_frame_index = 0;
     return;
 }
 
 void D3D12RHI::destroyDefaultSampler(RHIDefaultSamplerType type)
 {
-    (void)type;
+    switch (type)
+    {
+        case Piccolo::Default_Sampler_Linear:
+            delete static_cast<D3D12RHISampler*>(m_linear_sampler);
+            m_linear_sampler = nullptr;
+            break;
+        case Piccolo::Default_Sampler_Nearest:
+            delete static_cast<D3D12RHISampler*>(m_nearest_sampler);
+            m_nearest_sampler = nullptr;
+            break;
+        default:
+            break;
+    }
     return;
 }
 
 void D3D12RHI::destroyMipmappedSampler()
 {
+    for (auto& sampler : m_mipmap_sampler_map)
+    {
+        delete static_cast<D3D12RHISampler*>(sampler.second);
+    }
+    m_mipmap_sampler_map.clear();
     return;
 }
 
@@ -6300,7 +6377,32 @@ void D3D12RHI::destroySemaphore(RHISemaphore* semaphore)
 
 void D3D12RHI::destroySampler(RHISampler* sampler)
 {
-    delete sampler;
+    if (sampler == nullptr)
+    {
+        return;
+    }
+
+    if (sampler == m_linear_sampler)
+    {
+        m_linear_sampler = nullptr;
+    }
+    if (sampler == m_nearest_sampler)
+    {
+        m_nearest_sampler = nullptr;
+    }
+    for (auto iterator = m_mipmap_sampler_map.begin(); iterator != m_mipmap_sampler_map.end();)
+    {
+        if (iterator->second == sampler)
+        {
+            iterator = m_mipmap_sampler_map.erase(iterator);
+        }
+        else
+        {
+            ++iterator;
+        }
+    }
+
+    delete static_cast<D3D12RHISampler*>(sampler);
     return;
 }
 
