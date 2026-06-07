@@ -1,8 +1,5 @@
 #include "runtime/function/render/passes/particle_pass.h"
 
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
-
 #include "runtime/function/global/global_context.h"
 #include "runtime/function/render/render_camera.h"
 #include "runtime/function/render/render_shader_bytecode.h"
@@ -1930,17 +1927,17 @@ namespace Piccolo
 
     void ParticlePass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
-        const RenderResource* vulkan_resource = static_cast<const RenderResource*>(render_resource.get());
-        if (vulkan_resource)
+        const RenderResource* render_resource_ptr = static_cast<const RenderResource*>(render_resource.get());
+        if (render_resource_ptr)
         {
             m_particle_collision_perframe_storage_buffer_object =
-                vulkan_resource->m_particle_collision_perframe_storage_buffer_object;
+                render_resource_ptr->m_particle_collision_perframe_storage_buffer_object;
             memcpy(m_scene_uniform_buffer_mapped,
                    &m_particle_collision_perframe_storage_buffer_object,
                    sizeof(ParticleCollisionPerframeStorageBufferObject));
 
             m_particlebillboard_perframe_storage_buffer_object =
-                vulkan_resource->m_particlebillboard_perframe_storage_buffer_object;
+                render_resource_ptr->m_particlebillboard_perframe_storage_buffer_object;
             memcpy(m_particle_billboard_uniform_buffer_mapped,
                    &m_particlebillboard_perframe_storage_buffer_object,
                    sizeof(m_particlebillboard_perframe_storage_buffer_object));

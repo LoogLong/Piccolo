@@ -5,8 +5,6 @@
 #include "runtime/function/render/render_pass.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
 #include "runtime/core/base/macro.h"
 
 #include <fxaa_frag.h>

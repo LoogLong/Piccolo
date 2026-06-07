@@ -3,9 +3,6 @@
 #include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
 #include "runtime/function/render/render_shader_bytecode.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
-
 #include "runtime/function/render/render_helper.h"
 
 #include <mesh_inefficient_pick_frag.h>
@@ -35,11 +32,11 @@ namespace Piccolo
     void PickPass::postInitialize() {}
     void PickPass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
-        const RenderResource* vulkan_resource = static_cast<const RenderResource*>(render_resource.get());
-        if (vulkan_resource)
+        const RenderResource* render_resource_ptr = static_cast<const RenderResource*>(render_resource.get());
+        if (render_resource_ptr)
         {
             _mesh_inefficient_pick_perframe_storage_buffer_object.proj_view_matrix =
-                vulkan_resource->m_mesh_inefficient_pick_perframe_storage_buffer_object.proj_view_matrix;
+                render_resource_ptr->m_mesh_inefficient_pick_perframe_storage_buffer_object.proj_view_matrix;
             _mesh_inefficient_pick_perframe_storage_buffer_object.rt_width  = m_rhi->getSwapchainInfo().extent.width;
             _mesh_inefficient_pick_perframe_storage_buffer_object.rt_height = m_rhi->getSwapchainInfo().extent.height;
         }

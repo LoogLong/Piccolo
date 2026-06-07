@@ -192,7 +192,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._brdfLUT_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create BRDF LUT sampler");
         }
 
         samplerInfo.minLod = 0.0f;
@@ -206,7 +206,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._irradiance_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create irradiance texture sampler");
         }
 
         if (m_global_render_resource._ibl_resource._specular_texture_sampler != RHI_NULL_HANDLE)
@@ -216,7 +216,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._specular_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create specular texture sampler");
         }
     }
 

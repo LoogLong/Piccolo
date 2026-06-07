@@ -21,7 +21,7 @@ namespace Piccolo
     static uint32_t const s_max_point_light_count                = 15;
     // should sync the macros in "shader_include/constants.h"
 
-    struct VulkanSceneDirectionalLight
+    struct RenderSceneDirectionalLight
     {
         Vector3 direction;
         float   _padding_direction;
@@ -29,7 +29,7 @@ namespace Piccolo
         float   _padding_color;
     };
 
-    struct VulkanScenePointLight
+    struct RenderScenePointLight
     {
         Vector3 position;
         float   radius;
@@ -48,8 +48,8 @@ namespace Piccolo
         uint32_t                    _padding_point_light_num_1;
         uint32_t                    _padding_point_light_num_2;
         uint32_t                    _padding_point_light_num_3;
-        VulkanScenePointLight       scene_point_lights[s_max_point_light_count];
-        VulkanSceneDirectionalLight scene_directional_light;
+        RenderScenePointLight       scene_point_lights[s_max_point_light_count];
+        RenderSceneDirectionalLight scene_directional_light;
         Matrix4x4                   directional_light_proj_view;
     };
 

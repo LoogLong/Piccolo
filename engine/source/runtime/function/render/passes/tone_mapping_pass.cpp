@@ -1,7 +1,5 @@
 #include "runtime/function/render/passes/tone_mapping_pass.h"
 
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <post_process_vert.h>

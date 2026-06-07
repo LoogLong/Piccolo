@@ -1,7 +1,5 @@
 #include "runtime/function/render/passes/color_grading_pass.h"
 
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <color_grading_frag.h>

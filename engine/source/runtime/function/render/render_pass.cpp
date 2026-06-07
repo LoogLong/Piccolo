@@ -3,7 +3,6 @@
 #include "runtime/core/base/macro.h"
 
 #include "runtime/function/render/render_resource.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 
 Piccolo::VisiableNodes Piccolo::RenderPass::m_visiable_nodes;
 

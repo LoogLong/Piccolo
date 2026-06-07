@@ -5,9 +5,6 @@
 #include "runtime/function/render/render_resource.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
-
 #include <map>
 #include <stdexcept>
 
@@ -43,11 +40,11 @@ namespace Piccolo
 
     void MainCameraPass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
-        const RenderResource* vulkan_resource = static_cast<const RenderResource*>(render_resource.get());
-        if (vulkan_resource)
+        const RenderResource* render_resource_ptr = static_cast<const RenderResource*>(render_resource.get());
+        if (render_resource_ptr)
         {
-            m_mesh_perframe_storage_buffer_object = vulkan_resource->m_mesh_perframe_storage_buffer_object;
-            m_axis_storage_buffer_object          = vulkan_resource->m_axis_storage_buffer_object;
+            m_mesh_perframe_storage_buffer_object = render_resource_ptr->m_mesh_perframe_storage_buffer_object;
+            m_axis_storage_buffer_object          = render_resource_ptr->m_axis_storage_buffer_object;
         }
     }
 
