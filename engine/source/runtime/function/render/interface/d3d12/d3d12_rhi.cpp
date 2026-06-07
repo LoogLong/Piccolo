@@ -23,6 +23,8 @@ namespace Piccolo
     namespace
     {
 #ifdef _WIN32
+        struct D3D12RHIPipelineLayout;
+
         struct D3D12RHIBuffer final : RHIBuffer
         {
             ComPtr<ID3D12Resource> resource;
@@ -163,6 +165,12 @@ namespace Piccolo
             bool                              has_recorded_commands {false};
             bool                              in_render_pass {false};
             RHIPipeline*                      bound_graphics_pipeline {nullptr};
+            D3D12RHIPipelineLayout*           bound_graphics_pipeline_layout {nullptr};
+            D3D12RHIPipelineLayout*           bound_compute_pipeline_layout {nullptr};
+            ID3D12RootSignature*              bound_graphics_root_signature {nullptr};
+            ID3D12RootSignature*              bound_compute_root_signature {nullptr};
+            bool                              graphics_root_signature_dirty {true};
+            bool                              compute_root_signature_dirty {true};
             RHIRenderPass*                    active_render_pass {nullptr};
             RHIFramebuffer*                   active_framebuffer {nullptr};
             RHIRenderPassBeginInfo            active_render_pass_begin_info {};
@@ -170,6 +178,13 @@ namespace Piccolo
             std::vector<bool>                 attachment_load_ops_applied;
             uint32_t                          active_subpass_index {0};
             uint32_t                          transient_cbv_srv_uav_descriptor_next {0};
+            bool                              descriptor_heaps_dirty {true};
+            ID3D12DescriptorHeap*             bound_cbv_srv_uav_heap {nullptr};
+            ID3D12DescriptorHeap*             bound_sampler_heap {nullptr};
+            std::vector<D3D12_GPU_DESCRIPTOR_HANDLE> graphics_root_descriptor_tables;
+            std::vector<bool>                 graphics_root_descriptor_table_valid;
+            std::vector<D3D12_GPU_DESCRIPTOR_HANDLE> compute_root_descriptor_tables;
+            std::vector<bool>                 compute_root_descriptor_table_valid;
 #endif
             bool owns_recording {false};
         };
@@ -1758,6 +1773,202 @@ namespace Piccolo
             current_state = target_state;
         }
 
+        void clearRootDescriptorTableCache(std::vector<D3D12_GPU_DESCRIPTOR_HANDLE>& tables,
+                                           std::vector<bool>& valid)
+        {
+            tables.clear();
+            valid.clear();
+        }
+
+        void clearRootDescriptorTableCache(D3D12RHICommandBuffer& command_buffer,
+                                           RHIPipelineBindPoint bind_point)
+        {
+            if (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE)
+            {
+                clearRootDescriptorTableCache(command_buffer.compute_root_descriptor_tables,
+                                              command_buffer.compute_root_descriptor_table_valid);
+            }
+            else
+            {
+                clearRootDescriptorTableCache(command_buffer.graphics_root_descriptor_tables,
+                                              command_buffer.graphics_root_descriptor_table_valid);
+            }
+        }
+
+        void markCommandBufferDescriptorHeapsDirty(D3D12RHICommandBuffer& command_buffer)
+        {
+            command_buffer.descriptor_heaps_dirty = true;
+            command_buffer.bound_cbv_srv_uav_heap = nullptr;
+            command_buffer.bound_sampler_heap     = nullptr;
+        }
+
+        void markCommandBufferExternalStateDirty(D3D12RHICommandBuffer& command_buffer)
+        {
+            markCommandBufferDescriptorHeapsDirty(command_buffer);
+            command_buffer.graphics_root_signature_dirty = true;
+            command_buffer.compute_root_signature_dirty  = true;
+        }
+
+        void resetCommandBufferDescriptorHeapState(D3D12RHICommandBuffer& command_buffer)
+        {
+            markCommandBufferDescriptorHeapsDirty(command_buffer);
+            command_buffer.graphics_root_signature_dirty = true;
+            command_buffer.compute_root_signature_dirty  = true;
+            clearRootDescriptorTableCache(command_buffer, RHI_PIPELINE_BIND_POINT_GRAPHICS);
+            clearRootDescriptorTableCache(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE);
+        }
+
+        void rememberRootDescriptorTable(D3D12RHICommandBuffer& command_buffer,
+                                         RHIPipelineBindPoint bind_point,
+                                         uint32_t root_index,
+                                         D3D12_GPU_DESCRIPTOR_HANDLE descriptor)
+        {
+            auto& tables = bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
+                               command_buffer.compute_root_descriptor_tables :
+                               command_buffer.graphics_root_descriptor_tables;
+            auto& valid = bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
+                              command_buffer.compute_root_descriptor_table_valid :
+                              command_buffer.graphics_root_descriptor_table_valid;
+            if (root_index >= tables.size())
+            {
+                tables.resize(root_index + 1, {});
+                valid.resize(root_index + 1, false);
+            }
+            tables[root_index] = descriptor;
+            valid[root_index]  = true;
+        }
+
+        bool rootSignatureDirtyForBindPoint(const D3D12RHICommandBuffer& command_buffer,
+                                            RHIPipelineBindPoint bind_point)
+        {
+            return bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
+                       command_buffer.compute_root_signature_dirty :
+                       command_buffer.graphics_root_signature_dirty;
+        }
+
+        bool restoreRootSignatureForDescriptorReplay(ID3D12GraphicsCommandList* command_list,
+                                                     D3D12RHICommandBuffer& command_buffer,
+                                                     RHIPipelineBindPoint bind_point)
+        {
+            if (command_list == nullptr)
+            {
+                return false;
+            }
+
+            if (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE)
+            {
+                if (command_buffer.bound_compute_root_signature == nullptr)
+                {
+                    return false;
+                }
+                if (command_buffer.compute_root_signature_dirty)
+                {
+                    command_list->SetComputeRootSignature(command_buffer.bound_compute_root_signature);
+                    command_buffer.compute_root_signature_dirty = false;
+                }
+                return true;
+            }
+
+            if (command_buffer.bound_graphics_root_signature == nullptr)
+            {
+                return false;
+            }
+            if (command_buffer.graphics_root_signature_dirty)
+            {
+                command_list->SetGraphicsRootSignature(command_buffer.bound_graphics_root_signature);
+                command_buffer.graphics_root_signature_dirty = false;
+            }
+            return true;
+        }
+
+        void replayRootDescriptorTables(ID3D12GraphicsCommandList* command_list,
+                                        D3D12RHICommandBuffer& command_buffer,
+                                        RHIPipelineBindPoint bind_point)
+        {
+            if (!restoreRootSignatureForDescriptorReplay(command_list, command_buffer, bind_point))
+            {
+                return;
+            }
+
+            if (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE)
+            {
+                for (uint32_t root_index = 0;
+                     root_index < command_buffer.compute_root_descriptor_table_valid.size() &&
+                     root_index < command_buffer.compute_root_descriptor_tables.size();
+                     ++root_index)
+                {
+                    if (command_buffer.compute_root_descriptor_table_valid[root_index])
+                    {
+                        command_list->SetComputeRootDescriptorTable(
+                            root_index,
+                            command_buffer.compute_root_descriptor_tables[root_index]);
+                    }
+                }
+                return;
+            }
+
+            for (uint32_t root_index = 0;
+                 root_index < command_buffer.graphics_root_descriptor_table_valid.size() &&
+                 root_index < command_buffer.graphics_root_descriptor_tables.size();
+                 ++root_index)
+            {
+                if (command_buffer.graphics_root_descriptor_table_valid[root_index])
+                {
+                    command_list->SetGraphicsRootDescriptorTable(root_index,
+                                                                 command_buffer.graphics_root_descriptor_tables[root_index]);
+                }
+            }
+        }
+
+        void bindEngineDescriptorHeaps(ID3D12GraphicsCommandList* command_list,
+                                       D3D12RHICommandBuffer& command_buffer,
+                                       ID3D12DescriptorHeap* cbv_srv_uav_heap,
+                                       ID3D12DescriptorHeap* sampler_heap,
+                                       bool replay_tables,
+                                       RHIPipelineBindPoint replay_bind_point)
+        {
+            if (command_list == nullptr)
+            {
+                return;
+            }
+
+            const bool needs_root_signature_restore =
+                replay_tables && rootSignatureDirtyForBindPoint(command_buffer, replay_bind_point);
+            const bool needs_bind =
+                command_buffer.descriptor_heaps_dirty ||
+                command_buffer.bound_cbv_srv_uav_heap != cbv_srv_uav_heap ||
+                command_buffer.bound_sampler_heap != sampler_heap ||
+                needs_root_signature_restore;
+            if (!needs_bind)
+            {
+                return;
+            }
+
+            ID3D12DescriptorHeap* heaps[2] {};
+            UINT heap_count = 0;
+            if (cbv_srv_uav_heap != nullptr)
+            {
+                heaps[heap_count++] = cbv_srv_uav_heap;
+            }
+            if (sampler_heap != nullptr)
+            {
+                heaps[heap_count++] = sampler_heap;
+            }
+
+            if (heap_count > 0)
+            {
+                command_list->SetDescriptorHeaps(heap_count, heaps);
+            }
+
+            command_buffer.bound_cbv_srv_uav_heap = cbv_srv_uav_heap;
+            command_buffer.bound_sampler_heap     = sampler_heap;
+            command_buffer.descriptor_heaps_dirty = false;
+            if (replay_tables && heap_count > 0)
+            {
+                replayRootDescriptorTables(command_list, command_buffer, replay_bind_point);
+            }
+        }
+
         uint32_t d3d12SubresourceCount(const D3D12RHIImage& image)
         {
             return (std::max)(1U, image.mip_levels) * (std::max)(1U, image.array_layers);
@@ -1928,13 +2139,71 @@ namespace Piccolo
             return attachment_index != RHI_SUBPASS_EXTERNAL;
         }
 
+        D3D12_RESOURCE_STATES shaderReadableAttachmentState()
+        {
+            return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        }
+
+        D3D12_RESOURCE_STATES depthReadOnlyAttachmentState()
+        {
+            return D3D12_RESOURCE_STATE_DEPTH_READ |
+                   shaderReadableAttachmentState();
+        }
+
+        D3D12_RESOURCE_STATES inputAttachmentState(const D3D12RHIImageView* view)
+        {
+            if (view != nullptr && view->has_dsv)
+            {
+                return depthReadOnlyAttachmentState();
+            }
+            return shaderReadableAttachmentState();
+        }
+
+        D3D12_RESOURCE_STATES depthAttachmentState(const D3D12RHIImageView* view,
+                                                   RHIImageLayout layout,
+                                                   bool read_only)
+        {
+            (void)view;
+            if (read_only || isDepthReadOnlyLayout(layout) ||
+                layout == RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            {
+                return depthReadOnlyAttachmentState();
+            }
+            return D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        }
+
         D3D12_RESOURCE_STATES subpassAttachmentState(const D3D12RHIImageView* view, RHIImageLayout layout)
         {
-            if (view != nullptr && view->has_dsv && isDepthReadOnlyLayout(layout))
+            if (layout == RHI_IMAGE_LAYOUT_PRESENT_SRC_KHR)
             {
-                return D3D12_RESOURCE_STATE_DEPTH_READ |
-                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                return D3D12_RESOURCE_STATE_PRESENT;
+            }
+            if (layout == RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+            {
+                return D3D12_RESOURCE_STATE_COPY_DEST;
+            }
+            if (layout == RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+            {
+                return D3D12_RESOURCE_STATE_COPY_SOURCE;
+            }
+            if (view != nullptr && view->has_dsv)
+            {
+                if (isDepthReadOnlyLayout(layout) ||
+                    layout == RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                {
+                    return depthReadOnlyAttachmentState();
+                }
+                return D3D12_RESOURCE_STATE_DEPTH_WRITE;
+            }
+            if (layout == RHI_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR ||
+                layout == RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+            {
+                return D3D12_RESOURCE_STATE_RENDER_TARGET;
+            }
+            if (layout == RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            {
+                return shaderReadableAttachmentState();
             }
             return toD3D12ResourceState(layout);
         }
@@ -1949,6 +2218,98 @@ namespace Piccolo
                 return nullptr;
             }
             return framebuffer->attachments[attachment_index];
+        }
+
+        bool subpassAttachmentStateForUse(D3D12RHIRenderPass* render_pass,
+                                          D3D12RHIFramebuffer* framebuffer,
+                                          uint32_t attachment_index,
+                                          uint32_t subpass_index,
+                                          D3D12_RESOURCE_STATES& state)
+        {
+            if (render_pass == nullptr ||
+                framebuffer == nullptr ||
+                subpass_index >= render_pass->subpasses.size() ||
+                !isValidAttachmentIndex(attachment_index))
+            {
+                return false;
+            }
+
+            D3D12RHIImageView* view = framebufferAttachment(framebuffer, attachment_index);
+            const auto& subpass = render_pass->subpasses[subpass_index];
+            for (uint32_t input_index = 0; input_index < subpass.input_attachment_indices.size(); ++input_index)
+            {
+                if (subpass.input_attachment_indices[input_index] == attachment_index)
+                {
+                    state = inputAttachmentState(view);
+                    return true;
+                }
+            }
+
+            for (uint32_t color_index = 0; color_index < subpass.color_attachment_indices.size(); ++color_index)
+            {
+                if (subpass.color_attachment_indices[color_index] == attachment_index)
+                {
+                    state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                    return true;
+                }
+            }
+
+            if (subpass.depth_attachment_index == attachment_index)
+            {
+                const bool depth_is_input =
+                    std::find(subpass.input_attachment_indices.begin(),
+                              subpass.input_attachment_indices.end(),
+                              attachment_index) != subpass.input_attachment_indices.end();
+                state = depthAttachmentState(view, subpass.depth_attachment_layout, depth_is_input);
+                return true;
+            }
+
+            for (uint32_t resolve_index = 0; resolve_index < subpass.resolve_attachment_indices.size(); ++resolve_index)
+            {
+                if (subpass.resolve_attachment_indices[resolve_index] == attachment_index)
+                {
+                    const RHIImageLayout resolve_layout =
+                        resolve_index < subpass.resolve_attachment_layouts.size() ?
+                            subpass.resolve_attachment_layouts[resolve_index] :
+                            RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    state = subpassAttachmentState(view, resolve_layout);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        D3D12_RESOURCE_STATES attachmentStateAfterSubpass(D3D12RHIRenderPass* render_pass,
+                                                          D3D12RHIFramebuffer* framebuffer,
+                                                          uint32_t attachment_index,
+                                                          uint32_t subpass_index)
+        {
+            if (render_pass == nullptr ||
+                framebuffer == nullptr ||
+                !isValidAttachmentIndex(attachment_index) ||
+                attachment_index >= render_pass->attachments.size())
+            {
+                return D3D12_RESOURCE_STATE_COMMON;
+            }
+
+            for (uint32_t next_subpass = subpass_index + 1;
+                 next_subpass < render_pass->subpasses.size();
+                 ++next_subpass)
+            {
+                D3D12_RESOURCE_STATES next_state = D3D12_RESOURCE_STATE_COMMON;
+                if (subpassAttachmentStateForUse(render_pass,
+                                                 framebuffer,
+                                                 attachment_index,
+                                                 next_subpass,
+                                                 next_state))
+                {
+                    return next_state;
+                }
+            }
+
+            D3D12RHIImageView* view = framebufferAttachment(framebuffer, attachment_index);
+            return subpassAttachmentState(view, render_pass->attachments[attachment_index].finalLayout);
         }
 
         void transitionImageView(ID3D12GraphicsCommandList* command_list,
@@ -2024,6 +2385,7 @@ namespace Piccolo
                     continue;
                 }
 
+                bool wrote_resolve_attachment = false;
                 const D3D12_RESOURCE_DESC source_desc  = source_view->image->resource->GetDesc();
                 const D3D12_RESOURCE_DESC resolve_desc = resolve_view->image->resource->GetDesc();
                 if (source_desc.SampleDesc.Count > 1 && resolve_desc.SampleDesc.Count == 1)
@@ -2035,6 +2397,7 @@ namespace Piccolo
                                                      source_view->image->resource.Get(),
                                                      0,
                                                      resolve_format);
+                    wrote_resolve_attachment = true;
                 }
                 else if (source_desc.SampleDesc.Count == resolve_desc.SampleDesc.Count)
                 {
@@ -2052,15 +2415,24 @@ namespace Piccolo
                     resolve_location.SubresourceIndex = d3d12SubresourceIndex(*resolve_view->image, 0, 0);
 
                     command_list->CopyTextureRegion(&resolve_location, 0, 0, 0, &source_location, nullptr);
+                    wrote_resolve_attachment = true;
                 }
 
-                const RHIImageLayout resolve_layout =
-                    color_slot < subpass.resolve_attachment_layouts.size() ?
-                        subpass.resolve_attachment_layouts[color_slot] :
-                        render_pass->attachments[resolve_attachment_index].finalLayout;
-                transitionImageView(command_list,
-                                    resolve_view,
-                                    subpassAttachmentState(resolve_view, resolve_layout));
+                if (wrote_resolve_attachment)
+                {
+                    transitionImageView(command_list,
+                                        source_view,
+                                        attachmentStateAfterSubpass(render_pass,
+                                                                   framebuffer,
+                                                                   source_attachment_index,
+                                                                   subpass_index));
+                    transitionImageView(command_list,
+                                        resolve_view,
+                                        attachmentStateAfterSubpass(render_pass,
+                                                                   framebuffer,
+                                                                   resolve_attachment_index,
+                                                                   subpass_index));
+                }
             }
         }
 
@@ -4643,6 +5015,10 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
     d3d_command_buffer->has_recorded_commands = false;
     d3d_command_buffer->in_render_pass = false;
     d3d_command_buffer->bound_graphics_pipeline = nullptr;
+    d3d_command_buffer->bound_graphics_pipeline_layout = nullptr;
+    d3d_command_buffer->bound_compute_pipeline_layout = nullptr;
+    d3d_command_buffer->bound_graphics_root_signature = nullptr;
+    d3d_command_buffer->bound_compute_root_signature = nullptr;
     d3d_command_buffer->active_render_pass = nullptr;
     d3d_command_buffer->active_framebuffer = nullptr;
     d3d_command_buffer->active_render_pass_begin_info = {};
@@ -4650,6 +5026,7 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
     d3d_command_buffer->attachment_load_ops_applied.clear();
     d3d_command_buffer->active_subpass_index = 0;
     d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
+    resetCommandBufferDescriptorHeapState(*d3d_command_buffer);
     return true;
 #else
     (void)commandBuffer;
@@ -4693,11 +5070,27 @@ void D3D12RHI::cmdBeginRenderPassPFN(RHICommandBuffer* commandBuffer, const RHIR
     auto* command_list = d3d12CommandListFor(commandBuffer);
     if (d3d_command_buffer == nullptr || command_list == nullptr)
     {
+        if (commandBuffer != nullptr || pRenderPassBegin != nullptr)
+        {
+            LOG_WARN("D3D12 cmdBeginRenderPass skipped because no command list is available");
+        }
         return;
     }
 
     if (pRenderPassBegin == nullptr)
     {
+        if (commandBuffer != nullptr)
+        {
+            LOG_WARN("D3D12 cmdBeginRenderPass skipped because render pass begin info is null");
+        }
+        return;
+    }
+
+    auto* render_pass = static_cast<D3D12RHIRenderPass*>(pRenderPassBegin->renderPass);
+    auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(pRenderPassBegin->framebuffer);
+    if (render_pass == nullptr || framebuffer == nullptr)
+    {
+        LOG_WARN("D3D12 cmdBeginRenderPass skipped because render pass or framebuffer is invalid");
         return;
     }
 
@@ -4718,10 +5111,9 @@ void D3D12RHI::cmdBeginRenderPassPFN(RHICommandBuffer* commandBuffer, const RHIR
         d3d_command_buffer->active_render_pass_begin_info.pClearValues    = nullptr;
     }
 
-    auto* render_pass = static_cast<D3D12RHIRenderPass*>(d3d_command_buffer->active_render_pass);
     d3d_command_buffer->attachment_load_ops_applied.assign(render_pass != nullptr ?
-                                                               render_pass->attachments.size() :
-                                                               0,
+                                                                render_pass->attachments.size() :
+                                                                0,
                                                            false);
     d3d_command_buffer->active_subpass_index    = 0;
     bindFramebufferForSubpass(commandBuffer,
@@ -4744,6 +5136,10 @@ void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassCont
     auto* command_list = d3d12CommandListFor(commandBuffer);
     if (d3d_command_buffer == nullptr || command_list == nullptr || !d3d_command_buffer->in_render_pass)
     {
+        if (commandBuffer != nullptr)
+        {
+            LOG_WARN("D3D12 cmdNextSubpass skipped because no active D3D12 render pass command list is available");
+        }
         return;
     }
 
@@ -4757,6 +5153,8 @@ void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassCont
     ++d3d_command_buffer->active_subpass_index;
     if (render_pass == nullptr || d3d_command_buffer->active_subpass_index >= render_pass->subpasses.size())
     {
+        LOG_WARN("D3D12 cmdNextSubpass skipped because subpass {} is outside the active render pass",
+                 d3d_command_buffer->active_subpass_index);
         return;
     }
 
@@ -4777,6 +5175,10 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
     auto* command_list = d3d12CommandListFor(commandBuffer);
     if (d3d_command_buffer == nullptr || command_list == nullptr)
     {
+        if (commandBuffer != nullptr)
+        {
+            LOG_WARN("D3D12 cmdEndRenderPass skipped because no command list is available");
+        }
         return;
     }
 
@@ -4798,7 +5200,7 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
 
             auto* view = framebuffer->attachments[attachment_index];
             const D3D12_RESOURCE_STATES final_state =
-                toD3D12ResourceState(render_pass->attachments[attachment_index].finalLayout);
+                subpassAttachmentState(view, render_pass->attachments[attachment_index].finalLayout);
             if (view != nullptr && view->image != nullptr && view->image->resource != nullptr)
             {
                 transitionImageView(command_list, view, final_state);
@@ -4822,6 +5224,10 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
                 }
             }
         }
+    }
+    else if (d3d_command_buffer->in_render_pass)
+    {
+        LOG_WARN("D3D12 cmdEndRenderPass could not finish attachment transitions because active render pass or framebuffer is missing");
     }
 
     d3d_command_buffer->in_render_pass = false;
@@ -4853,14 +5259,31 @@ void D3D12RHI::cmdBindPipelinePFN(RHICommandBuffer* commandBuffer, RHIPipelineBi
     }
     if (d3d_pipeline->layout != nullptr && d3d_pipeline->layout->root_signature != nullptr)
     {
+        auto* root_signature = d3d_pipeline->layout->root_signature.Get();
         if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
         {
-            command_list->SetComputeRootSignature(d3d_pipeline->layout->root_signature.Get());
+            if (d3d_command_buffer->bound_compute_pipeline_layout != d3d_pipeline->layout ||
+                d3d_command_buffer->bound_compute_root_signature != root_signature)
+            {
+                clearRootDescriptorTableCache(*d3d_command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE);
+            }
+            d3d_command_buffer->bound_compute_pipeline_layout = d3d_pipeline->layout;
+            d3d_command_buffer->bound_compute_root_signature = root_signature;
+            command_list->SetComputeRootSignature(root_signature);
+            d3d_command_buffer->compute_root_signature_dirty = false;
         }
         else
         {
+            if (d3d_command_buffer->bound_graphics_pipeline_layout != d3d_pipeline->layout ||
+                d3d_command_buffer->bound_graphics_root_signature != root_signature)
+            {
+                clearRootDescriptorTableCache(*d3d_command_buffer, RHI_PIPELINE_BIND_POINT_GRAPHICS);
+            }
             d3d_command_buffer->bound_graphics_pipeline = pipeline;
-            command_list->SetGraphicsRootSignature(d3d_pipeline->layout->root_signature.Get());
+            d3d_command_buffer->bound_graphics_pipeline_layout = d3d_pipeline->layout;
+            d3d_command_buffer->bound_graphics_root_signature = root_signature;
+            command_list->SetGraphicsRootSignature(root_signature);
+            d3d_command_buffer->graphics_root_signature_dirty = false;
             command_list->IASetPrimitiveTopology(d3d_pipeline->primitive_topology);
         }
     }
@@ -5032,8 +5455,18 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
     auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
     auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* d3d_layout = static_cast<D3D12RHIPipelineLayout*>(layout);
-    if (d3d_command_buffer == nullptr || command_list == nullptr || d3d_layout == nullptr || pDescriptorSets == nullptr)
+    if (d3d_command_buffer == nullptr ||
+        command_list == nullptr ||
+        d3d_layout == nullptr ||
+        (pDescriptorSets == nullptr && descriptorSetCount > 0))
     {
+        if (commandBuffer != nullptr ||
+            layout != nullptr ||
+            pDescriptorSets != nullptr ||
+            descriptorSetCount > 0)
+        {
+            LOG_WARN("D3D12 cmdBindDescriptorSets skipped because command buffer, command list, layout, or descriptor sets are invalid");
+        }
         return;
     }
 
@@ -5067,35 +5500,35 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             m_d3d12_cbv_srv_uav_heap == nullptr ||
             m_d3d12_cbv_srv_uav_cpu_heap == nullptr)
         {
+            LOG_WARN("D3D12 cmdBindDescriptorSets skipped dynamic descriptors for set {} (required_dynamic_descriptors={}, provided_dynamic_offsets={}, has_resource_descriptors={})",
+                     set_index,
+                     required_dynamic_descriptor_count,
+                     dynamicOffsetCount,
+                     descriptor_set->has_cbv_srv_uav_descriptors);
             return;
         }
 
         uint32_t unused_transient_base = 0;
         if (!reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
                                 preflight_transient_next,
-                                m_d3d12_cbv_srv_uav_descriptor_capacity,
-                                unused_transient_base))
+                                 m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                 unused_transient_base))
         {
+            LOG_WARN("D3D12 cmdBindDescriptorSets could not reserve {} transient descriptors for set {}",
+                     set_layout->cbv_srv_uav_descriptor_count,
+                     set_index);
             return;
         }
 
         preflight_dynamic_offset_index += required_dynamic_descriptor_count;
     }
 
-    ID3D12DescriptorHeap* heaps[2] {};
-    UINT heap_count = 0;
-    if (m_d3d12_cbv_srv_uav_heap != nullptr)
-    {
-        heaps[heap_count++] = m_d3d12_cbv_srv_uav_heap.Get();
-    }
-    if (m_d3d12_sampler_heap != nullptr)
-    {
-        heaps[heap_count++] = m_d3d12_sampler_heap.Get();
-    }
-    if (heap_count > 0)
-    {
-        command_list->SetDescriptorHeaps(heap_count, heaps);
-    }
+    bindEngineDescriptorHeaps(command_list,
+                              *d3d_command_buffer,
+                              m_d3d12_cbv_srv_uav_heap.Get(),
+                              m_d3d12_sampler_heap.Get(),
+                              true,
+                              pipelineBindPoint);
 
     uint32_t dynamic_offset_index = 0;
     for (uint32_t i = 0; i < descriptorSetCount; ++i)
@@ -5143,6 +5576,10 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
              dynamic_offset_index > dynamicOffsetCount ||
              required_dynamic_descriptor_count > dynamicOffsetCount - dynamic_offset_index))
         {
+            LOG_WARN("D3D12 cmdBindDescriptorSets skipped set {} because dynamic offsets are incomplete (required={}, provided={})",
+                     set_index,
+                     required_dynamic_descriptor_count,
+                     dynamicOffsetCount);
             return;
         }
 
@@ -5211,6 +5648,9 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             }
             else
             {
+                LOG_WARN("D3D12 cmdBindDescriptorSets could not reserve {} transient descriptors for set {}",
+                         set_layout->cbv_srv_uav_descriptor_count,
+                         set_index);
                 return;
             }
         }
@@ -5227,6 +5667,7 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             {
                 command_list->SetGraphicsRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
             }
+            rememberRootDescriptorTable(*d3d_command_buffer, pipelineBindPoint, root_index, cbv_srv_uav_gpu_base);
         }
         if (descriptor_set->has_sampler_descriptors &&
             set_index < d3d_layout->sampler_root_parameter_indices.size() &&
@@ -5241,6 +5682,10 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             {
                 command_list->SetGraphicsRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
             }
+            rememberRootDescriptorTable(*d3d_command_buffer,
+                                        pipelineBindPoint,
+                                        root_index,
+                                        descriptor_set->sampler_gpu_base);
         }
     }
 #else
@@ -5257,12 +5702,26 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
 void D3D12RHI::cmdDrawIndexedPFN(RHICommandBuffer* commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance)
 {
 #ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
     auto* command_list = d3d12CommandListFor(commandBuffer);
     if (command_list == nullptr)
     {
+        if (commandBuffer != nullptr && indexCount > 0 && instanceCount > 0)
+        {
+            LOG_WARN("D3D12 cmdDrawIndexed skipped because no command list is available");
+        }
         return;
     }
 
+    if (d3d_command_buffer != nullptr)
+    {
+        bindEngineDescriptorHeaps(command_list,
+                                  *d3d_command_buffer,
+                                  m_d3d12_cbv_srv_uav_heap.Get(),
+                                  m_d3d12_sampler_heap.Get(),
+                                  true,
+                                  RHI_PIPELINE_BIND_POINT_GRAPHICS);
+    }
     command_list->DrawIndexedInstanced(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
 #else
     (void)commandBuffer;
@@ -5399,15 +5858,35 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
     auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* src = static_cast<D3D12RHIImage*>(srcImage);
     auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
-    if (m_d3d12_device == nullptr ||
-        command_list == nullptr ||
-        src == nullptr ||
-        dst == nullptr ||
-        src->resource == nullptr ||
-        pRegions == nullptr ||
-        regionCount == 0 ||
-        src->resource_bytes_per_pixel == 0)
+    if (regionCount == 0)
     {
+        return;
+    }
+    if (m_d3d12_device == nullptr || command_list == nullptr)
+    {
+        if (commandBuffer != nullptr || srcImage != nullptr || dstBuffer != nullptr || pRegions != nullptr)
+        {
+            LOG_WARN("D3D12 cmdCopyImageToBuffer skipped because device or command list is unavailable");
+        }
+        return;
+    }
+    if (src == nullptr || dst == nullptr || src->resource == nullptr)
+    {
+        if (srcImage != nullptr || dstBuffer != nullptr)
+        {
+            LOG_WARN("D3D12 cmdCopyImageToBuffer skipped because source image or destination buffer is invalid");
+        }
+        return;
+    }
+    if (pRegions == nullptr)
+    {
+        LOG_WARN("D3D12 cmdCopyImageToBuffer skipped because copy regions are null while regionCount is {}",
+                 regionCount);
+        return;
+    }
+    if (src->resource_bytes_per_pixel == 0)
+    {
+        LOG_WARN("D3D12 cmdCopyImageToBuffer skipped because source image has an unknown byte size");
         return;
     }
 
@@ -5531,14 +6010,33 @@ void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* sr
     auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* src = static_cast<D3D12RHIImage*>(srcImage);
     auto* dst = static_cast<D3D12RHIImage*>(dstImage);
-    if (command_list == nullptr ||
-        src == nullptr ||
+    if (regionCount == 0)
+    {
+        return;
+    }
+    if (command_list == nullptr)
+    {
+        if (commandBuffer != nullptr || srcImage != nullptr || dstImage != nullptr || pRegions != nullptr)
+        {
+            LOG_WARN("D3D12 cmdCopyImageToImage skipped because no command list is available");
+        }
+        return;
+    }
+    if (src == nullptr ||
         dst == nullptr ||
         src->resource == nullptr ||
-        dst->resource == nullptr ||
-        pRegions == nullptr ||
-        regionCount == 0)
+        dst->resource == nullptr)
     {
+        if (srcImage != nullptr || dstImage != nullptr)
+        {
+            LOG_WARN("D3D12 cmdCopyImageToImage skipped because source or destination image is invalid");
+        }
+        return;
+    }
+    if (pRegions == nullptr)
+    {
+        LOG_WARN("D3D12 cmdCopyImageToImage skipped because copy regions are null while regionCount is {}",
+                 regionCount);
         return;
     }
 
@@ -5786,9 +6284,23 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
 void D3D12RHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
 {
 #ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
     if (auto* command_list = d3d12CommandListFor(commandBuffer))
     {
+        if (d3d_command_buffer != nullptr)
+        {
+            bindEngineDescriptorHeaps(command_list,
+                                      *d3d_command_buffer,
+                                      m_d3d12_cbv_srv_uav_heap.Get(),
+                                      m_d3d12_sampler_heap.Get(),
+                                      true,
+                                      RHI_PIPELINE_BIND_POINT_GRAPHICS);
+        }
         command_list->DrawInstanced(vertexCount, instanceCount, firstVertex, firstInstance);
+    }
+    else if (commandBuffer != nullptr && vertexCount > 0 && instanceCount > 0)
+    {
+        LOG_WARN("D3D12 cmdDraw skipped because no command list is available");
     }
 #else
     (void)commandBuffer;
@@ -5803,9 +6315,23 @@ void D3D12RHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, ui
 void D3D12RHI::cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
 {
 #ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
     if (auto* command_list = d3d12CommandListFor(commandBuffer))
     {
+        if (d3d_command_buffer != nullptr)
+        {
+            bindEngineDescriptorHeaps(command_list,
+                                      *d3d_command_buffer,
+                                      m_d3d12_cbv_srv_uav_heap.Get(),
+                                      m_d3d12_sampler_heap.Get(),
+                                      true,
+                                      RHI_PIPELINE_BIND_POINT_COMPUTE);
+        }
         command_list->Dispatch(groupCountX, groupCountY, groupCountZ);
+    }
+    else if (commandBuffer != nullptr && groupCountX > 0 && groupCountY > 0 && groupCountZ > 0)
+    {
+        LOG_WARN("D3D12 cmdDispatch skipped because no command list is available");
     }
 #else
     (void)commandBuffer;
@@ -5819,16 +6345,40 @@ void D3D12RHI::cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX
 void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset)
 {
 #ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
     auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* d3d_buffer = static_cast<D3D12RHIBuffer*>(buffer);
-    if (command_list == nullptr ||
-        d3d_buffer == nullptr ||
-        d3d_buffer->resource == nullptr ||
-        !ensureDispatchCommandSignature())
+    if (command_list == nullptr)
     {
+        if (commandBuffer != nullptr || buffer != nullptr)
+        {
+            LOG_WARN("D3D12 cmdDispatchIndirect skipped because no command list is available");
+        }
+        return;
+    }
+    if (d3d_buffer == nullptr || d3d_buffer->resource == nullptr)
+    {
+        if (buffer != nullptr)
+        {
+            LOG_WARN("D3D12 cmdDispatchIndirect skipped because the indirect argument buffer has no D3D12 resource");
+        }
+        return;
+    }
+    if (!ensureDispatchCommandSignature())
+    {
+        LOG_WARN("D3D12 cmdDispatchIndirect skipped because the dispatch command signature is unavailable");
         return;
     }
 
+    if (d3d_command_buffer != nullptr)
+    {
+        bindEngineDescriptorHeaps(command_list,
+                                  *d3d_command_buffer,
+                                  m_d3d12_cbv_srv_uav_heap.Get(),
+                                  m_d3d12_sampler_heap.Get(),
+                                  true,
+                                  RHI_PIPELINE_BIND_POINT_COMPUTE);
+    }
     if (d3d_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
     {
         transitionResource(command_list,
@@ -5860,6 +6410,14 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
     auto* command_list = d3d12CommandListFor(commandBuffer);
     if (command_list == nullptr)
     {
+        const bool has_barrier_work =
+            (memoryBarrierCount > 0 && pMemoryBarriers != nullptr) ||
+            (bufferMemoryBarrierCount > 0 && pBufferMemoryBarriers != nullptr) ||
+            (imageMemoryBarrierCount > 0 && pImageMemoryBarriers != nullptr);
+        if (commandBuffer != nullptr && has_barrier_work)
+        {
+            LOG_WARN("D3D12 cmdPipelineBarrier skipped because no command list is available");
+        }
         return;
     }
 
@@ -6573,10 +7131,15 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
             d3d_command_buffer->has_recorded_commands = false;
             d3d_command_buffer->in_render_pass = false;
             d3d_command_buffer->bound_graphics_pipeline = nullptr;
+            d3d_command_buffer->bound_graphics_pipeline_layout = nullptr;
+            d3d_command_buffer->bound_compute_pipeline_layout = nullptr;
+            d3d_command_buffer->bound_graphics_root_signature = nullptr;
+            d3d_command_buffer->bound_compute_root_signature = nullptr;
             d3d_command_buffer->active_render_pass = nullptr;
             d3d_command_buffer->active_framebuffer = nullptr;
             d3d_command_buffer->active_subpass_index = 0;
             d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
+            resetCommandBufferDescriptorHeapState(*d3d_command_buffer);
         }
     }
 #endif
@@ -6592,6 +7155,7 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
         d3d_command_buffer == nullptr ||
         d3d_command_buffer->command_list == nullptr)
     {
+        LOG_WARN("D3D12 submitRendering skipped because swapchain, command queue, or current command list is unavailable");
         return;
     }
 
@@ -7487,6 +8051,11 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
     ID3D12GraphicsCommandList* D3D12RHI::getD3D12CommandList() const
     {
+        auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
+        if (d3d_command_buffer != nullptr)
+        {
+            markCommandBufferExternalStateDirty(*d3d_command_buffer);
+        }
         if (auto* current_command_list = d3d12CommandListFor(m_current_command_buffer))
         {
             return current_command_list;
@@ -7807,12 +8376,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                 continue;
             }
 
-            const RHIImageLayout input_layout =
-                input_index < subpass.input_attachment_layouts.size() ?
-                    subpass.input_attachment_layouts[input_index] :
-                    RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            const D3D12_RESOURCE_STATES shader_read_state = subpassAttachmentState(view, input_layout);
-            transitionImageView(command_list, view, shader_read_state);
+            transitionImageView(command_list, view, inputAttachmentState(view));
         }
 
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
@@ -7836,11 +8400,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
             if (view->image != nullptr && view->image->resource != nullptr)
             {
-                const RHIImageLayout color_layout =
-                    color_slot < subpass.color_attachment_layouts.size() ?
-                        subpass.color_attachment_layouts[color_slot] :
-                        RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                transitionImageView(command_list, view, subpassAttachmentState(view, color_layout));
+                transitionImageView(command_list, view, D3D12_RESOURCE_STATE_RENDER_TARGET);
             }
             else
             {
@@ -7885,11 +8445,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                 if (depth_view->image != nullptr && depth_view->image->resource != nullptr)
                 {
                     const D3D12_RESOURCE_STATES depth_state =
-                        depth_read_only ?
-                            (D3D12_RESOURCE_STATE_DEPTH_READ |
-                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) :
-                            D3D12_RESOURCE_STATE_DEPTH_WRITE;
+                        depthAttachmentState(depth_view, subpass.depth_attachment_layout, depth_read_only);
                     transitionImageView(command_list, depth_view, depth_state);
                 }
             }

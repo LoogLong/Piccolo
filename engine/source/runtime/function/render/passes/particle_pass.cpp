@@ -86,7 +86,7 @@ namespace Piccolo
                                       1,
                                       &imagememorybarrier);
 
-            imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_UNDEFINED;
+            imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             imagememorybarrier.newLayout     = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             imagememorybarrier.srcAccessMask = RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             imagememorybarrier.dstAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
@@ -121,9 +121,9 @@ namespace Piccolo
 
             imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             imagememorybarrier.newLayout     = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_WRITE_BIT;
+            imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
             imagememorybarrier.dstAccessMask =
-                RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | RHI_ACCESS_SHADER_READ_BIT;
+                RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
             m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -179,9 +179,9 @@ namespace Piccolo
                                       1,
                                       &imagememorybarrier);
 
-            imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_UNDEFINED;
+            imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imagememorybarrier.newLayout     = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            imagememorybarrier.srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            imagememorybarrier.srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | RHI_ACCESS_SHADER_READ_BIT;
             imagememorybarrier.dstAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
             imagememorybarrier.image         = m_src_normal_image;
 
@@ -214,8 +214,8 @@ namespace Piccolo
 
             imagememorybarrier.oldLayout     = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             imagememorybarrier.newLayout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_WRITE_BIT;
-            imagememorybarrier.dstAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT | RHI_ACCESS_SHADER_READ_BIT;
+            imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
+            imagememorybarrier.dstAccessMask = RHI_ACCESS_SHADER_READ_BIT;
 
             m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -1680,6 +1680,24 @@ namespace Piccolo
                                       0,
                                       nullptr);
 
+            bufferBarrier.buffer              = m_emitter_buffer_batches[i].m_indirect_dispatch_argument_buffer;
+            bufferBarrier.size                = RHI_WHOLE_SIZE;
+            bufferBarrier.srcAccessMask       = RHI_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            bufferBarrier.dstAccessMask       = RHI_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
+            bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
+
+            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+                                      RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                      RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                      0,
+                                      0,
+                                      nullptr,
+                                      1,
+                                      &bufferBarrier,
+                                      0,
+                                      nullptr);
+
             m_rhi->pushEvent(m_compute_command_buffer, "Particle Simulate", color);
 
             m_rhi->cmdBindPipelinePFN(m_compute_command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_simulate_pipeline);
@@ -1900,6 +1918,10 @@ namespace Piccolo
             memcpy(m_emitter_buffer_batches[index].m_emitter_desc_mapped,
                    &m_emitter_buffer_batches[index].m_emitter_desc,
                    sizeof(ParticleEmitterDesc));
+            m_rhi->flushMappedMemoryRanges(nullptr,
+                                           m_emitter_buffer_batches[index].m_particle_component_res_memory,
+                                           0,
+                                           sizeof(ParticleEmitterDesc));
         }
     }
 
