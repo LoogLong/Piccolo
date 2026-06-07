@@ -3173,10 +3173,28 @@ bool D3D12RHI::createGraphicsPipelines(RHIPipelineCache* pipelineCache, uint32_t
     }
 
     desc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    if (subpass_info != nullptr &&
-        subpass_info->depth_attachment_index < render_pass->attachments.size())
+    if (subpass_info != nullptr)
     {
-        desc.DSVFormat = toDXGIFormat(render_pass->attachments[subpass_info->depth_attachment_index].format);
+        DXGI_FORMAT subpass_dsv_format = DXGI_FORMAT_UNKNOWN;
+        if (subpass_info->depth_attachment_index < render_pass->attachments.size())
+        {
+            const RHIFormat depth_format = render_pass->attachments[subpass_info->depth_attachment_index].format;
+            if (isDepthFormat(depth_format))
+            {
+                subpass_dsv_format = toDSVFormat(depth_format);
+            }
+        }
+
+        if (subpass_dsv_format != DXGI_FORMAT_UNKNOWN)
+        {
+            desc.DSVFormat = subpass_dsv_format;
+        }
+        else
+        {
+            desc.DepthStencilState.DepthEnable    = FALSE;
+            desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+            desc.DepthStencilState.StencilEnable  = FALSE;
+        }
     }
     else if (desc.DepthStencilState.DepthEnable)
     {
