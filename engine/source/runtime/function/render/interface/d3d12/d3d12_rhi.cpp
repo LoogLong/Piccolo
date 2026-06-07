@@ -6236,11 +6236,37 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
 
 void D3D12RHI::pushEvent(RHICommandBuffer* commond_buffer, const char* name, const float* color)
 {
+#ifdef _WIN32
+    (void)color;
+
+    auto* command_list = d3d12CommandListFor(commond_buffer);
+    if (command_list == nullptr || name == nullptr || name[0] == '\0')
+    {
+        return;
+    }
+
+    constexpr UINT pix_event_ansi_version = 1;
+    const UINT     event_name_size        = static_cast<UINT>(std::strlen(name) + 1);
+    command_list->BeginEvent(pix_event_ansi_version, name, event_name_size);
+#else
+    (void)commond_buffer;
+    (void)name;
+    (void)color;
+#endif
     return;
 }
 
 void D3D12RHI::popEvent(RHICommandBuffer* commond_buffer)
 {
+#ifdef _WIN32
+    auto* command_list = d3d12CommandListFor(commond_buffer);
+    if (command_list != nullptr)
+    {
+        command_list->EndEvent();
+    }
+#else
+    (void)commond_buffer;
+#endif
     return;
 }
 
