@@ -61,3 +61,13 @@
 - 现有审计文档记录上一轮 HEAD 为 `76fdf29 feat: tighten d3d12 backend validation`，并说明上一轮已有 Debug/Release build、D3D12 smoke、Auto smoke、Vulkan smoke 的验证记录。
 - 当前 diff 显示 `d3d12_rhi.cpp` 的未提交修改补了 public `createSwapchain()`，并加强 `copyBuffer()` / `cmdCopyBuffer()` 的 GPU resource 校验、`CopyBufferRegion` 路径和 host_data 边界检查。
 - 代码扫描显示 `ui_pass.cpp` 已有 D3D12 ImGui 调用，同时保留 Vulkan ImGui 分支；D3D12 RHI 仍存在 `m_dummy_*` wrapper 和 `host_data` 镜像。
+
+## Windows D3D12 Replacement Acceptance Criteria
+
+- Windows `RenderBackend=D3D12` initializes D3D12 and does not log `Falling back to Vulkan backend`.
+- Windows D3D12-primary validation can build and boot without linking PiccoloRuntime or imgui against Vulkan when Vulkan support is disabled by CMake option.
+- Windows optional Vulkan validation can still build and boot when Vulkan support is enabled and `RenderBackend=Vulkan`.
+- Non-Windows builds continue to enable Vulkan and exclude D3D12 `.cpp` files.
+- The editor renders main camera, post-process, debug draw, particles, picking, ImGui, and swapchain resize on D3D12.
+- D3D12 logs are clean of debug-layer, descriptor heap, root signature, resource state, command list lifetime, device removed, and fallback errors during boot plus the manual validation run.
+- No new unit-test or CTest source files are required for this phase.

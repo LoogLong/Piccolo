@@ -21,6 +21,7 @@
 - Windows 可通过 smoke 脚本分别验证 `RenderBackend=D3D12`、`RenderBackend=Auto` 和 `RenderBackend=Vulkan` 初始化路径
 - D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
 - 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
+- 当前后续目标是把 Windows D3D12 从“默认可回退 Vulkan”推进到“D3D12-primary 且可选 Vulkan”，并补齐 D3D12 长跑、resize、粒子、拾取、UI 与无 Vulkan 链接依赖验证。
 
 ### 验证命令
 
