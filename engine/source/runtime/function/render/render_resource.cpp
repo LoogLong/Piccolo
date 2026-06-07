@@ -91,22 +91,22 @@ namespace Piccolo
         RenderMeshData       mesh_data,
         RenderMaterialData   material_data)
     {
-        getOrCreateVulkanMesh(rhi, render_entity, mesh_data);
-        getOrCreateVulkanMaterial(rhi, render_entity, material_data);
+        getOrCreateMesh(rhi, render_entity, mesh_data);
+        getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
         RenderEntity         render_entity,
         RenderMeshData       mesh_data)
     {
-        getOrCreateVulkanMesh(rhi, render_entity, mesh_data);
+        getOrCreateMesh(rhi, render_entity, mesh_data);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
         RenderEntity         render_entity,
         RenderMaterialData   material_data)
     {
-        getOrCreateVulkanMaterial(rhi, render_entity, material_data);
+        getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
     void RenderResource::updatePerFrameBuffer(std::shared_ptr<RenderScene>  render_scene,
@@ -264,20 +264,20 @@ namespace Piccolo
             specular_cubemap_miplevels);
     }
 
-    VulkanMesh&
-        RenderResource::getOrCreateVulkanMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data)
+    RenderMeshGPUResource&
+        RenderResource::getOrCreateMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data)
     {
         size_t assetid = entity.m_mesh_asset_id;
 
-        auto it = m_vulkan_meshes.find(assetid);
-        if (it != m_vulkan_meshes.end())
+        auto it = m_meshes.find(assetid);
+        if (it != m_meshes.end())
         {
             return it->second;
         }
         else
         {
-            VulkanMesh temp;
-            auto       res = m_vulkan_meshes.insert(std::make_pair(assetid, std::move(temp)));
+            RenderMeshGPUResource temp;
+            auto       res = m_meshes.insert(std::make_pair(assetid, std::move(temp)));
             assert(res.second);
 
             uint32_t index_buffer_size = static_cast<uint32_t>(mesh_data.m_static_mesh_data.m_index_buffer->m_size);
@@ -287,7 +287,7 @@ namespace Piccolo
             MeshVertexDataDefinition* vertex_buffer_data =
                 reinterpret_cast<MeshVertexDataDefinition*>(mesh_data.m_static_mesh_data.m_vertex_buffer->m_data);
 
-            VulkanMesh& now_mesh = res.first->second;
+            RenderMeshGPUResource& now_mesh = res.first->second;
 
             if (mesh_data.m_skeleton_binding_buffer)
             {
@@ -321,21 +321,21 @@ namespace Piccolo
         }
     }
 
-    VulkanPBRMaterial& RenderResource::getOrCreateVulkanMaterial(std::shared_ptr<RHI> rhi,
+    RenderPBRMaterialGPUResource& RenderResource::getOrCreateMaterial(std::shared_ptr<RHI> rhi,
         RenderEntity         entity,
         RenderMaterialData   material_data)
     {
         size_t assetid = entity.m_material_asset_id;
 
-        auto it = m_vulkan_pbr_materials.find(assetid);
-        if (it != m_vulkan_pbr_materials.end())
+        auto it = m_pbr_materials.find(assetid);
+        if (it != m_pbr_materials.end())
         {
             return it->second;
         }
         else
         {
-            VulkanPBRMaterial temp;
-            auto              res = m_vulkan_pbr_materials.insert(std::make_pair(assetid, std::move(temp)));
+            RenderPBRMaterialGPUResource temp;
+            auto              res = m_pbr_materials.insert(std::make_pair(assetid, std::move(temp)));
             assert(res.second);
 
             float empty_image[] = { 0.5f, 0.5f, 0.5f, 0.5f };
@@ -400,7 +400,7 @@ namespace Piccolo
                 emissive_image_format = material_data.m_emissive_texture->m_format;
             }
 
-            VulkanPBRMaterial& now_material = res.first->second;
+            RenderPBRMaterialGPUResource& now_material = res.first->second;
 
             // similiarly to the vertex/index buffer, we should allocate the uniform
             // buffer in DEVICE_LOCAL memory and use the temp stage buffer to copy the
@@ -584,7 +584,7 @@ namespace Piccolo
                                         MeshVertexDataDefinition const*        vertex_buffer_data,
                                         uint32_t                               joint_binding_buffer_size,
                                         MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
-                                        VulkanMesh&                            now_mesh)
+                                        RenderMeshGPUResource&                            now_mesh)
     {
         now_mesh.enable_vertex_blending = enable_vertex_blending;
         assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
@@ -611,7 +611,7 @@ namespace Piccolo
                                             MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
                                             uint32_t                               index_buffer_size,
                                             uint16_t*                              index_buffer_data,
-                                            VulkanMesh&                            now_mesh)
+                                            RenderMeshGPUResource&                            now_mesh)
     {
         if (enable_vertex_blending)
         {
@@ -620,12 +620,12 @@ namespace Piccolo
             assert(0 == (index_buffer_size % sizeof(uint16_t)));
             uint32_t index_count = index_buffer_size / sizeof(uint16_t);
 
-            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VulkanMeshVertexPostition) * vertex_count;
+            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VertexPosition) * vertex_count;
             RHIDeviceSize vertex_varying_enable_blending_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexVaryingEnableBlending) * vertex_count;
-            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VulkanMeshVertexVarying) * vertex_count;
+                sizeof(MeshVertex::VertexVaryingEnableBlending) * vertex_count;
+            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VertexVarying) * vertex_count;
             RHIDeviceSize vertex_joint_binding_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexJointBinding) * index_count;
+                sizeof(MeshVertex::VertexJointBinding) * index_count;
 
             RHIDeviceSize vertex_position_buffer_offset = 0;
             RHIDeviceSize vertex_varying_enable_blending_buffer_offset =
@@ -653,18 +653,18 @@ namespace Piccolo
                            0,
                            &inefficient_staging_buffer_data);
 
-            MeshVertex::VulkanMeshVertexPostition* mesh_vertex_positions =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexPostition*>(
+            MeshVertex::VertexPosition* mesh_vertex_positions =
+                reinterpret_cast<MeshVertex::VertexPosition*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_position_buffer_offset);
-            MeshVertex::VulkanMeshVertexVaryingEnableBlending* mesh_vertex_blending_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVaryingEnableBlending*>(
+            MeshVertex::VertexVaryingEnableBlending* mesh_vertex_blending_varyings =
+                reinterpret_cast<MeshVertex::VertexVaryingEnableBlending*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) +
                     vertex_varying_enable_blending_buffer_offset);
-            MeshVertex::VulkanMeshVertexVarying* mesh_vertex_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVarying*>(
+            MeshVertex::VertexVarying* mesh_vertex_varyings =
+                reinterpret_cast<MeshVertex::VertexVarying*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_varying_buffer_offset);
-            MeshVertex::VulkanMeshVertexJointBinding* mesh_vertex_joint_binding =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexJointBinding*>(
+            MeshVertex::VertexJointBinding* mesh_vertex_joint_binding =
+                reinterpret_cast<MeshVertex::VertexJointBinding*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_joint_binding_buffer_offset);
 
             for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
@@ -818,10 +818,10 @@ namespace Piccolo
             assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
             uint32_t vertex_count = vertex_buffer_size / sizeof(MeshVertexDataDefinition);
 
-            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VulkanMeshVertexPostition) * vertex_count;
+            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VertexPosition) * vertex_count;
             RHIDeviceSize vertex_varying_enable_blending_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexVaryingEnableBlending) * vertex_count;
-            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VulkanMeshVertexVarying) * vertex_count;
+                sizeof(MeshVertex::VertexVaryingEnableBlending) * vertex_count;
+            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VertexVarying) * vertex_count;
 
             RHIDeviceSize vertex_position_buffer_offset = 0;
             RHIDeviceSize vertex_varying_enable_blending_buffer_offset =
@@ -847,15 +847,15 @@ namespace Piccolo
                            0,
                            &inefficient_staging_buffer_data);
 
-            MeshVertex::VulkanMeshVertexPostition* mesh_vertex_positions =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexPostition*>(
+            MeshVertex::VertexPosition* mesh_vertex_positions =
+                reinterpret_cast<MeshVertex::VertexPosition*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_position_buffer_offset);
-            MeshVertex::VulkanMeshVertexVaryingEnableBlending* mesh_vertex_blending_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVaryingEnableBlending*>(
+            MeshVertex::VertexVaryingEnableBlending* mesh_vertex_blending_varyings =
+                reinterpret_cast<MeshVertex::VertexVaryingEnableBlending*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) +
                     vertex_varying_enable_blending_buffer_offset);
-            MeshVertex::VulkanMeshVertexVarying* mesh_vertex_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVarying*>(
+            MeshVertex::VertexVarying* mesh_vertex_varyings =
+                reinterpret_cast<MeshVertex::VertexVarying*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_varying_buffer_offset);
 
             for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
@@ -973,7 +973,7 @@ namespace Piccolo
     void RenderResource::updateIndexBuffer(std::shared_ptr<RHI> rhi,
                                            uint32_t             index_buffer_size,
                                            void*                index_buffer_data,
-                                           VulkanMesh&          now_mesh)
+                                           RenderMeshGPUResource&          now_mesh)
     {
         // temp staging buffer
         RHIDeviceSize buffer_size = index_buffer_size;
@@ -1057,12 +1057,12 @@ namespace Piccolo
             texture_data.emissive_image_format);
     }
 
-    VulkanMesh& RenderResource::getEntityMesh(RenderEntity entity)
+    RenderMeshGPUResource& RenderResource::getEntityMesh(RenderEntity entity)
     {
         size_t assetid = entity.m_mesh_asset_id;
 
-        auto it = m_vulkan_meshes.find(assetid);
-        if (it != m_vulkan_meshes.end())
+        auto it = m_meshes.find(assetid);
+        if (it != m_meshes.end())
         {
             return it->second;
         }
@@ -1072,12 +1072,12 @@ namespace Piccolo
         }
     }
 
-    VulkanPBRMaterial& RenderResource::getEntityMaterial(RenderEntity entity)
+    RenderPBRMaterialGPUResource& RenderResource::getEntityMaterial(RenderEntity entity)
     {
         size_t assetid = entity.m_material_asset_id;
 
-        auto it = m_vulkan_pbr_materials.find(assetid);
-        if (it != m_vulkan_pbr_materials.end())
+        auto it = m_pbr_materials.find(assetid);
+        if (it != m_pbr_materials.end())
         {
             return it->second;
         }
@@ -1156,6 +1156,6 @@ namespace Piccolo
                        0,
                        &_storage_buffer._axis_inefficient_storage_buffer_memory_pointer);
 
-        static_assert(64 >= sizeof(MeshVertex::VulkanMeshVertexJointBinding), "");
+        static_assert(64 >= sizeof(MeshVertex::VertexJointBinding), "");
     }
 } // namespace Piccolo

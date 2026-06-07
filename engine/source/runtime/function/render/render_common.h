@@ -9,6 +9,9 @@
 
 namespace Piccolo
 {
+    struct RenderMeshGPUResource;
+    struct RenderPBRMaterialGPUResource;
+
     static const uint32_t s_point_light_shadow_map_dimension       = 2048;
     static const uint32_t s_directional_light_shadow_map_dimension = 4096;
 
@@ -50,7 +53,7 @@ namespace Piccolo
         Matrix4x4                   directional_light_proj_view;
     };
 
-    struct VulkanMeshInstance
+    struct RenderMeshInstance
     {
         float     enable_vertex_blending;
         float     _padding_enable_vertex_blending_1;
@@ -61,7 +64,7 @@ namespace Piccolo
 
     struct MeshPerdrawcallStorageBufferObject
     {
-        VulkanMeshInstance mesh_instances[s_mesh_per_drawcall_max_instance_count];
+        RenderMeshInstance mesh_instances[s_mesh_per_drawcall_max_instance_count];
     };
 
     struct MeshPerdrawcallVertexBlendingStorageBufferObject
@@ -94,7 +97,7 @@ namespace Piccolo
 
     struct MeshPointLightShadowPerdrawcallStorageBufferObject
     {
-        VulkanMeshInstance mesh_instances[s_mesh_per_drawcall_max_instance_count];
+        RenderMeshInstance mesh_instances[s_mesh_per_drawcall_max_instance_count];
     };
 
     struct MeshPointLightShadowPerdrawcallVertexBlendingStorageBufferObject
@@ -109,7 +112,7 @@ namespace Piccolo
 
     struct MeshDirectionalLightShadowPerdrawcallStorageBufferObject
     {
-        VulkanMeshInstance mesh_instances[s_mesh_per_drawcall_max_instance_count];
+        RenderMeshInstance mesh_instances[s_mesh_per_drawcall_max_instance_count];
     };
 
     struct MeshDirectionalLightShadowPerdrawcallVertexBlendingStorageBufferObject
@@ -169,70 +172,14 @@ namespace Piccolo
         Matrix4x4 joint_matrices[s_mesh_vertex_blending_max_joint_count * s_mesh_per_drawcall_max_instance_count];
     };
 
-    // mesh
-    struct VulkanMesh
-    {
-        bool enable_vertex_blending;
-
-        uint32_t mesh_vertex_count;
-
-        RHIBuffer*     mesh_vertex_position_buffer;
-        RHIAllocation* mesh_vertex_position_buffer_allocation;
-
-        RHIBuffer*     mesh_vertex_varying_enable_blending_buffer;
-        RHIAllocation* mesh_vertex_varying_enable_blending_buffer_allocation;
-
-        RHIBuffer*     mesh_vertex_joint_binding_buffer;
-        RHIAllocation* mesh_vertex_joint_binding_buffer_allocation;
-
-        RHIDescriptorSet* mesh_vertex_blending_descriptor_set;
-
-        RHIBuffer*     mesh_vertex_varying_buffer;
-        RHIAllocation* mesh_vertex_varying_buffer_allocation;
-
-        uint32_t mesh_index_count;
-
-        RHIBuffer*     mesh_index_buffer;
-        RHIAllocation* mesh_index_buffer_allocation;
-    };
-
-    // material
-    struct VulkanPBRMaterial
-    {
-        RHIImage*       base_color_texture_image;
-        RHIImageView*   base_color_image_view;
-        RHIAllocation*  base_color_image_allocation;
-
-        RHIImage*       metallic_roughness_texture_image;
-        RHIImageView*   metallic_roughness_image_view;
-        RHIAllocation*  metallic_roughness_image_allocation;
-
-        RHIImage*       normal_texture_image;
-        RHIImageView*   normal_image_view;
-        RHIAllocation*  normal_image_allocation;
-
-        RHIImage*       occlusion_texture_image;
-        RHIImageView*   occlusion_image_view;
-        RHIAllocation*  occlusion_image_allocation;
-
-        RHIImage*       emissive_texture_image;
-        RHIImageView*   emissive_image_view;
-        RHIAllocation*  emissive_image_allocation;
-
-        RHIBuffer*      material_uniform_buffer;
-        RHIAllocation*  material_uniform_buffer_allocation;
-
-        RHIDescriptorSet* material_descriptor_set;
-    };
-
     // nodes
     struct RenderMeshNode
     {
         const Matrix4x4*   model_matrix {nullptr};
         const Matrix4x4*   joint_matrices {nullptr};
         uint32_t           joint_count {0};
-        VulkanMesh*        ref_mesh {nullptr};
-        VulkanPBRMaterial* ref_material {nullptr};
+        RenderMeshGPUResource*        ref_mesh {nullptr};
+        RenderPBRMaterialGPUResource* ref_material {nullptr};
         uint32_t           node_id;
         bool               enable_vertex_blending {false};
     };
@@ -240,7 +187,7 @@ namespace Piccolo
     struct RenderAxisNode
     {
         Matrix4x4   model_matrix {Matrix4x4::IDENTITY};
-        VulkanMesh* ref_mesh {nullptr};
+        RenderMeshGPUResource* ref_mesh {nullptr};
         uint32_t    node_id;
         bool        enable_vertex_blending {false};
     };
@@ -267,6 +214,6 @@ namespace Piccolo
         uint32_t           emissive_image_width;
         uint32_t           emissive_image_height;
         RHIFormat emissive_image_format;
-        VulkanPBRMaterial* now_material;
+        RenderPBRMaterialGPUResource* now_material;
     };
 } // namespace Piccolo

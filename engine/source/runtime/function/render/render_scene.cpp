@@ -119,11 +119,11 @@ namespace Piccolo
                 }
                 temp_node.node_id = entity.m_instance_id;
 
-                VulkanMesh& mesh_asset           = render_resource->getEntityMesh(entity);
+                RenderMeshGPUResource& mesh_asset           = render_resource->getEntityMesh(entity);
                 temp_node.ref_mesh               = &mesh_asset;
                 temp_node.enable_vertex_blending = entity.m_enable_vertex_blending;
 
-                VulkanPBRMaterial& material_asset = render_resource->getEntityMaterial(entity);
+                RenderPBRMaterialGPUResource& material_asset = render_resource->getEntityMaterial(entity);
                 temp_node.ref_material            = &material_asset;
             }
         }
@@ -173,11 +173,11 @@ namespace Piccolo
                 }
                 temp_node.node_id = entity.m_instance_id;
 
-                VulkanMesh& mesh_asset           = render_resource->getEntityMesh(entity);
+                RenderMeshGPUResource& mesh_asset           = render_resource->getEntityMesh(entity);
                 temp_node.ref_mesh               = &mesh_asset;
                 temp_node.enable_vertex_blending = entity.m_enable_vertex_blending;
 
-                VulkanPBRMaterial& material_asset = render_resource->getEntityMaterial(entity);
+                RenderPBRMaterialGPUResource& material_asset = render_resource->getEntityMaterial(entity);
                 temp_node.ref_material            = &material_asset;
             }
         }
@@ -213,11 +213,11 @@ namespace Piccolo
                 }
                 temp_node.node_id = entity.m_instance_id;
 
-                VulkanMesh& mesh_asset           = render_resource->getEntityMesh(entity);
+                RenderMeshGPUResource& mesh_asset           = render_resource->getEntityMesh(entity);
                 temp_node.ref_mesh               = &mesh_asset;
                 temp_node.enable_vertex_blending = entity.m_enable_vertex_blending;
 
-                VulkanPBRMaterial& material_asset = render_resource->getEntityMaterial(entity);
+                RenderPBRMaterialGPUResource& material_asset = render_resource->getEntityMaterial(entity);
                 temp_node.ref_material            = &material_asset;
             }
         }
@@ -232,7 +232,7 @@ namespace Piccolo
             m_axis_node.model_matrix = axis.m_model_matrix;
             m_axis_node.node_id      = axis.m_instance_id;
 
-            VulkanMesh& mesh_asset             = render_resource->getEntityMesh(axis);
+            RenderMeshGPUResource& mesh_asset             = render_resource->getEntityMesh(axis);
             m_axis_node.ref_mesh               = &mesh_asset;
             m_axis_node.enable_vertex_blending = axis.m_enable_vertex_blending;
         }

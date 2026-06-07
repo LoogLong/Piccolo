@@ -1,6 +1,7 @@
 #include "runtime/function/render/passes/directional_light_pass.h"
 
 #include "runtime/function/render/render_helper.h"
+#include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
@@ -464,7 +465,7 @@ namespace Piccolo
             uint32_t         joint_count {0};
         };
 
-        std::map<VulkanPBRMaterial*, std::map<VulkanMesh*, std::vector<MeshNode>>>
+        std::map<RenderPBRMaterialGPUResource*, std::map<RenderMeshGPUResource*, std::vector<MeshNode>>>
             directional_light_mesh_drawcall_batch;
 
         // reorganize mesh

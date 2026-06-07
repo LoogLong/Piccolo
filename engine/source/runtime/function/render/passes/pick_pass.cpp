@@ -1,5 +1,6 @@
 #include "runtime/function/render/passes/pick_pass.h"
 
+#include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
@@ -432,7 +433,7 @@ namespace Piccolo
             uint32_t         node_id;
         };
 
-        std::map<VulkanPBRMaterial*, std::map<VulkanMesh*, std::vector<MeshNode>>> main_camera_mesh_drawcall_batch;
+        std::map<RenderPBRMaterialGPUResource*, std::map<RenderMeshGPUResource*, std::vector<MeshNode>>> main_camera_mesh_drawcall_batch;
 
         // reorganize mesh
         for (RenderMeshNode& node : *(m_visiable_nodes.p_main_camera_visible_mesh_nodes))
@@ -545,14 +546,14 @@ namespace Piccolo
 
         for (auto& pair1 : main_camera_mesh_drawcall_batch)
         {
-            VulkanPBRMaterial& material       = (*pair1.first);
+            RenderPBRMaterialGPUResource& material       = (*pair1.first);
             auto&              mesh_instanced = pair1.second;
 
             // TODO: render from near to far
 
             for (auto& pair2 : mesh_instanced)
             {
-                VulkanMesh& mesh       = (*pair2.first);
+                RenderMeshGPUResource& mesh       = (*pair2.first);
                 auto&       mesh_nodes = pair2.second;
 
                 uint32_t total_instance_count = static_cast<uint32_t>(mesh_nodes.size());
