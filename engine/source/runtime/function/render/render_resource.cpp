@@ -4,31 +4,15 @@
 #include "runtime/function/render/render_helper.h"
 
 #include "runtime/function/render/render_mesh.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
 
 #include "runtime/function/render/passes/main_camera_pass.h"
 
 #include "runtime/core/base/macro.h"
 
-#include <vk_mem_alloc.h>
-
 #include <stdexcept>
 
 namespace Piccolo
 {
-    namespace
-    {
-        VmaAllocator getAssetAllocator(RHI* rhi)
-        {
-            if (rhi != nullptr && rhi->getBackendType() == RHIBackendType::Vulkan)
-            {
-                return static_cast<VulkanRHI*>(rhi)->m_assets_allocator;
-            }
-            return nullptr;
-        }
-    } // namespace
-
     void RenderResource::clear()
     {
     }
@@ -341,8 +325,6 @@ namespace Piccolo
         RenderEntity         entity,
         RenderMaterialData   material_data)
     {
-        VmaAllocator asset_allocator = getAssetAllocator(rhi.get());
-
         size_t assetid = entity.m_material_asset_id;
 
         auto it = m_vulkan_pbr_materials.find(assetid);
@@ -460,22 +442,17 @@ namespace Piccolo
 
                 rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-                // use the vmaAllocator to allocate asset uniform buffer
+                // allocate asset uniform buffer in device local memory
                 RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
                 bufferInfo.size = buffer_size;
                 bufferInfo.usage = RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-                VmaAllocationCreateInfo allocInfo = {};
-                allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-                rhi->createBufferWithAlignmentVMA(
-                    asset_allocator,
+                rhi->createBufferWithAlignment(
                     &bufferInfo,
-                    &allocInfo,
+                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                     m_global_render_resource._storage_buffer._min_uniform_buffer_offset_alignment,
                     now_material.material_uniform_buffer,
-                    &now_material.material_uniform_buffer_allocation,
-                    NULL);
+                    now_material.material_uniform_buffer_allocation);
 
                 // use the data from staging buffer
                 rhi->copyBuffer(inefficient_staging_buffer, now_material.material_uniform_buffer, 0, 0, buffer_size);
@@ -636,8 +613,6 @@ namespace Piccolo
                                             uint16_t*                              index_buffer_data,
                                             VulkanMesh&                            now_mesh)
     {
-        VmaAllocator asset_allocator = getAssetAllocator(rhi.get());
-
         if (enable_vertex_blending)
         {
             assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
@@ -739,43 +714,32 @@ namespace Piccolo
 
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-            // use the vmaAllocator to allocate asset vertex buffer
+            // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-
-            VmaAllocationCreateInfo allocInfo = {};
-            allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
             bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_position_buffer,
-                                 &now_mesh.mesh_vertex_position_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_position_buffer,
+                                            now_mesh.mesh_vertex_position_buffer_allocation);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_enable_blending_buffer,
-                                 &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_buffer,
-                                 &now_mesh.mesh_vertex_varying_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_buffer,
+                                            now_mesh.mesh_vertex_varying_buffer_allocation);
 
             bufferInfo.usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_joint_binding_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_joint_binding_buffer,
-                                 &now_mesh.mesh_vertex_joint_binding_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_joint_binding_buffer,
+                                            now_mesh.mesh_vertex_joint_binding_buffer_allocation);
 
             // use the data from staging buffer
             rhi->copyBuffer(inefficient_staging_buffer,
@@ -916,34 +880,25 @@ namespace Piccolo
 
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-            // use the vmaAllocator to allocate asset vertex buffer
+            // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
             bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-            VmaAllocationCreateInfo allocInfo = {};
-            allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_position_buffer,
-                                 &now_mesh.mesh_vertex_position_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_position_buffer,
+                                            now_mesh.mesh_vertex_position_buffer_allocation);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_enable_blending_buffer,
-                                 &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(asset_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_buffer,
-                                 &now_mesh.mesh_vertex_varying_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_buffer,
+                                            now_mesh.mesh_vertex_varying_buffer_allocation);
 
             // use the data from staging buffer
             rhi->copyBuffer(inefficient_staging_buffer,
@@ -1020,8 +975,6 @@ namespace Piccolo
                                            void*                index_buffer_data,
                                            VulkanMesh&          now_mesh)
     {
-        VmaAllocator asset_allocator = getAssetAllocator(rhi.get());
-
         // temp staging buffer
         RHIDeviceSize buffer_size = index_buffer_size;
 
@@ -1038,20 +991,15 @@ namespace Piccolo
         memcpy(staging_buffer_data, index_buffer_data, (size_t)buffer_size);
         rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-        // use the vmaAllocator to allocate asset index buffer
+        // allocate asset index buffer in device local memory
         RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = buffer_size;
         bufferInfo.usage = RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-        rhi->createBufferVMA(asset_allocator,
-                             &bufferInfo,
-                             &allocInfo,
-                             now_mesh.mesh_index_buffer,
-                             &now_mesh.mesh_index_buffer_allocation,
-                             NULL);
+        rhi->createBufferWithAllocation(&bufferInfo,
+                                        RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                        now_mesh.mesh_index_buffer,
+                                        now_mesh.mesh_index_buffer_allocation);
 
         // use the data from staging buffer
         rhi->copyBuffer( inefficient_staging_buffer, now_mesh.mesh_index_buffer, 0, 0, buffer_size);

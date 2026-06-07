@@ -176,24 +176,24 @@ namespace Piccolo
 
         uint32_t mesh_vertex_count;
 
-        RHIBuffer*    mesh_vertex_position_buffer;
-        VmaAllocation mesh_vertex_position_buffer_allocation;
+        RHIBuffer*     mesh_vertex_position_buffer;
+        RHIAllocation* mesh_vertex_position_buffer_allocation;
 
-        RHIBuffer*    mesh_vertex_varying_enable_blending_buffer;
-        VmaAllocation mesh_vertex_varying_enable_blending_buffer_allocation;
+        RHIBuffer*     mesh_vertex_varying_enable_blending_buffer;
+        RHIAllocation* mesh_vertex_varying_enable_blending_buffer_allocation;
 
-        RHIBuffer*    mesh_vertex_joint_binding_buffer;
-        VmaAllocation mesh_vertex_joint_binding_buffer_allocation;
+        RHIBuffer*     mesh_vertex_joint_binding_buffer;
+        RHIAllocation* mesh_vertex_joint_binding_buffer_allocation;
 
         RHIDescriptorSet* mesh_vertex_blending_descriptor_set;
 
-        RHIBuffer*    mesh_vertex_varying_buffer;
-        VmaAllocation mesh_vertex_varying_buffer_allocation;
+        RHIBuffer*     mesh_vertex_varying_buffer;
+        RHIAllocation* mesh_vertex_varying_buffer_allocation;
 
         uint32_t mesh_index_count;
 
-        RHIBuffer*    mesh_index_buffer;
-        VmaAllocation mesh_index_buffer_allocation;
+        RHIBuffer*     mesh_index_buffer;
+        RHIAllocation* mesh_index_buffer_allocation;
     };
 
     // material
@@ -201,26 +201,26 @@ namespace Piccolo
     {
         RHIImage*       base_color_texture_image;
         RHIImageView*   base_color_image_view;
-        VmaAllocation   base_color_image_allocation;
+        RHIAllocation*  base_color_image_allocation;
 
         RHIImage*       metallic_roughness_texture_image;
         RHIImageView*   metallic_roughness_image_view;
-        VmaAllocation   metallic_roughness_image_allocation;
+        RHIAllocation*  metallic_roughness_image_allocation;
 
         RHIImage*       normal_texture_image;
         RHIImageView*   normal_image_view;
-        VmaAllocation   normal_image_allocation;
+        RHIAllocation*  normal_image_allocation;
 
         RHIImage*       occlusion_texture_image;
         RHIImageView*   occlusion_image_view;
-        VmaAllocation   occlusion_image_allocation;
+        RHIAllocation*  occlusion_image_allocation;
 
         RHIImage*       emissive_texture_image;
         RHIImageView*   emissive_image_view;
-        VmaAllocation   emissive_image_allocation;
+        RHIAllocation*  emissive_image_allocation;
 
         RHIBuffer*      material_uniform_buffer;
-        VmaAllocation   material_uniform_buffer_allocation;
+        RHIAllocation*  material_uniform_buffer_allocation;
 
         RHIDescriptorSet* material_descriptor_set;
     };

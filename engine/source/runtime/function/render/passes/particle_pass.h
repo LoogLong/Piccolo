@@ -129,11 +129,11 @@ namespace Piccolo
          */
         RHIImage*       m_particle_billboard_texture_image = nullptr;
         RHIImageView*   m_particle_billboard_texture_image_view = nullptr;
-        VmaAllocation m_particle_billboard_texture_vma_allocation;
+        RHIAllocation* m_particle_billboard_texture_allocation = nullptr;
 
         RHIImage*       m_piccolo_logo_texture_image = nullptr;
         RHIImageView*   m_piccolo_logo_texture_image_view = nullptr;
-        VmaAllocation m_piccolo_logo_texture_vma_allocation;
+        RHIAllocation* m_piccolo_logo_texture_allocation = nullptr;
 
         RHIRenderPass* m_render_pass = nullptr;
 

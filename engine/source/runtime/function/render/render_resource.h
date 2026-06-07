@@ -23,17 +23,17 @@ namespace Piccolo
         RHIImage* _brdfLUT_texture_image;
         RHIImageView* _brdfLUT_texture_image_view;
         RHISampler* _brdfLUT_texture_sampler;
-        VmaAllocation _brdfLUT_texture_image_allocation;
+        RHIAllocation* _brdfLUT_texture_image_allocation;
 
         RHIImage* _irradiance_texture_image;
         RHIImageView* _irradiance_texture_image_view;
         RHISampler* _irradiance_texture_sampler;
-        VmaAllocation _irradiance_texture_image_allocation;
+        RHIAllocation* _irradiance_texture_image_allocation;
 
         RHIImage* _specular_texture_image;
         RHIImageView* _specular_texture_image_view;
         RHISampler* _specular_texture_sampler;
-        VmaAllocation _specular_texture_image_allocation;
+        RHIAllocation* _specular_texture_image_allocation;
     };
 
     struct IBLResourceData
@@ -56,7 +56,7 @@ namespace Piccolo
     {
         RHIImage* _color_grading_LUT_texture_image;
         RHIImageView* _color_grading_LUT_texture_image_view;
-        VmaAllocation _color_grading_LUT_texture_image_allocation;
+        RHIAllocation* _color_grading_LUT_texture_image_allocation;
     };
 
     struct ColorGradingResourceData

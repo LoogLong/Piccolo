@@ -40,27 +40,24 @@ namespace Piccolo
         RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) override;
         void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) override;
         void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) override;
-        bool createBufferVMA(VmaAllocator allocator,
+        bool createBufferWithAllocation(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) override;
-        bool createBufferWithAlignmentVMA(
-            VmaAllocator allocator,
+            RHIAllocation*& pAllocation) override;
+        bool createBufferWithAlignment(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIDeviceSize minAlignment,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) override;
+            RHIAllocation*& pAllocation) override;
         void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) override;
         void createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
             RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels) override;
         void createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
             RHIImageView* &image_view) override;
-        void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) override;
-        void createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) override;
+        void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) override;
+        void createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) override;
         bool createCommandPool(const RHICommandPoolCreateInfo* pCreateInfo, RHICommandPool* &pCommandPool) override;
         bool createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateInfo, RHIDescriptorPool* &pDescriptorPool) override;
         bool createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo* pCreateInfo, RHIDescriptorSetLayout* &pSetLayout) override;
@@ -167,6 +164,7 @@ namespace Piccolo
         void freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers) override;
 
         // memory
+        void freeAllocation(RHIAllocation*& allocation) override;
         void freeMemory(RHIDeviceMemory* &memory) override;
         bool mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size, RHIMemoryMapFlags flags, void** ppData) override;
         void unmapMemory(RHIDeviceMemory* memory) override;

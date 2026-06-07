@@ -2367,29 +2367,22 @@ void D3D12RHI::createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPro
     return;
 }
 
-bool D3D12RHI::createBufferVMA(VmaAllocator allocator, const RHIBufferCreateInfo* pBufferCreateInfo, const VmaAllocationCreateInfo* pAllocationCreateInfo, RHIBuffer* &pBuffer, VmaAllocation* pAllocation, VmaAllocationInfo* pAllocationInfo)
+bool D3D12RHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation)
 {
-    (void)allocator;
-    (void)pAllocationCreateInfo;
-    (void)pAllocation;
-    (void)pAllocationInfo;
     const RHIBufferCreateInfo default_buffer_info {RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     if (pBufferCreateInfo == nullptr)
     {
         pBufferCreateInfo = &default_buffer_info;
     }
 
-    if (pAllocation)
-    {
-        *pAllocation = nullptr;
-    }
+    pAllocation = nullptr;
 
     auto* d3d_buffer = new D3D12RHIBuffer();
 #ifdef _WIN32
     const bool created = createCommittedBuffer(m_d3d12_device.Get(),
                                                pBufferCreateInfo->size,
                                                pBufferCreateInfo->usage,
-                                               RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                               memoryPropertyFlags,
                                                *d3d_buffer);
     pBuffer = d3d_buffer;
     return created;
@@ -2402,12 +2395,12 @@ bool D3D12RHI::createBufferVMA(VmaAllocator allocator, const RHIBufferCreateInfo
 #endif
 }
 
-bool D3D12RHI::createBufferWithAlignmentVMA( VmaAllocator allocator, const RHIBufferCreateInfo* pBufferCreateInfo, const VmaAllocationCreateInfo* pAllocationCreateInfo, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, VmaAllocation* pAllocation, VmaAllocationInfo* pAllocationInfo)
+bool D3D12RHI::createBufferWithAlignment(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation)
 {
     const RHIBufferCreateInfo default_buffer_info {RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     RHIBufferCreateInfo aligned_buffer_info = pBufferCreateInfo ? *pBufferCreateInfo : default_buffer_info;
     aligned_buffer_info.size = alignUp(aligned_buffer_info.size, minAlignment);
-    return createBufferVMA(allocator, &aligned_buffer_info, pAllocationCreateInfo, pBuffer, pAllocation, pAllocationInfo);
+    return createBufferWithAllocation(&aligned_buffer_info, memoryPropertyFlags, pBuffer, pAllocation);
 }
 
 void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size)
@@ -2666,9 +2659,9 @@ void D3D12RHI::createImageView(RHIImage* image, RHIFormat format, RHIImageAspect
     return;
 }
 
-void D3D12RHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
+void D3D12RHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
 {
-    (void)image_allocation;
+    image_allocation = nullptr;
     const uint32_t uploaded_mip_levels = texture_image_pixels != nullptr ? 1U : miplevels;
     RHIDeviceMemory* memory = nullptr;
     createImage(texture_image_width,
@@ -2696,9 +2689,9 @@ void D3D12RHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, Vm
     return;
 }
 
-void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
+void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
 {
-    (void)image_allocation;
+    image_allocation = nullptr;
     const uint32_t uploaded_mip_levels = 1;
     RHIDeviceMemory* memory = nullptr;
     createImage(texture_image_width,
@@ -5205,6 +5198,13 @@ void D3D12RHI::freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandB
     (void)commandPool;
     (void)commandBufferCount;
     delete static_cast<D3D12RHICommandBuffer*>(pCommandBuffers);
+    return;
+}
+
+void D3D12RHI::freeAllocation(RHIAllocation*& allocation)
+{
+    delete allocation;
+    allocation = nullptr;
     return;
 }
 

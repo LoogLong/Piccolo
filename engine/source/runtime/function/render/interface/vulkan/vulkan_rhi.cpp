@@ -2810,7 +2810,7 @@ namespace Piccolo
         ((VulkanDeviceMemory*)buffer_memory)->setResource(vk_device_memory);
     }
 
-    bool VulkanRHI::createBufferVMA(VmaAllocator allocator, const RHIBufferCreateInfo* pBufferCreateInfo, const VmaAllocationCreateInfo* pAllocationCreateInfo, RHIBuffer* & pBuffer, VmaAllocation* pAllocation, VmaAllocationInfo* pAllocationInfo)
+    bool VulkanRHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIBuffer* & pBuffer, RHIAllocation*& pAllocation)
     {
         VkBuffer vk_buffer;
         VkBufferCreateInfo buffer_create_info{};
@@ -2824,26 +2824,35 @@ namespace Piccolo
         buffer_create_info.pQueueFamilyIndices = (const uint32_t*)pBufferCreateInfo->pQueueFamilyIndices;
 
         pBuffer = new VulkanBuffer();
-        VkResult result = vmaCreateBuffer(allocator,
+        auto* allocation = new VulkanAllocation();
+        VmaAllocationCreateInfo allocation_create_info = {};
+        allocation_create_info.usage = (memoryPropertyFlags & RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ?
+            VMA_MEMORY_USAGE_CPU_TO_GPU :
+            VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VkResult result = vmaCreateBuffer(m_assets_allocator,
             &buffer_create_info,
-            pAllocationCreateInfo,
+            &allocation_create_info,
             &vk_buffer,
-            pAllocation,
-            pAllocationInfo);
+            &allocation->allocation,
+            nullptr);
 
         ((VulkanBuffer*)pBuffer)->setResource(vk_buffer);
 
         if (result == VK_SUCCESS)
         {
+            pAllocation = allocation;
             return true;
         }
         else
         {
+            delete allocation;
+            pAllocation = nullptr;
             return false;
         }
     }
 
-    bool VulkanRHI::createBufferWithAlignmentVMA(VmaAllocator allocator, const RHIBufferCreateInfo* pBufferCreateInfo, const VmaAllocationCreateInfo* pAllocationCreateInfo, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, VmaAllocation* pAllocation, VmaAllocationInfo* pAllocationInfo)
+    bool VulkanRHI::createBufferWithAlignment(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation)
     {
         VkBuffer vk_buffer;
         VkBufferCreateInfo buffer_create_info{};
@@ -2857,23 +2866,32 @@ namespace Piccolo
         buffer_create_info.pQueueFamilyIndices = (const uint32_t*)pBufferCreateInfo->pQueueFamilyIndices;
 
         pBuffer = new VulkanBuffer();
-        VkResult result = vmaCreateBufferWithAlignment(allocator,
+        auto* allocation = new VulkanAllocation();
+        VmaAllocationCreateInfo allocation_create_info = {};
+        allocation_create_info.usage = (memoryPropertyFlags & RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ?
+            VMA_MEMORY_USAGE_CPU_TO_GPU :
+            VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VkResult result = vmaCreateBufferWithAlignment(m_assets_allocator,
             &buffer_create_info,
-            pAllocationCreateInfo,
+            &allocation_create_info,
             minAlignment,
             &vk_buffer,
-            pAllocation,
-            pAllocationInfo);
+            &allocation->allocation,
+            nullptr);
 
         ((VulkanBuffer*)pBuffer)->setResource(vk_buffer);
 
         if (result == VK_SUCCESS)
         {
+            pAllocation = allocation;
             return true;
         }
         else
         {
             LOG_ERROR("vmaCreateBufferWithAlignment failed!");
+            delete allocation;
+            pAllocation = nullptr;
             return false;
         }
     }
@@ -2922,28 +2940,32 @@ namespace Piccolo
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
     }
 
-    void VulkanRHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
+    void VulkanRHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
     {
         VkImage vk_image;
         VkImageView vk_image_view;
+        auto* allocation = new VulkanAllocation();
         
-        VulkanUtil::createGlobalImage(this, vk_image, vk_image_view,image_allocation,texture_image_width,texture_image_height,texture_image_pixels,texture_image_format,miplevels);
+        VulkanUtil::createGlobalImage(this, vk_image, vk_image_view, allocation->allocation, texture_image_width, texture_image_height, texture_image_pixels, texture_image_format, miplevels);
         
         image = new VulkanImage();
         image_view = new VulkanImageView();
+        image_allocation = allocation;
         ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
     }
 
-    void VulkanRHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
+    void VulkanRHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
     {
         VkImage vk_image;
         VkImageView vk_image_view;
+        auto* allocation = new VulkanAllocation();
 
-        VulkanUtil::createCubeMap(this, vk_image, vk_image_view, image_allocation, texture_image_width, texture_image_height, texture_image_pixels, texture_image_format, miplevels);
+        VulkanUtil::createCubeMap(this, vk_image, vk_image_view, allocation->allocation, texture_image_width, texture_image_height, texture_image_pixels, texture_image_format, miplevels);
 
         image = new VulkanImage();
         image_view = new VulkanImageView();
+        image_allocation = allocation;
         ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
     }
@@ -3217,6 +3239,17 @@ namespace Piccolo
     {
         VkCommandBuffer vk_command_buffer = ((VulkanCommandBuffer*)pCommandBuffers)->getResource();
         vkFreeCommandBuffers(m_device, ((VulkanCommandPool*)commandPool)->getResource(), commandBufferCount, &vk_command_buffer);
+    }
+
+    void VulkanRHI::freeAllocation(RHIAllocation*& allocation)
+    {
+        auto* vulkan_allocation = static_cast<VulkanAllocation*>(allocation);
+        if (vulkan_allocation != nullptr && vulkan_allocation->allocation != nullptr)
+        {
+            vmaFreeMemory(m_assets_allocator, vulkan_allocation->allocation);
+        }
+        delete vulkan_allocation;
+        allocation = nullptr;
     }
 
     void VulkanRHI::freeMemory(RHIDeviceMemory* &memory)

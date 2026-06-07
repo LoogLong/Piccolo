@@ -5,14 +5,8 @@
 #include <memory>
 #include <vector>
 
+#include "rhi_allocation.h"
 #include "rhi_struct.h"
-
-struct VmaAllocator_T;
-typedef VmaAllocator_T* VmaAllocator;
-struct VmaAllocation_T;
-typedef VmaAllocation_T* VmaAllocation;
-struct VmaAllocationCreateInfo;
-struct VmaAllocationInfo;
 
 namespace Piccolo
 {
@@ -53,27 +47,24 @@ namespace Piccolo
         virtual RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) = 0;
         virtual void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) = 0;
         virtual void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) = 0;
-        virtual bool createBufferVMA(VmaAllocator allocator,
+        virtual bool createBufferWithAllocation(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) = 0;
-        virtual bool createBufferWithAlignmentVMA(
-            VmaAllocator allocator,
+            RHIAllocation*& pAllocation) = 0;
+        virtual bool createBufferWithAlignment(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIDeviceSize minAlignment,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) = 0;
+            RHIAllocation*& pAllocation) = 0;
         virtual void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) = 0;
         virtual void createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
             RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels) = 0;
         virtual void createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
             RHIImageView* &image_view) = 0;
-        virtual void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) = 0;
-        virtual void createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) = 0;
+        virtual void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) = 0;
+        virtual void createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) = 0;
         virtual void createCommandPool() = 0;
         virtual bool createCommandPool(const RHICommandPoolCreateInfo* pCreateInfo, RHICommandPool*& pCommandPool) = 0;
         virtual bool createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateInfo, RHIDescriptorPool* &pDescriptorPool) = 0;
@@ -179,6 +170,7 @@ namespace Piccolo
         virtual void freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers) = 0;
 
         // memory
+        virtual void freeAllocation(RHIAllocation*& allocation) = 0;
         virtual void freeMemory(RHIDeviceMemory* &memory) = 0;
         virtual bool mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size, RHIMemoryMapFlags flags, void** ppData) = 0;
         virtual void unmapMemory(RHIDeviceMemory* memory) = 0;

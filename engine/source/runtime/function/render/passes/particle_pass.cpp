@@ -343,7 +343,7 @@ namespace Piccolo
                 m_particle_manager->getGlobalParticleRes().m_particle_billboard_texture_path);
             m_rhi->createGlobalImage(m_particle_billboard_texture_image,
                                      m_particle_billboard_texture_image_view,
-                                     m_particle_billboard_texture_vma_allocation,
+                                     m_particle_billboard_texture_allocation,
                                      m_particle_billboard_texture_resource->m_width,
                                      m_particle_billboard_texture_resource->m_height,
                                      m_particle_billboard_texture_resource->m_pixels,
@@ -356,7 +356,7 @@ namespace Piccolo
                 m_particle_manager->getGlobalParticleRes().m_piccolo_logo_texture_path, true);
             m_rhi->createGlobalImage(m_piccolo_logo_texture_image,
                                      m_piccolo_logo_texture_image_view,
-                                     m_piccolo_logo_texture_vma_allocation,
+                                     m_piccolo_logo_texture_allocation,
                                      m_piccolo_logo_texture_resource->m_width,
                                      m_piccolo_logo_texture_resource->m_height,
                                      m_piccolo_logo_texture_resource->m_pixels,
