@@ -20,6 +20,7 @@ namespace Piccolo
         RHIBuffer* m_position_host_buffer = nullptr;
         RHIBuffer* m_counter_device_buffer = nullptr;
         RHIBuffer* m_counter_host_buffer = nullptr;
+        RHIBuffer* m_counter_readback_buffer = nullptr;
         RHIBuffer* m_indirect_dispatch_argument_buffer = nullptr;
         RHIBuffer* m_alive_list_buffer = nullptr;
         RHIBuffer* m_alive_list_next_buffer = nullptr;
@@ -27,6 +28,7 @@ namespace Piccolo
         RHIBuffer* m_particle_component_res_buffer = nullptr;
 
         RHIDeviceMemory* m_counter_host_memory = nullptr;
+        RHIDeviceMemory* m_counter_readback_memory = nullptr;
         RHIDeviceMemory* m_position_host_memory = nullptr;
         RHIDeviceMemory* m_position_device_memory = nullptr;
         RHIDeviceMemory* m_counter_device_memory = nullptr;

@@ -1873,12 +1873,12 @@ namespace Piccolo
 
         for (auto& command_buffer : m_dummy_command_buffers)
         {
-            delete command_buffer;
+            delete static_cast<D3D12RHICommandBuffer*>(command_buffer);
             command_buffer = nullptr;
         }
         for (auto& fence : m_dummy_fences)
         {
-            delete fence;
+            delete static_cast<D3D12RHIFence*>(fence);
             fence = nullptr;
         }
 
@@ -1934,10 +1934,7 @@ bool D3D12RHI::isPointLightShadowEnabled()
 bool D3D12RHI::allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers)
 {
     (void)pAllocateInfo;
-    if (pCommandBuffers == nullptr)
-    {
-        pCommandBuffers = new D3D12RHICommandBuffer();
-    }
+    pCommandBuffers = new D3D12RHICommandBuffer();
     return true;
 }
 
@@ -2911,10 +2908,7 @@ bool D3D12RHI::createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo*
 bool D3D12RHI::createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence* &pFence)
 {
     (void)pCreateInfo;
-    if (pFence == nullptr)
-    {
-        pFence = new D3D12RHIFence();
-    }
+    pFence = new D3D12RHIFence();
     return true;
 }
 
@@ -3478,7 +3472,6 @@ bool D3D12RHI::createSampler(const RHISamplerCreateInfo* pCreateInfo, RHISampler
 #ifdef _WIN32
     fillSamplerDesc(*pCreateInfo, sampler->desc);
 #endif
-    delete pSampler;
     pSampler = sampler;
     return true;
 }
@@ -3486,10 +3479,7 @@ bool D3D12RHI::createSampler(const RHISamplerCreateInfo* pCreateInfo, RHISampler
 bool D3D12RHI::createSemaphore(const RHISemaphoreCreateInfo* pCreateInfo, RHISemaphore* &pSemaphore)
 {
     (void)pCreateInfo;
-    if (pSemaphore == nullptr)
-    {
-        pSemaphore = new D3D12RHISemaphore();
-    }
+    pSemaphore = new D3D12RHISemaphore();
     return true;
 }
 
@@ -5004,7 +4994,7 @@ void D3D12RHI::endSingleTimeCommands(RHICommandBuffer* command_buffer)
         }
     }
 #endif
-    delete command_buffer;
+    delete d3d_command_buffer;
     return;
 }
 
@@ -5170,13 +5160,13 @@ void D3D12RHI::destroyFence(RHIFence* fence)
     {
         if (dummy_fence == fence)
         {
-            delete dummy_fence;
+            delete static_cast<D3D12RHIFence*>(dummy_fence);
             dummy_fence = nullptr;
             return;
         }
     }
 
-    delete fence;
+    delete static_cast<D3D12RHIFence*>(fence);
     return;
 }
 
@@ -5214,7 +5204,7 @@ void D3D12RHI::freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandB
 {
     (void)commandPool;
     (void)commandBufferCount;
-    delete pCommandBuffers;
+    delete static_cast<D3D12RHICommandBuffer*>(pCommandBuffers);
     return;
 }
 

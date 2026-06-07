@@ -22,6 +22,7 @@ namespace Piccolo
     void ParticleEmitterBufferBatch::freeUpBatch(std::shared_ptr<RHI> rhi)
     {
         rhi->freeMemory(m_counter_host_memory);
+        rhi->freeMemory(m_counter_readback_memory);
         rhi->freeMemory(m_position_host_memory);
         rhi->freeMemory(m_position_device_memory);
         rhi->freeMemory(m_counter_device_memory);
@@ -37,6 +38,7 @@ namespace Piccolo
         rhi->destroyBuffer(m_position_host_buffer);
         rhi->destroyBuffer(m_counter_device_buffer);
         rhi->destroyBuffer(m_counter_host_buffer);
+        rhi->destroyBuffer(m_counter_readback_buffer);
         rhi->destroyBuffer(m_indirect_dispatch_argument_buffer);
         rhi->destroyBuffer(m_alive_list_buffer);
         rhi->destroyBuffer(m_alive_list_next_buffer);
@@ -451,7 +453,7 @@ namespace Piccolo
             particlebillboard_descriptor_writes_info[1].pBufferInfo =
                 &particlebillboard_perdrawcall_storage_buffer_info;
 
-            RHISampler*          sampler;
+            RHISampler*          sampler = nullptr;
             RHISamplerCreateInfo samplerCreateInfo {};
             samplerCreateInfo.sType            = RHI_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
             samplerCreateInfo.maxAnisotropy    = 1.0f;
@@ -592,6 +594,11 @@ namespace Piccolo
                                              m_emitter_buffer_batches[id].m_counter_device_buffer,
                                              m_emitter_buffer_batches[id].m_counter_device_memory,
                                              counterBufferSize);
+            m_rhi->createBuffer(counterBufferSize,
+                                RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                m_emitter_buffer_batches[id].m_counter_readback_buffer,
+                                m_emitter_buffer_batches[id].m_counter_readback_memory);
 
             // Copy to staging buffer
             RHICommandBufferAllocateInfo cmdBufAllocateInfo {};
@@ -599,7 +606,7 @@ namespace Piccolo
             cmdBufAllocateInfo.commandPool        = m_rhi->getCommandPoor();
             cmdBufAllocateInfo.level              = RHI_COMMAND_BUFFER_LEVEL_PRIMARY;
             cmdBufAllocateInfo.commandBufferCount = 1;
-            RHICommandBuffer* copyCmd;
+            RHICommandBuffer* copyCmd = nullptr;
             if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, copyCmd))
             {
                 throw std::runtime_error("alloc command buffer");
@@ -713,7 +720,7 @@ namespace Piccolo
             cmdBufAllocateInfo.commandPool        = m_rhi->getCommandPoor();
             cmdBufAllocateInfo.level              = RHI_COMMAND_BUFFER_LEVEL_PRIMARY;
             cmdBufAllocateInfo.commandBufferCount = 1;
-            RHICommandBuffer* copyCmd;
+            RHICommandBuffer* copyCmd = nullptr;
             if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, copyCmd))
             {
                 throw std::runtime_error("alloc command buffer");
@@ -1353,7 +1360,7 @@ namespace Piccolo
                     descriptorset.descriptorCount        = 1;
                 }
 
-                RHISampler*          sampler;
+                RHISampler*          sampler = nullptr;
                 RHISamplerCreateInfo samplerCreateInfo {};
                 samplerCreateInfo.sType            = RHI_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
                 samplerCreateInfo.maxAnisotropy    = 1.0f;
@@ -1420,7 +1427,7 @@ namespace Piccolo
                         &gbuffer_normal_descriptor_image_info;
                 }
 
-                RHISampler*          sampler;
+                RHISampler*          sampler = nullptr;
                 RHISamplerCreateInfo samplerCreateInfo {};
                 samplerCreateInfo.sType            = RHI_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
                 samplerCreateInfo.maxAnisotropy    = 1.0f;
@@ -1725,14 +1732,14 @@ namespace Piccolo
 
             m_rhi->cmdCopyBuffer(m_compute_command_buffer,
                                  m_emitter_buffer_batches[i].m_counter_device_buffer,
-                                 m_emitter_buffer_batches[i].m_counter_host_buffer,
+                                 m_emitter_buffer_batches[i].m_counter_readback_buffer,
                                  1,
                                  &copyRegion);
 
             // Barrier to ensure that buffer copy is finished before host reading from it
             bufferBarrier.srcAccessMask       = RHI_ACCESS_TRANSFER_WRITE_BIT;
             bufferBarrier.dstAccessMask       = RHI_ACCESS_HOST_READ_BIT;
-            bufferBarrier.buffer              = m_emitter_buffer_batches[i].m_counter_host_buffer;
+            bufferBarrier.buffer              = m_emitter_buffer_batches[i].m_counter_readback_buffer;
             bufferBarrier.size                = RHI_WHOLE_SIZE;
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
@@ -1780,15 +1787,15 @@ namespace Piccolo
 
             // Make device writes visible to the host
             void* mapped;
-            m_rhi->mapMemory(m_emitter_buffer_batches[i].m_counter_host_memory, 0, RHI_WHOLE_SIZE, 0, &mapped);
+            m_rhi->mapMemory(m_emitter_buffer_batches[i].m_counter_readback_memory, 0, RHI_WHOLE_SIZE, 0, &mapped);
 
             m_rhi->invalidateMappedMemoryRanges(
-                nullptr, m_emitter_buffer_batches[i].m_counter_host_memory, 0, RHI_WHOLE_SIZE);
+                nullptr, m_emitter_buffer_batches[i].m_counter_readback_memory, 0, RHI_WHOLE_SIZE);
 
             // Copy to output
             ParticleCounter counterNext {};
             memcpy(&counterNext, mapped, sizeof(ParticleCounter));
-            m_rhi->unmapMemory(m_emitter_buffer_batches[i].m_counter_host_memory);
+            m_rhi->unmapMemory(m_emitter_buffer_batches[i].m_counter_readback_memory);
 
             if constexpr (s_verbose_particle_alive_info)
                 LOG_INFO("{} {} {} {}",
