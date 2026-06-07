@@ -158,6 +158,9 @@ namespace Piccolo
             RHIPipeline*                      bound_graphics_pipeline {nullptr};
             RHIRenderPass*                    active_render_pass {nullptr};
             RHIFramebuffer*                   active_framebuffer {nullptr};
+            RHIRenderPassBeginInfo            active_render_pass_begin_info {};
+            std::vector<RHIClearValue>        active_clear_values;
+            std::vector<bool>                 attachment_load_ops_applied;
             uint32_t                          active_subpass_index {0};
             uint32_t                          transient_cbv_srv_uav_descriptor_next {0};
 #endif
@@ -381,6 +384,9 @@ namespace Piccolo
                 std::vector<uint32_t> input_attachment_indices;
                 std::vector<RHIImageLayout> input_attachment_layouts;
                 std::vector<uint32_t> color_attachment_indices;
+                std::vector<RHIImageLayout> color_attachment_layouts;
+                std::vector<uint32_t> resolve_attachment_indices;
+                std::vector<RHIImageLayout> resolve_attachment_layouts;
                 uint32_t depth_attachment_index {(std::numeric_limits<uint32_t>::max)()};
                 RHIImageLayout depth_attachment_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
             };
@@ -1055,13 +1061,18 @@ namespace Piccolo
         {
             switch (layout)
             {
+                case RHI_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR:
                 case RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
                     return D3D12_RESOURCE_STATE_RENDER_TARGET;
+                case RHI_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+                case RHI_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
+                case RHI_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
                 case RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
                     return D3D12_RESOURCE_STATE_DEPTH_WRITE;
                 case RHI_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
                 case RHI_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
                 case RHI_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+                case RHI_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
                     return D3D12_RESOURCE_STATE_DEPTH_READ |
                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -1598,6 +1609,144 @@ namespace Piccolo
             barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             command_list->ResourceBarrier(1, &barrier);
             current_state = target_state;
+        }
+
+        bool isValidAttachmentIndex(uint32_t attachment_index)
+        {
+            return attachment_index != RHI_SUBPASS_EXTERNAL;
+        }
+
+        D3D12_RESOURCE_STATES subpassAttachmentState(const D3D12RHIImageView* view, RHIImageLayout layout)
+        {
+            if (view != nullptr && view->has_dsv && isDepthReadOnlyLayout(layout))
+            {
+                return D3D12_RESOURCE_STATE_DEPTH_READ |
+                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            }
+            return toD3D12ResourceState(layout);
+        }
+
+        D3D12RHIImageView* framebufferAttachment(D3D12RHIFramebuffer* framebuffer,
+                                                 uint32_t attachment_index)
+        {
+            if (framebuffer == nullptr ||
+                !isValidAttachmentIndex(attachment_index) ||
+                attachment_index >= framebuffer->attachments.size())
+            {
+                return nullptr;
+            }
+            return framebuffer->attachments[attachment_index];
+        }
+
+        void transitionImageView(ID3D12GraphicsCommandList* command_list,
+                                 D3D12RHIImageView* view,
+                                 D3D12_RESOURCE_STATES target_state)
+        {
+            if (view == nullptr || view->image == nullptr || view->image->resource == nullptr)
+            {
+                return;
+            }
+            transitionResource(command_list,
+                               view->image->resource.Get(),
+                               view->image->current_state,
+                               target_state);
+        }
+
+        void finishD3D12Subpass(ID3D12GraphicsCommandList* command_list,
+                                D3D12RHIRenderPass* render_pass,
+                                D3D12RHIFramebuffer* framebuffer,
+                                uint32_t subpass_index)
+        {
+            if (command_list == nullptr ||
+                render_pass == nullptr ||
+                framebuffer == nullptr ||
+                subpass_index >= render_pass->subpasses.size())
+            {
+                return;
+            }
+
+            const D3D12RHIRenderPass::SubpassInfo& subpass = render_pass->subpasses[subpass_index];
+            for (uint32_t color_slot = 0; color_slot < subpass.resolve_attachment_indices.size(); ++color_slot)
+            {
+                if (color_slot >= subpass.color_attachment_indices.size())
+                {
+                    continue;
+                }
+
+                const uint32_t source_attachment_index  = subpass.color_attachment_indices[color_slot];
+                const uint32_t resolve_attachment_index = subpass.resolve_attachment_indices[color_slot];
+                if (!isValidAttachmentIndex(source_attachment_index) ||
+                    !isValidAttachmentIndex(resolve_attachment_index) ||
+                    source_attachment_index >= render_pass->attachments.size() ||
+                    resolve_attachment_index >= render_pass->attachments.size())
+                {
+                    continue;
+                }
+
+                D3D12RHIImageView* source_view  = framebufferAttachment(framebuffer, source_attachment_index);
+                D3D12RHIImageView* resolve_view = framebufferAttachment(framebuffer, resolve_attachment_index);
+                if (source_view == nullptr ||
+                    resolve_view == nullptr ||
+                    source_view->image == nullptr ||
+                    resolve_view->image == nullptr ||
+                    source_view->image->resource == nullptr ||
+                    resolve_view->image->resource == nullptr ||
+                    source_view->image->resource.Get() == resolve_view->image->resource.Get())
+                {
+                    continue;
+                }
+
+                DXGI_FORMAT resolve_format = toDXGIFormat(render_pass->attachments[resolve_attachment_index].format);
+                if (resolve_format == DXGI_FORMAT_UNKNOWN)
+                {
+                    resolve_format = resolve_view->dxgi_format != DXGI_FORMAT_UNKNOWN ?
+                                         resolve_view->dxgi_format :
+                                         source_view->dxgi_format;
+                }
+                if (resolve_format == DXGI_FORMAT_UNKNOWN)
+                {
+                    continue;
+                }
+
+                const D3D12_RESOURCE_DESC source_desc  = source_view->image->resource->GetDesc();
+                const D3D12_RESOURCE_DESC resolve_desc = resolve_view->image->resource->GetDesc();
+                if (source_desc.SampleDesc.Count > 1 && resolve_desc.SampleDesc.Count == 1)
+                {
+                    transitionImageView(command_list, source_view, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+                    transitionImageView(command_list, resolve_view, D3D12_RESOURCE_STATE_RESOLVE_DEST);
+                    command_list->ResolveSubresource(resolve_view->image->resource.Get(),
+                                                     0,
+                                                     source_view->image->resource.Get(),
+                                                     0,
+                                                     resolve_format);
+                }
+                else if (source_desc.SampleDesc.Count == resolve_desc.SampleDesc.Count)
+                {
+                    transitionImageView(command_list, source_view, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                    transitionImageView(command_list, resolve_view, D3D12_RESOURCE_STATE_COPY_DEST);
+
+                    D3D12_TEXTURE_COPY_LOCATION source_location {};
+                    source_location.pResource        = source_view->image->resource.Get();
+                    source_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                    source_location.SubresourceIndex = d3d12SubresourceIndex(*source_view->image, 0, 0);
+
+                    D3D12_TEXTURE_COPY_LOCATION resolve_location {};
+                    resolve_location.pResource        = resolve_view->image->resource.Get();
+                    resolve_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                    resolve_location.SubresourceIndex = d3d12SubresourceIndex(*resolve_view->image, 0, 0);
+
+                    command_list->CopyTextureRegion(&resolve_location, 0, 0, 0, &source_location, nullptr);
+                }
+
+                const RHIImageLayout resolve_layout =
+                    color_slot < subpass.resolve_attachment_layouts.size() ?
+                        subpass.resolve_attachment_layouts[color_slot] :
+                        render_pass->attachments[resolve_attachment_index].finalLayout;
+                transitionImageView(command_list,
+                                    resolve_view,
+                                    subpassAttachmentState(resolve_view, resolve_layout));
+            }
         }
 
         bool recordHostDataUpload(ID3D12Device* device,
@@ -3809,9 +3958,21 @@ bool D3D12RHI::createRenderPass(const RHIRenderPassCreateInfo* pCreateInfo, RHIR
             if (subpass.pColorAttachments != nullptr)
             {
                 subpass_info.color_attachment_indices.reserve(subpass.colorAttachmentCount);
+                subpass_info.color_attachment_layouts.reserve(subpass.colorAttachmentCount);
                 for (uint32_t i = 0; i < subpass.colorAttachmentCount; ++i)
                 {
                     subpass_info.color_attachment_indices.push_back(subpass.pColorAttachments[i].attachment);
+                    subpass_info.color_attachment_layouts.push_back(subpass.pColorAttachments[i].layout);
+                }
+            }
+            if (subpass.pResolveAttachments != nullptr)
+            {
+                subpass_info.resolve_attachment_indices.reserve(subpass.colorAttachmentCount);
+                subpass_info.resolve_attachment_layouts.reserve(subpass.colorAttachmentCount);
+                for (uint32_t i = 0; i < subpass.colorAttachmentCount; ++i)
+                {
+                    subpass_info.resolve_attachment_indices.push_back(subpass.pResolveAttachments[i].attachment);
+                    subpass_info.resolve_attachment_layouts.push_back(subpass.pResolveAttachments[i].layout);
                 }
             }
             if (subpass.pDepthStencilAttachment != nullptr)
@@ -3837,6 +3998,7 @@ bool D3D12RHI::createRenderPass(const RHIRenderPassCreateInfo* pCreateInfo, RHIR
             else
             {
                 subpass_info.color_attachment_indices.push_back(attachment_index);
+                subpass_info.color_attachment_layouts.push_back(RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             }
         }
         render_pass->subpasses.push_back(subpass_info);
@@ -4074,6 +4236,9 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
     d3d_command_buffer->bound_graphics_pipeline = nullptr;
     d3d_command_buffer->active_render_pass = nullptr;
     d3d_command_buffer->active_framebuffer = nullptr;
+    d3d_command_buffer->active_render_pass_begin_info = {};
+    d3d_command_buffer->active_clear_values.clear();
+    d3d_command_buffer->attachment_load_ops_applied.clear();
     d3d_command_buffer->active_subpass_index = 0;
     d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
     return true;
@@ -4122,10 +4287,39 @@ void D3D12RHI::cmdBeginRenderPassPFN(RHICommandBuffer* commandBuffer, const RHIR
         return;
     }
 
-    d3d_command_buffer->active_render_pass      = pRenderPassBegin != nullptr ? pRenderPassBegin->renderPass : nullptr;
-    d3d_command_buffer->active_framebuffer      = pRenderPassBegin != nullptr ? pRenderPassBegin->framebuffer : nullptr;
+    if (pRenderPassBegin == nullptr)
+    {
+        return;
+    }
+
+    d3d_command_buffer->active_render_pass      = pRenderPassBegin->renderPass;
+    d3d_command_buffer->active_framebuffer      = pRenderPassBegin->framebuffer;
+    d3d_command_buffer->active_render_pass_begin_info = *pRenderPassBegin;
+    d3d_command_buffer->active_clear_values.clear();
+    if (pRenderPassBegin->pClearValues != nullptr && pRenderPassBegin->clearValueCount > 0)
+    {
+        d3d_command_buffer->active_clear_values.assign(pRenderPassBegin->pClearValues,
+                                                       pRenderPassBegin->pClearValues + pRenderPassBegin->clearValueCount);
+        d3d_command_buffer->active_render_pass_begin_info.pClearValues =
+            d3d_command_buffer->active_clear_values.data();
+    }
+    else
+    {
+        d3d_command_buffer->active_render_pass_begin_info.clearValueCount = 0;
+        d3d_command_buffer->active_render_pass_begin_info.pClearValues    = nullptr;
+    }
+
+    auto* render_pass = static_cast<D3D12RHIRenderPass*>(d3d_command_buffer->active_render_pass);
+    d3d_command_buffer->attachment_load_ops_applied.assign(render_pass != nullptr ?
+                                                               render_pass->attachments.size() :
+                                                               0,
+                                                           false);
     d3d_command_buffer->active_subpass_index    = 0;
-    bindFramebufferForSubpass(command_list, pRenderPassBegin, d3d_command_buffer->active_subpass_index, true);
+    bindFramebufferForSubpass(commandBuffer,
+                              command_list,
+                              &d3d_command_buffer->active_render_pass_begin_info,
+                              d3d_command_buffer->active_subpass_index,
+                              true);
     d3d_command_buffer->in_render_pass = true;
 #else
     (void)commandBuffer;
@@ -4144,13 +4338,24 @@ void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassCont
         return;
     }
 
+    auto* render_pass = static_cast<D3D12RHIRenderPass*>(d3d_command_buffer->active_render_pass);
+    auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(d3d_command_buffer->active_framebuffer);
+    finishD3D12Subpass(command_list,
+                       render_pass,
+                       framebuffer,
+                       d3d_command_buffer->active_subpass_index);
+
     ++d3d_command_buffer->active_subpass_index;
-    RHIRenderPassBeginInfo render_pass_begin_info {};
-    render_pass_begin_info.renderPass  = d3d_command_buffer->active_render_pass;
-    render_pass_begin_info.framebuffer = d3d_command_buffer->active_framebuffer;
-    render_pass_begin_info.renderArea.offset = m_swapchain_scissor.offset;
-    render_pass_begin_info.renderArea.extent = m_swapchain_scissor.extent;
-    bindFramebufferForSubpass(command_list, &render_pass_begin_info, d3d_command_buffer->active_subpass_index, false);
+    if (render_pass == nullptr || d3d_command_buffer->active_subpass_index >= render_pass->subpasses.size())
+    {
+        return;
+    }
+
+    bindFramebufferForSubpass(commandBuffer,
+                              command_list,
+                              &d3d_command_buffer->active_render_pass_begin_info,
+                              d3d_command_buffer->active_subpass_index,
+                              true);
 #else
     (void)commandBuffer;
 #endif
@@ -4170,6 +4375,11 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
     auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(d3d_command_buffer->active_framebuffer);
     if (render_pass != nullptr && framebuffer != nullptr)
     {
+        finishD3D12Subpass(command_list,
+                           render_pass,
+                           framebuffer,
+                           d3d_command_buffer->active_subpass_index);
+
         for (uint32_t attachment_index = 0; attachment_index < framebuffer->attachments.size(); ++attachment_index)
         {
             if (attachment_index >= render_pass->attachments.size())
@@ -4211,6 +4421,9 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
     d3d_command_buffer->in_render_pass = false;
     d3d_command_buffer->active_render_pass = nullptr;
     d3d_command_buffer->active_framebuffer = nullptr;
+    d3d_command_buffer->active_render_pass_begin_info = {};
+    d3d_command_buffer->active_clear_values.clear();
+    d3d_command_buffer->attachment_load_ops_applied.clear();
     d3d_command_buffer->active_subpass_index = 0;
 #else
     (void)commandBuffer;
@@ -6675,17 +6888,23 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             });
     }
 
-    void D3D12RHI::bindFramebufferForSubpass(ID3D12GraphicsCommandList* command_list,
+    void D3D12RHI::bindFramebufferForSubpass(RHICommandBuffer* command_buffer,
+                                             ID3D12GraphicsCommandList* command_list,
                                              const RHIRenderPassBeginInfo* pRenderPassBegin,
                                              uint32_t subpass_index,
-                                             bool clear_attachments)
+                                             bool apply_load_ops)
     {
+        auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(command_buffer);
         auto* render_pass = static_cast<D3D12RHIRenderPass*>(pRenderPassBegin != nullptr ?
                                                                  pRenderPassBegin->renderPass :
-                                                                 m_active_render_pass);
+                                                                 (d3d_command_buffer != nullptr ?
+                                                                      d3d_command_buffer->active_render_pass :
+                                                                      m_active_render_pass));
         auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(pRenderPassBegin != nullptr ?
                                                                   pRenderPassBegin->framebuffer :
-                                                                  m_active_framebuffer);
+                                                                  (d3d_command_buffer != nullptr ?
+                                                                       d3d_command_buffer->active_framebuffer :
+                                                                       m_active_framebuffer));
         if (command_list == nullptr ||
             render_pass == nullptr ||
             framebuffer == nullptr ||
@@ -6698,7 +6917,8 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         for (uint32_t input_index = 0; input_index < subpass.input_attachment_indices.size(); ++input_index)
         {
             const uint32_t attachment_index = subpass.input_attachment_indices[input_index];
-            if (attachment_index >= framebuffer->attachments.size() ||
+            if (!isValidAttachmentIndex(attachment_index) ||
+                attachment_index >= framebuffer->attachments.size() ||
                 attachment_index >= render_pass->attachments.size())
             {
                 continue;
@@ -6710,13 +6930,11 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                 continue;
             }
 
-            const D3D12_RESOURCE_STATES shader_read_state =
-                view->has_dsv ?
-                    (D3D12_RESOURCE_STATE_DEPTH_READ |
-                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) :
-                    (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            const RHIImageLayout input_layout =
+                input_index < subpass.input_attachment_layouts.size() ?
+                    subpass.input_attachment_layouts[input_index] :
+                    RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            const D3D12_RESOURCE_STATES shader_read_state = subpassAttachmentState(view, input_layout);
             transitionResource(command_list,
                                view->image->resource.Get(),
                                view->image->current_state,
@@ -6726,9 +6944,11 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv_handles;
         rtv_handles.reserve(subpass.color_attachment_indices.size());
 
-        for (uint32_t attachment_index : subpass.color_attachment_indices)
+        for (uint32_t color_slot = 0; color_slot < subpass.color_attachment_indices.size(); ++color_slot)
         {
-            if (attachment_index >= framebuffer->attachments.size() ||
+            const uint32_t attachment_index = subpass.color_attachment_indices[color_slot];
+            if (!isValidAttachmentIndex(attachment_index) ||
+                attachment_index >= framebuffer->attachments.size() ||
                 attachment_index >= render_pass->attachments.size())
             {
                 continue;
@@ -6742,10 +6962,14 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
             if (view->image != nullptr && view->image->resource != nullptr)
             {
+                const RHIImageLayout color_layout =
+                    color_slot < subpass.color_attachment_layouts.size() ?
+                        subpass.color_attachment_layouts[color_slot] :
+                        RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 transitionResource(command_list,
                                    view->image->resource.Get(),
                                    view->image->current_state,
-                                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+                                   subpassAttachmentState(view, color_layout));
             }
             else
             {
@@ -6769,6 +6993,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
         D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle {};
         const bool has_depth_attachment =
+            isValidAttachmentIndex(subpass.depth_attachment_index) &&
             subpass.depth_attachment_index < framebuffer->attachments.size() &&
             subpass.depth_attachment_index < render_pass->attachments.size();
         if (has_depth_attachment)
@@ -6831,10 +7056,9 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         command_list->RSSetViewports(1, &d3d_viewport);
         command_list->RSSetScissorRects(1, &d3d_scissor);
 
-        if (!clear_attachments ||
+        if (!apply_load_ops ||
             pRenderPassBegin == nullptr ||
-            pRenderPassBegin->pClearValues == nullptr ||
-            pRenderPassBegin->clearValueCount == 0)
+            d3d_command_buffer == nullptr)
         {
             return;
         }
@@ -6842,10 +7066,29 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         for (uint32_t color_slot = 0; color_slot < subpass.color_attachment_indices.size(); ++color_slot)
         {
             const uint32_t attachment_index = subpass.color_attachment_indices[color_slot];
-            if (attachment_index >= pRenderPassBegin->clearValueCount ||
+            if (!isValidAttachmentIndex(attachment_index) ||
                 attachment_index >= render_pass->attachments.size() ||
-                color_slot >= rtv_handles.size() ||
+                attachment_index >= framebuffer->attachments.size() ||
+                (attachment_index < d3d_command_buffer->attachment_load_ops_applied.size() &&
+                 d3d_command_buffer->attachment_load_ops_applied[attachment_index]))
+            {
+                continue;
+            }
+
+            if (attachment_index < d3d_command_buffer->attachment_load_ops_applied.size())
+            {
+                d3d_command_buffer->attachment_load_ops_applied[attachment_index] = true;
+            }
+
+            if (attachment_index >= pRenderPassBegin->clearValueCount ||
+                pRenderPassBegin->pClearValues == nullptr ||
                 render_pass->attachments[attachment_index].loadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR)
+            {
+                continue;
+            }
+
+            auto* view = framebuffer->attachments[attachment_index];
+            if (view == nullptr || !view->has_rtv || view->cpu_descriptor.ptr == 0)
             {
                 continue;
             }
@@ -6855,15 +7098,28 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                                     clear_color.float32[1],
                                     clear_color.float32[2],
                                     clear_color.float32[3]};
-            command_list->ClearRenderTargetView(rtv_handles[color_slot], color, 0, nullptr);
+            command_list->ClearRenderTargetView(view->cpu_descriptor, color, 0, nullptr);
         }
 
+        const bool depth_load_op_already_applied =
+            has_depth_attachment &&
+            subpass.depth_attachment_index < d3d_command_buffer->attachment_load_ops_applied.size() &&
+            d3d_command_buffer->attachment_load_ops_applied[subpass.depth_attachment_index];
         if (has_depth_attachment &&
             dsv_handle.ptr != 0 &&
-            subpass.depth_attachment_index < pRenderPassBegin->clearValueCount &&
-            (render_pass->attachments[subpass.depth_attachment_index].loadOp == RHI_ATTACHMENT_LOAD_OP_CLEAR ||
-             render_pass->attachments[subpass.depth_attachment_index].stencilLoadOp == RHI_ATTACHMENT_LOAD_OP_CLEAR))
+            !depth_load_op_already_applied)
         {
+            if (subpass.depth_attachment_index < d3d_command_buffer->attachment_load_ops_applied.size())
+            {
+                d3d_command_buffer->attachment_load_ops_applied[subpass.depth_attachment_index] = true;
+            }
+            if (subpass.depth_attachment_index >= pRenderPassBegin->clearValueCount ||
+                pRenderPassBegin->pClearValues == nullptr ||
+                (render_pass->attachments[subpass.depth_attachment_index].loadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR &&
+                 render_pass->attachments[subpass.depth_attachment_index].stencilLoadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR))
+            {
+                return;
+            }
             const auto& depth_attachment = render_pass->attachments[subpass.depth_attachment_index];
             const auto& depth_stencil = pRenderPassBegin->pClearValues[subpass.depth_attachment_index].depthStencil;
             D3D12_CLEAR_FLAGS clear_flags = static_cast<D3D12_CLEAR_FLAGS>(0);

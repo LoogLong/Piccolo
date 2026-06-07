@@ -157,7 +157,7 @@ namespace Piccolo
         ID3D12GraphicsCommandList* d3d12CommandListFor(RHICommandBuffer* commandBuffer) const;
         bool executeImmediateCommands(const std::function<void(ID3D12GraphicsCommandList*)>& record_commands);
         bool uploadTexture2D(RHIImage* image, const void* texture_pixels, uint32_t layer_count);
-        void bindFramebufferForSubpass(ID3D12GraphicsCommandList* command_list, const RHIRenderPassBeginInfo* pRenderPassBegin, uint32_t subpass_index, bool clear_attachments);
+        void bindFramebufferForSubpass(RHICommandBuffer* command_buffer, ID3D12GraphicsCommandList* command_list, const RHIRenderPassBeginInfo* pRenderPassBegin, uint32_t subpass_index, bool apply_load_ops);
         void resolvePendingTextureReadbacks();
         bool ensureDispatchCommandSignature();
         void waitForGpu();
