@@ -112,6 +112,7 @@ namespace Piccolo
             return false;
         };
 
+        LOG_INFO(std::string("Requested RHI backend: ") + renderBackendToString(requested_backend));
         if (!tryInitializeBackend(requested_backend))
         {
             if (rhi_init_info.allow_fallback_to_vulkan && requested_backend != RHIBackendType::Vulkan)

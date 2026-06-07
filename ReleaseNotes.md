@@ -15,9 +15,11 @@
 - Windows CI 已直接通过 CMake 构建 Debug/Release PiccoloEditor，Debug 构建会运行 D3D12 启动烟测
 - D3D12 源文件已在非 Windows 构建中通过 CMake 和 RHI factory guard 排除，Linux/macOS 路径继续使用 Vulkan
 - D3D12 ImGui 初始化使用实际 swapchain format 创建 DX12 renderer backend，避免 UI PSO render target format 与 back buffer 不一致
+- Windows deployment config now treats D3D12 as the primary backend and forbids silent Vulkan fallback; developer configs may opt into fallback for diagnosis.
+- Non-Windows deployment output now receives a Vulkan-compatible `RenderBackend=Auto` config instead of the Windows D3D12-primary config.
 
 ### 当前状态
-- Windows 随附 Editor 配置默认使用 `RenderBackend=D3D12`，`RenderBackend=Auto` 在 Windows 也会选择 D3D12
+- Windows 随附 Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退；Linux/macOS deployment 输出使用 `RenderBackend=Auto` 并解析到 Vulkan
 - Windows 可通过 smoke 脚本分别验证 `RenderBackend=D3D12`、`RenderBackend=Auto` 和 `RenderBackend=Vulkan` 初始化路径
 - D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
 - 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
@@ -28,8 +30,8 @@
 ```powershell
 cmake -S . -B build
 cmake --build build --config Debug --target PiccoloEditor --parallel
-.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12
-.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
 ```
 

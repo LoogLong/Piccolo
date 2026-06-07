@@ -5,7 +5,8 @@ param(
     [ValidateSet('Auto', 'Vulkan', 'D3D12')]
     [string]$RenderBackend = 'D3D12',
     [ValidateSet('Vulkan', 'D3D12')]
-    [string]$ExpectedBackend
+    [string]$ExpectedBackend,
+    [switch]$DisallowFallback
 )
 
 $ErrorActionPreference = 'Stop'
@@ -116,13 +117,13 @@ if ($null -ne $nonZeroExitCode) {
     throw "PiccoloEditor exited before timeout with nonzero exit code: $nonZeroExitCode. Combined log: $combinedLog"
 }
 
+$fallbackFound = Select-String -LiteralPath $combinedLog -Pattern 'Falling back to Vulkan backend' -SimpleMatch -Quiet
+if ($DisallowFallback -and $fallbackFound) {
+    throw "D3D12-primary validation forbids fallback to Vulkan. Combined log: $combinedLog"
+}
+
 $assertLog = Join-Path $PSScriptRoot 'assert_log.ps1'
 & $assertLog -LogPath $combinedLog -Pattern "Initialized RHI backend: $ExpectedBackend"
 & $assertLog -LogPath $combinedLog -Pattern 'engine start'
-
-$fallbackFound = Select-String -LiteralPath $combinedLog -Pattern 'Falling back to Vulkan backend' -SimpleMatch -Quiet
-if ($fallbackFound) {
-    throw "Forbidden pattern found in log '$combinedLog': Falling back to Vulkan backend"
-}
 
 Write-Host "$ExpectedBackend backend boot smoke log checks passed: $combinedLog"

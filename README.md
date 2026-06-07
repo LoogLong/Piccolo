@@ -124,20 +124,24 @@ RenderBackendAllowFallback=true
 - `RenderBackend` supports `Auto`, `Vulkan`, `D3D12`.
 - `RenderBackend=Auto` selects D3D12 on Windows and Vulkan on Linux/macOS.
 - `RenderBackend=Vulkan` forces Vulkan on Windows.
-- The bundled PiccoloEditor development and deployment configs explicitly select `RenderBackend=D3D12` on Windows.
+- The bundled Windows PiccoloEditor deployment config explicitly selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
+- Non-Windows deployment output uses `RenderBackend=Auto`, which resolves to Vulkan on Linux/macOS.
 - D3D12 startup requires generated DXIL shader bytecode. Configure the build with `dxc.exe` available to build those shaders.
 - If no hardware D3D12 adapter is available, the D3D12 backend can initialize through WARP for smoke validation.
 - `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan.
 - On non-Windows platforms, the D3D12 path is disabled.
+
+For Windows D3D12-primary validation, set `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
+Use `RenderBackendAllowFallback=true` only when you intentionally want a Vulkan debug fallback.
 
 Windows backend smoke validation:
 
 ```powershell
 cmake -S . -B build
 cmake --build build --config Debug --target PiccoloEditor --parallel
-.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12
-.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
 ```
 
-The smoke script temporarily overrides the built editor config and restores it after the run. On Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and Vulkan remains the active backend.
+The smoke script temporarily overrides the built editor config and restores it after the run. On Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and the deployment config selects a Vulkan-compatible backend.
