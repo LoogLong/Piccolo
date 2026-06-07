@@ -6195,6 +6195,41 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
 {
     (void)passUpdateAfterRecreateSwapchain;
 #ifdef _WIN32
+    int framebuffer_width  = static_cast<int>(m_window_width);
+    int framebuffer_height = static_cast<int>(m_window_height);
+    if (m_window != nullptr)
+    {
+        glfwGetFramebufferSize(m_window, &framebuffer_width, &framebuffer_height);
+    }
+
+    if (framebuffer_width <= 0 || framebuffer_height <= 0)
+    {
+        return true;
+    }
+
+    const uint32_t requested_width  = static_cast<uint32_t>(framebuffer_width);
+    const uint32_t requested_height = static_cast<uint32_t>(framebuffer_height);
+    const bool     needs_recreate   = !m_d3d12_swapchain ||
+                                    requested_width != m_window_width ||
+                                    requested_height != m_window_height ||
+                                    requested_width != m_swapchain_desc.extent.width ||
+                                    requested_height != m_swapchain_desc.extent.height ||
+                                    m_swapchain_desc.imageViews.size() != m_swapchain_buffer_count;
+    if (needs_recreate)
+    {
+        recreateSwapchain();
+
+        const bool recreated = m_d3d12_swapchain != nullptr &&
+                               m_swapchain_desc.extent.width == requested_width &&
+                               m_swapchain_desc.extent.height == requested_height &&
+                               m_swapchain_desc.imageViews.size() == m_swapchain_buffer_count;
+        if (recreated && passUpdateAfterRecreateSwapchain)
+        {
+            passUpdateAfterRecreateSwapchain();
+        }
+        return true;
+    }
+
     if (!m_d3d12_swapchain)
     {
         return true;
