@@ -6262,7 +6262,6 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
 
 void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwapchain)
 {
-    (void)passUpdateAfterRecreateSwapchain;
 #ifdef _WIN32
     auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
     if (!m_d3d12_swapchain ||
@@ -6273,21 +6272,96 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
         return;
     }
 
-    if (d3d_command_buffer->is_open && FAILED(d3d_command_buffer->command_list->Close()))
+    auto update_current_frame = [this]() {
+        if (m_d3d12_swapchain != nullptr)
+        {
+            m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+        }
+        m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
+    };
+
+    if (d3d_command_buffer->is_open)
     {
+        const HRESULT close_result = d3d_command_buffer->command_list->Close();
+        if (FAILED(close_result))
+        {
+            const HRESULT removed_reason =
+                m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+            logD3D12InfoQueueMessages(m_d3d12_device.Get(), "submitRendering command list close failure");
+            LOG_ERROR("D3D12 submitRendering command list close failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                      static_cast<unsigned int>(close_result),
+                      static_cast<unsigned int>(removed_reason));
+            return;
+        }
         d3d_command_buffer->is_open = false;
-        return;
     }
-    d3d_command_buffer->is_open = false;
     d3d_command_buffer->has_recorded_commands = true;
 
     ID3D12CommandList* command_lists[] = {d3d_command_buffer->command_list.Get()};
     m_d3d12_command_queue->ExecuteCommandLists(1, command_lists);
-    (void)m_d3d12_swapchain->Present(1, 0);
-    waitForGpu();
+    const HRESULT present_result = m_d3d12_swapchain->Present(1, 0);
+    if (FAILED(present_result))
+    {
+        waitForGpu();
 
-    m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
-    m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
+        const HRESULT removed_reason =
+            m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "submitRendering present failure");
+        LOG_ERROR("D3D12 submitRendering Present failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                  static_cast<unsigned int>(present_result),
+                  static_cast<unsigned int>(removed_reason));
+
+        if (present_result == DXGI_ERROR_DEVICE_REMOVED || present_result == DXGI_ERROR_DEVICE_RESET)
+        {
+            LOG_ERROR("D3D12 submitRendering detected device loss during Present (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                      static_cast<unsigned int>(present_result),
+                      static_cast<unsigned int>(removed_reason));
+            return;
+        }
+
+        int framebuffer_width  = static_cast<int>(m_window_width);
+        int framebuffer_height = static_cast<int>(m_window_height);
+        if (m_window != nullptr)
+        {
+            glfwGetFramebufferSize(m_window, &framebuffer_width, &framebuffer_height);
+        }
+
+        if (framebuffer_width <= 0 || framebuffer_height <= 0)
+        {
+            LOG_ERROR("D3D12 submitRendering cannot recover swapchain after Present failure because framebuffer size is invalid (width={}, height={}, HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                      framebuffer_width,
+                      framebuffer_height,
+                      static_cast<unsigned int>(present_result),
+                      static_cast<unsigned int>(removed_reason));
+            return;
+        }
+
+        const uint32_t requested_width  = static_cast<uint32_t>(framebuffer_width);
+        const uint32_t requested_height = static_cast<uint32_t>(framebuffer_height);
+        recreateSwapchain();
+        if (m_d3d12_swapchain != nullptr &&
+            m_swapchain_desc.extent.width == requested_width &&
+            m_swapchain_desc.extent.height == requested_height &&
+            m_swapchain_desc.imageViews.size() == m_swapchain_buffer_count)
+        {
+            if (passUpdateAfterRecreateSwapchain)
+            {
+                passUpdateAfterRecreateSwapchain();
+            }
+            update_current_frame();
+            return;
+        }
+
+        LOG_ERROR("D3D12 submitRendering failed to recover swapchain after Present failure (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                  static_cast<unsigned int>(present_result),
+                  static_cast<unsigned int>(removed_reason));
+        return;
+    }
+
+    waitForGpu();
+    update_current_frame();
+#else
+    (void)passUpdateAfterRecreateSwapchain;
 #endif
     return;
 }
