@@ -34,19 +34,19 @@ float4x4 LoadSkinningMatrix(uint vertex_id, uint instance_id)
 
     if (binding.weights.x > 0.0f && binding.indices.x > 0)
     {
-        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.x)].matrix * binding.weights.x;
+        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.x)].joint_matrix * binding.weights.x;
     }
     if (binding.weights.y > 0.0f && binding.indices.y > 0)
     {
-        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.y)].matrix * binding.weights.y;
+        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.y)].joint_matrix * binding.weights.y;
     }
     if (binding.weights.z > 0.0f && binding.indices.z > 0)
     {
-        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.z)].matrix * binding.weights.z;
+        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.z)].joint_matrix * binding.weights.z;
     }
     if (binding.weights.w > 0.0f && binding.indices.w > 0)
     {
-        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.w)].matrix * binding.weights.w;
+        skinning_matrix += g_joint_matrices[joint_base + uint(binding.indices.w)].joint_matrix * binding.weights.w;
     }
 
     return skinning_matrix;

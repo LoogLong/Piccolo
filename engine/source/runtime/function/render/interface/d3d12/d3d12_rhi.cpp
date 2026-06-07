@@ -3,6 +3,7 @@
 #include "runtime/function/render/window_system.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -171,6 +172,8 @@ namespace Piccolo
             bool enforce_limits {false};
             uint32_t max_sets {0};
             uint32_t allocated_sets {0};
+            std::array<uint32_t, 11> descriptor_type_counts {};
+            std::array<uint32_t, 11> allocated_descriptor_type_counts {};
             uint32_t cbv_srv_uav_descriptor_count {0};
             uint32_t allocated_cbv_srv_uav_descriptors {0};
             uint32_t sampler_descriptor_count {0};
@@ -190,6 +193,7 @@ namespace Piccolo
             };
 
             std::vector<BindingRange> ranges;
+            std::array<uint32_t, 11> descriptor_type_counts {};
             uint32_t cbv_srv_uav_descriptor_count {0};
             uint32_t sampler_descriptor_count {0};
 
@@ -346,6 +350,44 @@ namespace Piccolo
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
                    type == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        }
+
+        constexpr uint32_t kTrackedDescriptorTypeCount = 11;
+
+        bool isTrackedDescriptorType(RHIDescriptorType type)
+        {
+            switch (type)
+            {
+                case RHI_DESCRIPTOR_TYPE_SAMPLER:
+                case RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                case RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                case RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                case RHI_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+                case RHI_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                case RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                case RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                case RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+                case RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+                case RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        bool isSupportedDescriptorType(RHIDescriptorType type)
+        {
+            return descriptorUsesSamplerHeap(type) || descriptorUsesResourceHeap(type);
+        }
+
+        uint32_t descriptorTypeIndex(RHIDescriptorType type)
+        {
+            return static_cast<uint32_t>(type);
+        }
+
+        bool hasDescriptorCapacity(uint32_t required, uint32_t used, uint32_t capacity)
+        {
+            return used <= capacity && required <= capacity - used;
         }
 
         uint32_t calculateMipLevels(uint32_t width, uint32_t height, uint32_t requested_mip_levels)
@@ -539,6 +581,95 @@ namespace Piccolo
                 }
             }
             return count;
+        }
+
+        bool descriptorWriteHasRequiredResources(const RHIWriteDescriptorSet& write,
+                                                 const D3D12RHIDescriptorSetLayout::BindingRange& binding)
+        {
+            for (uint32_t descriptor_index = 0; descriptor_index < write.descriptorCount; ++descriptor_index)
+            {
+                const uint32_t array_index = write.dstArrayElement + descriptor_index;
+                if (descriptorUsesBufferInfo(write.descriptorType))
+                {
+                    if (write.pBufferInfo == nullptr)
+                    {
+                        return false;
+                    }
+
+                    const auto* buffer = static_cast<D3D12RHIBuffer*>(write.pBufferInfo[descriptor_index].buffer);
+                    if (buffer == nullptr || buffer->resource == nullptr)
+                    {
+                        return false;
+                    }
+                }
+                else if (descriptorUsesResourceHeap(write.descriptorType))
+                {
+                    if (write.pImageInfo == nullptr)
+                    {
+                        return false;
+                    }
+
+                    const auto* image_view = static_cast<D3D12RHIImageView*>(write.pImageInfo[descriptor_index].imageView);
+                    if (image_view == nullptr || image_view->image == nullptr || image_view->image->resource == nullptr)
+                    {
+                        return false;
+                    }
+
+                    if (write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                    {
+                        if (!image_view->has_uav)
+                        {
+                            return false;
+                        }
+                    }
+                    else if (!image_view->has_srv)
+                    {
+                        return false;
+                    }
+                }
+
+                if (descriptorUsesSamplerHeap(write.descriptorType))
+                {
+                    D3D12RHISampler* sampler = nullptr;
+                    if (write.pImageInfo != nullptr)
+                    {
+                        sampler = static_cast<D3D12RHISampler*>(write.pImageInfo[descriptor_index].sampler);
+                    }
+                    if (sampler == nullptr && binding.binding.pImmutableSamplers != nullptr)
+                    {
+                        sampler = static_cast<D3D12RHISampler*>(binding.binding.pImmutableSamplers[array_index]);
+                    }
+                    if (sampler == nullptr)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        bool descriptorCopyHasRequiredSourceMetadata(const RHICopyDescriptorSet& copy,
+                                                     const D3D12RHIDescriptorSet& src_set,
+                                                     const D3D12RHIDescriptorSetLayout::BindingRange& src_binding)
+        {
+            if (!descriptorUsesBufferInfo(src_binding.binding.descriptorType))
+            {
+                return true;
+            }
+
+            for (uint32_t descriptor_index = 0; descriptor_index < copy.descriptorCount; ++descriptor_index)
+            {
+                const auto* src_descriptor =
+                    src_set.findBufferDescriptor(copy.srcBinding, copy.srcArrayElement + descriptor_index);
+                if (src_descriptor == nullptr ||
+                    src_descriptor->descriptor_type != src_binding.binding.descriptorType ||
+                    src_descriptor->buffer == nullptr ||
+                    src_descriptor->buffer->resource == nullptr)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         D3D12_HEAP_TYPE chooseBufferHeapType(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties)
@@ -1829,13 +1960,26 @@ bool D3D12RHI::allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAlloc
     if (pool->enforce_limits)
     {
         if (pool->allocated_sets >= pool->max_sets ||
-            descriptor_set->layout->cbv_srv_uav_descriptor_count >
-                pool->cbv_srv_uav_descriptor_count - pool->allocated_cbv_srv_uav_descriptors ||
-            descriptor_set->layout->sampler_descriptor_count >
-                pool->sampler_descriptor_count - pool->allocated_sampler_descriptors)
+            !hasDescriptorCapacity(descriptor_set->layout->cbv_srv_uav_descriptor_count,
+                                   pool->allocated_cbv_srv_uav_descriptors,
+                                   pool->cbv_srv_uav_descriptor_count) ||
+            !hasDescriptorCapacity(descriptor_set->layout->sampler_descriptor_count,
+                                   pool->allocated_sampler_descriptors,
+                                   pool->sampler_descriptor_count))
         {
             delete descriptor_set;
             return false;
+        }
+
+        for (uint32_t type_index = 0; type_index < kTrackedDescriptorTypeCount; ++type_index)
+        {
+            if (!hasDescriptorCapacity(descriptor_set->layout->descriptor_type_counts[type_index],
+                                       pool->allocated_descriptor_type_counts[type_index],
+                                       pool->descriptor_type_counts[type_index]))
+            {
+                delete descriptor_set;
+                return false;
+            }
         }
     }
 
@@ -1877,6 +2021,11 @@ bool D3D12RHI::allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAlloc
     ++pool->allocated_sets;
     pool->allocated_cbv_srv_uav_descriptors += descriptor_set->layout->cbv_srv_uav_descriptor_count;
     pool->allocated_sampler_descriptors += descriptor_set->layout->sampler_descriptor_count;
+    for (uint32_t type_index = 0; type_index < kTrackedDescriptorTypeCount; ++type_index)
+    {
+        pool->allocated_descriptor_type_counts[type_index] +=
+            descriptor_set->layout->descriptor_type_counts[type_index];
+    }
 
     pDescriptorSets = descriptor_set;
     return true;
@@ -2630,6 +2779,14 @@ bool D3D12RHI::createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateIn
         for (uint32_t i = 0; i < pCreateInfo->poolSizeCount; ++i)
         {
             const RHIDescriptorPoolSize& pool_size = pCreateInfo->pPoolSizes[i];
+            if (!isTrackedDescriptorType(pool_size.type) || !isSupportedDescriptorType(pool_size.type))
+            {
+                delete pool;
+                return false;
+            }
+
+            const uint32_t type_index = descriptorTypeIndex(pool_size.type);
+            pool->descriptor_type_counts[type_index] += pool_size.descriptorCount;
             if (descriptorUsesSamplerHeap(pool_size.type))
             {
                 pool->sampler_descriptor_count += pool_size.descriptorCount;
@@ -2642,25 +2799,29 @@ bool D3D12RHI::createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateIn
     }
 
 #ifdef _WIN32
-    const uint32_t fallback_count = (std::max)(1U, pool->max_sets);
-    const uint32_t cbv_srv_uav_required = (std::max)(pool->cbv_srv_uav_descriptor_count, fallback_count);
+    const uint32_t cbv_srv_uav_required =
+        pool->cbv_srv_uav_descriptor_count > 0 ? pool->cbv_srv_uav_descriptor_count :
+        (!pool->enforce_limits ? 1U : 0U);
     if (m_d3d12_cbv_srv_uav_heap == nullptr)
     {
-        const bool cbv_srv_uav_created = createDescriptorHeap(m_d3d12_device.Get(),
-                                                              D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                                                              cbv_srv_uav_required + 1,
-                                                              true,
-                                                              m_d3d12_cbv_srv_uav_heap,
-                                                              m_d3d12_cbv_srv_uav_descriptor_size,
-                                                              m_d3d12_cbv_srv_uav_descriptor_capacity,
-                                                              m_d3d12_cbv_srv_uav_descriptor_next);
-        if (!cbv_srv_uav_created)
+        if (cbv_srv_uav_required > 0)
         {
-            delete pool;
-            return false;
+            const bool cbv_srv_uav_created = createDescriptorHeap(m_d3d12_device.Get(),
+                                                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                                                                  cbv_srv_uav_required + 1,
+                                                                  true,
+                                                                  m_d3d12_cbv_srv_uav_heap,
+                                                                  m_d3d12_cbv_srv_uav_descriptor_size,
+                                                                  m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                                                  m_d3d12_cbv_srv_uav_descriptor_next);
+            if (!cbv_srv_uav_created)
+            {
+                delete pool;
+                return false;
+            }
+            m_d3d12_cbv_srv_uav_descriptor_next = 1;
+            m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
         }
-        m_d3d12_cbv_srv_uav_descriptor_next = 1;
-        m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
     }
     else if (cbv_srv_uav_required > m_d3d12_cbv_srv_uav_descriptor_capacity - m_d3d12_cbv_srv_uav_descriptor_next)
     {
@@ -2668,21 +2829,26 @@ bool D3D12RHI::createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateIn
         return false;
     }
 
-    const uint32_t sampler_required = (std::max)(pool->sampler_descriptor_count, fallback_count);
+    const uint32_t sampler_required =
+        pool->sampler_descriptor_count > 0 ? pool->sampler_descriptor_count :
+        (!pool->enforce_limits ? 1U : 0U);
     if (m_d3d12_sampler_heap == nullptr)
     {
-        const bool sampler_created = createDescriptorHeap(m_d3d12_device.Get(),
-                                                          D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
-                                                          sampler_required,
-                                                          true,
-                                                          m_d3d12_sampler_heap,
-                                                          m_d3d12_sampler_descriptor_size,
-                                                          m_d3d12_sampler_descriptor_capacity,
-                                                          m_d3d12_sampler_descriptor_next);
-        if (!sampler_created)
+        if (sampler_required > 0)
         {
-            delete pool;
-            return false;
+            const bool sampler_created = createDescriptorHeap(m_d3d12_device.Get(),
+                                                              D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
+                                                              sampler_required,
+                                                              true,
+                                                              m_d3d12_sampler_heap,
+                                                              m_d3d12_sampler_descriptor_size,
+                                                              m_d3d12_sampler_descriptor_capacity,
+                                                              m_d3d12_sampler_descriptor_next);
+            if (!sampler_created)
+            {
+                delete pool;
+                return false;
+            }
         }
     }
     else if (sampler_required > m_d3d12_sampler_descriptor_capacity - m_d3d12_sampler_descriptor_next)
@@ -2711,6 +2877,15 @@ bool D3D12RHI::createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo*
         D3D12RHIDescriptorSetLayout::BindingRange range {};
         range.binding = pCreateInfo->pBindings[i];
         range.binding.descriptorCount = (std::max)(1U, range.binding.descriptorCount);
+        if (!isTrackedDescriptorType(range.binding.descriptorType) ||
+            !isSupportedDescriptorType(range.binding.descriptorType))
+        {
+            delete layout;
+            return false;
+        }
+
+        layout->descriptor_type_counts[descriptorTypeIndex(range.binding.descriptorType)] +=
+            range.binding.descriptorCount;
         if (descriptorUsesResourceHeap(range.binding.descriptorType))
         {
             range.cbv_srv_uav_offset = layout->cbv_srv_uav_descriptor_count;
@@ -3633,6 +3808,50 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
         return;
     }
 
+    uint32_t preflight_dynamic_offset_index = 0;
+    uint32_t preflight_transient_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
+    for (uint32_t i = 0; i < descriptorSetCount; ++i)
+    {
+        const uint32_t set_index = firstSet + i;
+        if (set_index >= d3d_layout->set_layouts.size() || pDescriptorSets[i] == nullptr)
+        {
+            continue;
+        }
+
+        const auto* descriptor_set = static_cast<const D3D12RHIDescriptorSet*>(pDescriptorSets[i]);
+        const auto* set_layout = descriptor_set->layout;
+        if (set_layout == nullptr)
+        {
+            continue;
+        }
+
+        const uint32_t required_dynamic_descriptor_count = dynamicDescriptorCount(*set_layout);
+        if (required_dynamic_descriptor_count == 0)
+        {
+            continue;
+        }
+
+        if (pDynamicOffsets == nullptr ||
+            preflight_dynamic_offset_index > dynamicOffsetCount ||
+            required_dynamic_descriptor_count > dynamicOffsetCount - preflight_dynamic_offset_index ||
+            !descriptor_set->has_cbv_srv_uav_descriptors ||
+            m_d3d12_cbv_srv_uav_heap == nullptr)
+        {
+            return;
+        }
+
+        uint32_t unused_transient_base = 0;
+        if (!reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
+                                preflight_transient_next,
+                                m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                unused_transient_base))
+        {
+            return;
+        }
+
+        preflight_dynamic_offset_index += required_dynamic_descriptor_count;
+    }
+
     ID3D12DescriptorHeap* heaps[2] {};
     UINT heap_count = 0;
     if (m_d3d12_cbv_srv_uav_heap != nullptr)
@@ -4368,7 +4587,8 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
         if (binding == nullptr ||
             write.descriptorCount == 0 ||
             write.descriptorType != binding->binding.descriptorType ||
-            !descriptorRangeFits(write.dstArrayElement, write.descriptorCount, binding->binding.descriptorCount))
+            !descriptorRangeFits(write.dstArrayElement, write.descriptorCount, binding->binding.descriptorCount) ||
+            !descriptorWriteHasRequiredResources(write, *binding))
         {
             continue;
         }
@@ -4389,17 +4609,17 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                 if (write.descriptorType == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
                     write.descriptorType == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
                     write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
-                         write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
+                    write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
                 {
-                    const RHIDescriptorBufferInfo* buffer_info = write.pBufferInfo != nullptr ? &write.pBufferInfo[descriptor_index] : nullptr;
-                    auto* buffer = buffer_info != nullptr ? static_cast<D3D12RHIBuffer*>(buffer_info->buffer) : nullptr;
+                    const RHIDescriptorBufferInfo* buffer_info = &write.pBufferInfo[descriptor_index];
+                    auto* buffer = static_cast<D3D12RHIBuffer*>(buffer_info->buffer);
                     D3D12RHIDescriptorSet::BufferDescriptor descriptor {};
                     descriptor.binding         = write.dstBinding;
                     descriptor.array_element   = array_index;
                     descriptor.descriptor_type = write.descriptorType;
                     descriptor.buffer          = buffer;
-                    descriptor.offset          = buffer_info != nullptr ? buffer_info->offset : 0;
-                    descriptor.range           = buffer_info != nullptr ? buffer_info->range : 0;
+                    descriptor.offset          = buffer_info->offset;
+                    descriptor.range           = buffer_info->range;
                     descriptor.range_type      = binding->cbv_srv_uav_range_type;
                     upsertBufferDescriptor(*descriptor_set, descriptor);
 
@@ -4411,18 +4631,18 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                 }
                 else if (write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                 {
-                    const RHIDescriptorImageInfo* image_info = write.pImageInfo != nullptr ? &write.pImageInfo[descriptor_index] : nullptr;
-                    auto* image_view = image_info != nullptr ? static_cast<D3D12RHIImageView*>(image_info->imageView) : nullptr;
-                    if (image_view != nullptr && image_view->image != nullptr && image_view->has_uav)
+                    const RHIDescriptorImageInfo* image_info = &write.pImageInfo[descriptor_index];
+                    auto* image_view = static_cast<D3D12RHIImageView*>(image_info->imageView);
+                    if (image_view != nullptr && image_view->image != nullptr && image_view->image->resource != nullptr && image_view->has_uav)
                     {
                         m_d3d12_device->CreateUnorderedAccessView(image_view->image->resource.Get(), nullptr, &image_view->uav_desc, dst_handle);
                     }
                 }
                 else
                 {
-                    const RHIDescriptorImageInfo* image_info = write.pImageInfo != nullptr ? &write.pImageInfo[descriptor_index] : nullptr;
-                    auto* image_view = image_info != nullptr ? static_cast<D3D12RHIImageView*>(image_info->imageView) : nullptr;
-                    if (image_view != nullptr && image_view->image != nullptr && image_view->has_srv)
+                    const RHIDescriptorImageInfo* image_info = &write.pImageInfo[descriptor_index];
+                    auto* image_view = static_cast<D3D12RHIImageView*>(image_info->imageView);
+                    if (image_view != nullptr && image_view->image != nullptr && image_view->image->resource != nullptr && image_view->has_srv)
                     {
                         m_d3d12_device->CreateShaderResourceView(image_view->image->resource.Get(), &image_view->srv_desc, dst_handle);
                     }
@@ -4466,8 +4686,10 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
         const auto* dst_binding = dst_set->layout->find(copy.dstBinding);
         if (src_binding == nullptr || dst_binding == nullptr ||
             copy.descriptorCount == 0 ||
+            src_binding->binding.descriptorType != dst_binding->binding.descriptorType ||
             !descriptorRangeFits(copy.srcArrayElement, copy.descriptorCount, src_binding->binding.descriptorCount) ||
-            !descriptorRangeFits(copy.dstArrayElement, copy.descriptorCount, dst_binding->binding.descriptorCount))
+            !descriptorRangeFits(copy.dstArrayElement, copy.descriptorCount, dst_binding->binding.descriptorCount) ||
+            !descriptorCopyHasRequiredSourceMetadata(copy, *src_set, *src_binding))
         {
             continue;
         }

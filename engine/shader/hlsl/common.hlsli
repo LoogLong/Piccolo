@@ -71,7 +71,7 @@ struct MeshVertexJointBindingData
 
 struct JointMatrixData
 {
-    row_major float4x4 matrix;
+    row_major float4x4 joint_matrix;
 };
 
 struct MaterialData

@@ -41,10 +41,27 @@ if(WIN32)
         list(APPEND _dxc_search_paths "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32")
     endif()
 
+    set(_windows_sdk_roots)
     if(DEFINED ENV{WindowsSdkDir})
-        file(GLOB _windows_sdk_dxc_paths "$ENV{WindowsSdkDir}/bin/*/x64" "$ENV{WindowsSdkDir}/bin/x64")
-        list(APPEND _dxc_search_paths ${_windows_sdk_dxc_paths})
+        list(APPEND _windows_sdk_roots "$ENV{WindowsSdkDir}")
     endif()
+    if(DEFINED ENV{ProgramFiles\(x86\)})
+        list(APPEND _windows_sdk_roots "$ENV{ProgramFiles\(x86\)}/Windows Kits/10")
+    endif()
+    if(DEFINED ENV{ProgramFiles})
+        list(APPEND _windows_sdk_roots "$ENV{ProgramFiles}/Windows Kits/10")
+    endif()
+    list(APPEND _windows_sdk_roots
+        "C:/Program Files (x86)/Windows Kits/10"
+        "C:/Program Files/Windows Kits/10")
+
+    foreach(_windows_sdk_root IN LISTS _windows_sdk_roots)
+        file(GLOB _windows_sdk_dxc_paths
+            "${_windows_sdk_root}/bin/*/x64"
+            "${_windows_sdk_root}/bin/x64")
+        list(APPEND _dxc_search_paths ${_windows_sdk_dxc_paths})
+    endforeach()
+    list(REMOVE_DUPLICATES _dxc_search_paths)
 
     find_program(dxc_executable NAMES dxc.exe dxc HINTS ${_dxc_search_paths})
 
