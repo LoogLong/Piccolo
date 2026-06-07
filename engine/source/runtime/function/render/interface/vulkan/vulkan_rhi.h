@@ -10,9 +10,16 @@
 #include <map>
 #include <vector>
 
+struct GLFWwindow;
+
 namespace Piccolo
 {
-    
+    struct SwapChainSupportDetails
+    {
+        VkSurfaceCapabilitiesKHR        capabilities;
+        std::vector<VkSurfaceFormatKHR> formats;
+        std::vector<VkPresentModeKHR>   presentModes;
+    };
 
     class VulkanRHI : public RHI
     {

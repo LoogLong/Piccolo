@@ -2,6 +2,7 @@
 
 #include "runtime/function/render/render_type.h"
 #include <optional>
+#include <vector>
 namespace Piccolo
 {
     /////////////////////////////////////////////////
@@ -1111,8 +1112,8 @@ namespace Piccolo
 
     struct RHIDepthImageDesc
     {
-        RHIImage* depth_image = VK_NULL_HANDLE;
-        RHIImageView* depth_image_view = VK_NULL_HANDLE;
+        RHIImage* depth_image = nullptr;
+        RHIImageView* depth_image_view = nullptr;
         RHIFormat        depth_image_format;
     };
 
@@ -1125,10 +1126,4 @@ namespace Piccolo
         bool isComplete() { return graphics_family.has_value() && present_family.has_value() && m_compute_family.has_value();; }
     };
 
-    struct SwapChainSupportDetails
-    {
-        VkSurfaceCapabilitiesKHR        capabilities;
-        std::vector<VkSurfaceFormatKHR> formats;
-        std::vector<VkPresentModeKHR>   presentModes;
-    };
 }

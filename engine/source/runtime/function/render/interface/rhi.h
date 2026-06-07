@@ -1,14 +1,19 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#include <vk_mem_alloc.h>
-
+#include <array>
+#include <functional>
 #include <memory>
 #include <vector>
-#include <functional>
 
 #include "rhi_struct.h"
+
+struct VmaAllocator_T;
+typedef VmaAllocator_T* VmaAllocator;
+struct VmaAllocation_T;
+typedef VmaAllocation_T* VmaAllocation;
+struct VmaAllocationCreateInfo;
+struct VmaAllocationInfo;
+
 namespace Piccolo
 {
     class WindowSystem;

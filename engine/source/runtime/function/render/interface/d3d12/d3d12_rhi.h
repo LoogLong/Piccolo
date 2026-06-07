@@ -12,6 +12,8 @@
 using Microsoft::WRL::ComPtr;
 #endif
 
+struct GLFWwindow;
+
 namespace Piccolo
 {
     class D3D12RHI : public RHI
