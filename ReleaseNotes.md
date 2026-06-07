@@ -26,6 +26,7 @@
 - D3D12/Vulkan ImGui backend 会在 RenderSystem 清理 RHI 前显式 shutdown，避免 UI renderer/platform 资源晚于图形设备释放
 - D3D12 push/pop render events 已映射到 command-list PIX-compatible BeginEvent/EndEvent，便于在 GPU 捕获中查看 pass marker
 - D3D12 默认与 mipmap sampler 已按 RHI 缓存语义复用并接入销毁路径，swapchain 清理会释放 wrapped image/view 与 back buffer 引用
+- D3D12 prepareContext 已同步 swapchain back buffer、当前 frame index 与命令缓冲，确保每帧资源更新阶段使用正确的 ring buffer 槽位
 
 # Pilot引擎 0.0.8 版本发布说明
 ✨ 大家好！Pilot引擎自4月4日发布以来，我们很高兴得到很多开发者朋友们的关注，非常感谢社区开发者们的贡献！

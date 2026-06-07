@@ -2374,6 +2374,18 @@ namespace Piccolo
 
     void D3D12RHI::prepareContext()
     {
+#ifdef _WIN32
+        if (m_d3d12_swapchain != nullptr)
+        {
+            m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+        }
+
+        m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
+        if (m_current_command_buffer != nullptr && m_d3d12_device != nullptr)
+        {
+            (void)ensureCommandBufferObjects(m_current_command_buffer);
+        }
+#endif
         return;
     }
 
