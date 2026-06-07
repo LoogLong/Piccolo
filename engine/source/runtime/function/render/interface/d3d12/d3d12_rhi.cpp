@@ -2321,22 +2321,22 @@ namespace Piccolo
         createFence();
 
         createCommandPool();
-        if (m_dummy_command_pool == nullptr)
+        if (m_default_command_pool == nullptr)
         {
             throw std::runtime_error("Failed to create D3D12 default command pool");
         }
-        m_dummy_descriptor_pool = new D3D12RHIDescriptorPool();
-        m_dummy_graphics_queue  = new D3D12RHIQueue();
-        m_dummy_compute_queue   = new D3D12RHIQueue();
+        m_default_descriptor_pool = new D3D12RHIDescriptorPool();
+        m_graphics_queue  = new D3D12RHIQueue();
+        m_compute_queue   = new D3D12RHIQueue();
 #ifdef _WIN32
-        static_cast<D3D12RHIQueue*>(m_dummy_graphics_queue)->command_queue = m_d3d12_command_queue.Get();
-        static_cast<D3D12RHIQueue*>(m_dummy_compute_queue)->command_queue  = m_d3d12_command_queue.Get();
+        static_cast<D3D12RHIQueue*>(m_graphics_queue)->command_queue = m_d3d12_command_queue.Get();
+        static_cast<D3D12RHIQueue*>(m_compute_queue)->command_queue  = m_d3d12_command_queue.Get();
 #endif
 
-        for (auto& command_buffer : m_dummy_command_buffers)
+        for (auto& command_buffer : m_frame_command_buffers)
         {
             RHICommandBufferAllocateInfo allocate_info {};
-            allocate_info.commandPool = m_dummy_command_pool;
+            allocate_info.commandPool = m_default_command_pool;
             allocate_info.commandBufferCount = 1;
             if (!allocateCommandBuffers(&allocate_info, command_buffer))
             {
@@ -2346,7 +2346,7 @@ namespace Piccolo
 
         RHIFenceCreateInfo signaled_fence_info {};
         signaled_fence_info.flags = RHI_FENCE_CREATE_SIGNALED_BIT;
-        for (auto& fence : m_dummy_fences)
+        for (auto& fence : m_frame_fences)
         {
             if (!createFence(&signaled_fence_info, fence))
             {
@@ -2372,12 +2372,12 @@ namespace Piccolo
         createFramebufferImageAndView();
 
         RHISemaphoreCreateInfo texture_copy_semaphore_info {};
-        if (!createSemaphore(&texture_copy_semaphore_info, m_dummy_texture_copy_semaphore))
+        if (!createSemaphore(&texture_copy_semaphore_info, m_texture_copy_semaphore))
         {
             throw std::runtime_error("Failed to create D3D12 texture copy semaphore");
         }
 
-        m_current_command_buffer = m_dummy_command_buffers[0];
+        m_current_command_buffer = m_frame_command_buffers[0];
         m_current_frame_index    = 0;
 #endif
     }
@@ -2390,7 +2390,7 @@ namespace Piccolo
             m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
         }
 
-        m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
+        m_current_command_buffer = m_frame_command_buffers[m_current_frame_index % m_frame_command_buffers.size()];
         if (m_current_command_buffer != nullptr && m_d3d12_device != nullptr)
         {
             (void)ensureCommandBufferObjects(m_current_command_buffer);
@@ -2419,21 +2419,21 @@ namespace Piccolo
         destroyMipmappedSampler();
 #endif
 
-        delete m_dummy_command_pool;
-        m_dummy_command_pool = nullptr;
-        delete m_dummy_descriptor_pool;
-        m_dummy_descriptor_pool = nullptr;
-        delete static_cast<D3D12RHIQueue*>(m_dummy_graphics_queue);
-        m_dummy_graphics_queue = nullptr;
-        delete static_cast<D3D12RHIQueue*>(m_dummy_compute_queue);
-        m_dummy_compute_queue = nullptr;
+        delete m_default_command_pool;
+        m_default_command_pool = nullptr;
+        delete m_default_descriptor_pool;
+        m_default_descriptor_pool = nullptr;
+        delete static_cast<D3D12RHIQueue*>(m_graphics_queue);
+        m_graphics_queue = nullptr;
+        delete static_cast<D3D12RHIQueue*>(m_compute_queue);
+        m_compute_queue = nullptr;
 
-        for (auto& command_buffer : m_dummy_command_buffers)
+        for (auto& command_buffer : m_frame_command_buffers)
         {
             delete static_cast<D3D12RHICommandBuffer*>(command_buffer);
             command_buffer = nullptr;
         }
-        for (auto& fence : m_dummy_fences)
+        for (auto& fence : m_frame_fences)
         {
             delete static_cast<D3D12RHIFence*>(fence);
             fence = nullptr;
@@ -2457,8 +2457,8 @@ namespace Piccolo
         delete m_depth_desc.depth_image_view;
         m_depth_desc.depth_image_view = nullptr;
 
-        delete static_cast<D3D12RHISemaphore*>(m_dummy_texture_copy_semaphore);
-        m_dummy_texture_copy_semaphore = nullptr;
+        delete static_cast<D3D12RHISemaphore*>(m_texture_copy_semaphore);
+        m_texture_copy_semaphore = nullptr;
 
         m_swapchain_desc.imageViews.clear();
         m_swapchain_desc.viewport = nullptr;
@@ -3452,7 +3452,7 @@ void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAll
 
 void D3D12RHI::createCommandPool()
 {
-    if (!createCommandPool(nullptr, m_dummy_command_pool))
+    if (!createCommandPool(nullptr, m_default_command_pool))
     {
         throw std::runtime_error("Failed to create D3D12 command pool");
     }
@@ -6237,22 +6237,22 @@ RHICommandBuffer* D3D12RHI::getCurrentCommandBuffer() const
 
 RHICommandBuffer* const* D3D12RHI::getCommandBufferList() const
 {
-    return m_dummy_command_buffers.data();
+    return m_frame_command_buffers.data();
 }
 
 RHICommandPool* D3D12RHI::getCommandPoor() const
 {
-    return m_dummy_command_pool;
+    return m_default_command_pool;
 }
 
 RHIDescriptorPool* D3D12RHI::getDescriptorPoor() const
 {
-    return m_dummy_descriptor_pool;
+    return m_default_descriptor_pool;
 }
 
 RHIFence* const* D3D12RHI::getFenceList() const
 {
-    return m_dummy_fences.data();
+    return m_frame_fences.data();
 }
 
 QueueFamilyIndices D3D12RHI::getQueueFamilyIndices() const
@@ -6266,12 +6266,12 @@ QueueFamilyIndices D3D12RHI::getQueueFamilyIndices() const
 
 RHIQueue* D3D12RHI::getGraphicsQueue() const
 {
-    return m_dummy_graphics_queue;
+    return m_graphics_queue;
 }
 
 RHIQueue* D3D12RHI::getComputeQueue() const
 {
-    return m_dummy_compute_queue;
+    return m_compute_queue;
 }
 
 RHISwapChainDesc D3D12RHI::getSwapchainInfo()
@@ -6388,7 +6388,7 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
     }
 
     m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
-    m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
+    m_current_command_buffer = m_frame_command_buffers[m_current_frame_index % m_frame_command_buffers.size()];
 
     auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
     if (d3d_command_buffer != nullptr && ensureCommandBufferObjects(m_current_command_buffer))
@@ -6429,7 +6429,7 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
         {
             m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
         }
-        m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
+        m_current_command_buffer = m_frame_command_buffers[m_current_frame_index % m_frame_command_buffers.size()];
     };
 
     if (d3d_command_buffer->is_open)
@@ -6717,12 +6717,12 @@ void D3D12RHI::destroyFence(RHIFence* fence)
         return;
     }
 
-    for (auto*& dummy_fence : m_dummy_fences)
+    for (auto*& frame_fence : m_frame_fences)
     {
-        if (dummy_fence == fence)
+        if (frame_fence == fence)
         {
-            delete static_cast<D3D12RHIFence*>(dummy_fence);
-            dummy_fence = nullptr;
+            delete static_cast<D3D12RHIFence*>(frame_fence);
+            frame_fence = nullptr;
             return;
         }
     }
@@ -6787,10 +6787,10 @@ void D3D12RHI::destroyCommandPool(RHICommandPool* commandPool)
         return;
     }
 
-    if (commandPool == m_dummy_command_pool)
+    if (commandPool == m_default_command_pool)
     {
-        delete m_dummy_command_pool;
-        m_dummy_command_pool = nullptr;
+        delete m_default_command_pool;
+        m_default_command_pool = nullptr;
         return;
     }
 
@@ -7020,15 +7020,15 @@ void D3D12RHI::flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHI
 RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 {
     (void)index;
-    if (m_dummy_texture_copy_semaphore == nullptr)
+    if (m_texture_copy_semaphore == nullptr)
     {
         RHISemaphoreCreateInfo create_info {};
-        if (!createSemaphore(&create_info, m_dummy_texture_copy_semaphore))
+        if (!createSemaphore(&create_info, m_texture_copy_semaphore))
         {
-            m_dummy_texture_copy_semaphore = nullptr;
+            m_texture_copy_semaphore = nullptr;
         }
     }
-    return m_dummy_texture_copy_semaphore;
+    return m_texture_copy_semaphore;
 }
 
 

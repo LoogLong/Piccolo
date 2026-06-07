@@ -216,13 +216,15 @@ namespace Piccolo
         GLFWwindow* m_window {nullptr};
         RHIViewport m_viewport {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
         uint8_t m_current_frame_index {0};
-        std::array<RHICommandBuffer*, 3> m_dummy_command_buffers {{nullptr, nullptr, nullptr}};
-        RHICommandBuffer* m_current_command_buffer {nullptr};
-        RHICommandPool*   m_dummy_command_pool {nullptr};
-        RHIDescriptorPool* m_dummy_descriptor_pool {nullptr};
-        RHIQueue*         m_dummy_graphics_queue {nullptr};
-        RHIQueue*         m_dummy_compute_queue {nullptr};
-        std::array<RHIFence*, 3> m_dummy_fences {{nullptr, nullptr, nullptr}};
+        // RHI-facing wrappers owned by D3D12RHI. They back the frame loop and keep the existing RHI contract
+        // without exposing ID3D12* objects outside the backend.
+        std::array<RHICommandBuffer*, 3> m_frame_command_buffers {{nullptr, nullptr, nullptr}};
+        RHICommandBuffer*                m_current_command_buffer {nullptr};
+        RHICommandPool*                  m_default_command_pool {nullptr};
+        RHIDescriptorPool*               m_default_descriptor_pool {nullptr};
+        RHIQueue*                        m_graphics_queue {nullptr};
+        RHIQueue*                        m_compute_queue {nullptr};
+        std::array<RHIFence*, 3>         m_frame_fences {{nullptr, nullptr, nullptr}};
         RHISwapChainDesc  m_swapchain_desc {};
         RHIViewport       m_swapchain_viewport {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
         RHIRect2D         m_swapchain_scissor {};
@@ -238,6 +240,6 @@ namespace Piccolo
         RHIRenderPass*    m_active_render_pass {nullptr};
         RHIFramebuffer*   m_active_framebuffer {nullptr};
         uint32_t          m_active_subpass_index {0};
-        RHISemaphore* m_dummy_texture_copy_semaphore {nullptr};
+        RHISemaphore*     m_texture_copy_semaphore {nullptr};
     };
 } // namespace Piccolo
