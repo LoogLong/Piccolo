@@ -170,15 +170,99 @@ namespace Piccolo
 
         struct D3D12RHIQueue final : RHIQueue
         {
+#ifdef _WIN32
+            ID3D12CommandQueue* command_queue {nullptr};
+#endif
         };
 
         struct D3D12RHIFence final : RHIFence
         {
+#ifdef _WIN32
+            ~D3D12RHIFence()
+            {
+                if (event != nullptr)
+                {
+                    CloseHandle(event);
+                    event = nullptr;
+                }
+            }
+
+            ComPtr<ID3D12Fence> fence;
+            HANDLE              event {nullptr};
+            uint64_t            next_signal_value {0};
+            uint64_t            wait_value {0};
+            bool                has_pending_signal {false};
+            bool                signaled {false};
+#endif
         };
 
         struct D3D12RHISemaphore final : RHISemaphore
         {
+#ifdef _WIN32
+            ~D3D12RHISemaphore()
+            {
+                if (event != nullptr)
+                {
+                    CloseHandle(event);
+                    event = nullptr;
+                }
+            }
+
+            ComPtr<ID3D12Fence> fence;
+            HANDLE              event {nullptr};
+            uint64_t            next_signal_value {0};
+            uint64_t            wait_value {0};
+            bool                has_pending_signal {false};
+#endif
         };
+
+#ifdef _WIN32
+        DWORD d3d12FenceTimeoutMilliseconds(uint64_t timeout)
+        {
+            if (timeout == UINT64_MAX)
+            {
+                return INFINITE;
+            }
+            if (timeout == 0)
+            {
+                return 0;
+            }
+
+            const uint64_t timeout_milliseconds = (timeout + 999999ULL) / 1000000ULL;
+            return static_cast<DWORD>((std::min)(timeout_milliseconds,
+                                                 static_cast<uint64_t>((std::numeric_limits<DWORD>::max)())));
+        }
+
+        bool waitForD3D12FenceValue(ID3D12Fence* fence, HANDLE event, uint64_t value, uint64_t timeout)
+        {
+            if (fence == nullptr)
+            {
+                return false;
+            }
+            if (fence->GetCompletedValue() >= value)
+            {
+                return true;
+            }
+            if (event == nullptr || FAILED(fence->SetEventOnCompletion(value, event)))
+            {
+                return false;
+            }
+
+            return WaitForSingleObject(event, d3d12FenceTimeoutMilliseconds(timeout)) == WAIT_OBJECT_0;
+        }
+
+        uint64_t remainingD3D12FenceTimeout(uint64_t timeout, ULONGLONG start_tick)
+        {
+            if (timeout == UINT64_MAX)
+            {
+                return UINT64_MAX;
+            }
+
+            const uint64_t elapsed_milliseconds = static_cast<uint64_t>(GetTickCount64() - start_tick);
+            const uint64_t elapsed_nanoseconds  = elapsed_milliseconds * 1000000ULL;
+            return elapsed_nanoseconds >= timeout ? 0ULL : timeout - elapsed_nanoseconds;
+        }
+#endif
 
         struct D3D12RHIDescriptorPool final : RHIDescriptorPool
         {
@@ -1922,14 +2006,24 @@ namespace Piccolo
         m_dummy_descriptor_pool = new D3D12RHIDescriptorPool();
         m_dummy_graphics_queue  = new D3D12RHIQueue();
         m_dummy_compute_queue   = new D3D12RHIQueue();
+#ifdef _WIN32
+        static_cast<D3D12RHIQueue*>(m_dummy_graphics_queue)->command_queue = m_d3d12_command_queue.Get();
+        static_cast<D3D12RHIQueue*>(m_dummy_compute_queue)->command_queue  = m_d3d12_command_queue.Get();
+#endif
 
         for (auto& command_buffer : m_dummy_command_buffers)
         {
             command_buffer = new D3D12RHICommandBuffer();
         }
+
+        RHIFenceCreateInfo signaled_fence_info {};
+        signaled_fence_info.flags = RHI_FENCE_CREATE_SIGNALED_BIT;
         for (auto& fence : m_dummy_fences)
         {
-            fence = new D3D12RHIFence();
+            if (!createFence(&signaled_fence_info, fence))
+            {
+                throw std::runtime_error("Failed to create D3D12 frame fence");
+            }
         }
 
         m_swapchain_viewport.x        = 0.0f;
@@ -1949,7 +2043,11 @@ namespace Piccolo
         createSwapchainImageViews();
         createFramebufferImageAndView();
 
-        m_dummy_texture_copy_semaphore = new D3D12RHISemaphore();
+        RHISemaphoreCreateInfo texture_copy_semaphore_info {};
+        if (!createSemaphore(&texture_copy_semaphore_info, m_dummy_texture_copy_semaphore))
+        {
+            throw std::runtime_error("Failed to create D3D12 texture copy semaphore");
+        }
 
         m_current_command_buffer = m_dummy_command_buffers[0];
         m_current_frame_index    = 0;
@@ -2018,9 +2116,9 @@ namespace Piccolo
         m_dummy_command_pool = nullptr;
         delete m_dummy_descriptor_pool;
         m_dummy_descriptor_pool = nullptr;
-        delete m_dummy_graphics_queue;
+        delete static_cast<D3D12RHIQueue*>(m_dummy_graphics_queue);
         m_dummy_graphics_queue = nullptr;
-        delete m_dummy_compute_queue;
+        delete static_cast<D3D12RHIQueue*>(m_dummy_compute_queue);
         m_dummy_compute_queue = nullptr;
 
         for (auto& command_buffer : m_dummy_command_buffers)
@@ -2058,7 +2156,7 @@ namespace Piccolo
         delete m_depth_desc.depth_image_view;
         m_depth_desc.depth_image_view = nullptr;
 
-        delete m_dummy_texture_copy_semaphore;
+        delete static_cast<D3D12RHISemaphore*>(m_dummy_texture_copy_semaphore);
         m_dummy_texture_copy_semaphore = nullptr;
 
         m_swapchain_desc.imageViews.clear();
@@ -3163,8 +3261,43 @@ bool D3D12RHI::createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo*
 
 bool D3D12RHI::createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence* &pFence)
 {
+    auto* fence = new D3D12RHIFence();
+#ifdef _WIN32
+    if (m_d3d12_device == nullptr)
+    {
+        delete fence;
+        pFence = nullptr;
+        return false;
+    }
+
+    const bool initially_signaled =
+        pCreateInfo != nullptr && (pCreateInfo->flags & RHI_FENCE_CREATE_SIGNALED_BIT) != 0;
+    const uint64_t initial_value = initially_signaled ? 1ULL : 0ULL;
+    if (FAILED(m_d3d12_device->CreateFence(initial_value,
+                                           D3D12_FENCE_FLAG_NONE,
+                                           IID_PPV_ARGS(&fence->fence))))
+    {
+        delete fence;
+        pFence = nullptr;
+        return false;
+    }
+
+    fence->event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (fence->event == nullptr)
+    {
+        delete fence;
+        pFence = nullptr;
+        return false;
+    }
+
+    fence->next_signal_value = initial_value;
+    fence->wait_value        = initially_signaled ? initial_value : 1ULL;
+    fence->has_pending_signal = !initially_signaled;
+    fence->signaled          = initially_signaled;
+#else
     (void)pCreateInfo;
-    pFence = new D3D12RHIFence();
+#endif
+    pFence = fence;
     return true;
 }
 
@@ -3735,26 +3868,168 @@ bool D3D12RHI::createSampler(const RHISamplerCreateInfo* pCreateInfo, RHISampler
 bool D3D12RHI::createSemaphore(const RHISemaphoreCreateInfo* pCreateInfo, RHISemaphore* &pSemaphore)
 {
     (void)pCreateInfo;
-    pSemaphore = new D3D12RHISemaphore();
+    auto* semaphore = new D3D12RHISemaphore();
+#ifdef _WIN32
+    if (m_d3d12_device == nullptr)
+    {
+        delete semaphore;
+        pSemaphore = nullptr;
+        return false;
+    }
+
+    if (FAILED(m_d3d12_device->CreateFence(0,
+                                           D3D12_FENCE_FLAG_NONE,
+                                           IID_PPV_ARGS(&semaphore->fence))))
+    {
+        delete semaphore;
+        pSemaphore = nullptr;
+        return false;
+    }
+
+    semaphore->event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (semaphore->event == nullptr)
+    {
+        delete semaphore;
+        pSemaphore = nullptr;
+        return false;
+    }
+#endif
+    pSemaphore = semaphore;
     return true;
 }
 
 bool D3D12RHI::waitForFencesPFN(uint32_t fenceCount, RHIFence* const* pFence, RHIBool32 waitAll, uint64_t timeout)
 {
+#ifdef _WIN32
+    if (fenceCount == 0)
+    {
+        return true;
+    }
+    if (pFence == nullptr)
+    {
+        return false;
+    }
+
+    const ULONGLONG start_tick = timeout == UINT64_MAX ? 0ULL : GetTickCount64();
+    if (!waitAll)
+    {
+        std::vector<HANDLE>        wait_events;
+        std::vector<D3D12RHIFence*> wait_fences;
+        wait_events.reserve(fenceCount);
+        wait_fences.reserve(fenceCount);
+
+        for (uint32_t i = 0; i < fenceCount; ++i)
+        {
+            auto* fence = static_cast<D3D12RHIFence*>(pFence[i]);
+            if (fence == nullptr || fence->fence == nullptr || fence->event == nullptr)
+            {
+                return false;
+            }
+
+            if (fence->fence->GetCompletedValue() >= fence->wait_value)
+            {
+                fence->has_pending_signal = false;
+                fence->signaled           = true;
+                return true;
+            }
+            if (FAILED(fence->fence->SetEventOnCompletion(fence->wait_value, fence->event)))
+            {
+                return false;
+            }
+            wait_events.push_back(fence->event);
+            wait_fences.push_back(fence);
+        }
+
+        if (wait_events.size() <= MAXIMUM_WAIT_OBJECTS)
+        {
+            const DWORD wait_result = WaitForMultipleObjects(static_cast<DWORD>(wait_events.size()),
+                                                             wait_events.data(),
+                                                             FALSE,
+                                                             d3d12FenceTimeoutMilliseconds(timeout));
+            if (wait_result >= WAIT_OBJECT_0 && wait_result < WAIT_OBJECT_0 + wait_events.size())
+            {
+                D3D12RHIFence* completed_fence = wait_fences[wait_result - WAIT_OBJECT_0];
+                completed_fence->has_pending_signal = false;
+                completed_fence->signaled           = true;
+                return true;
+            }
+            return false;
+        }
+
+        while (timeout == UINT64_MAX || remainingD3D12FenceTimeout(timeout, start_tick) > 0)
+        {
+            for (D3D12RHIFence* fence : wait_fences)
+            {
+                if (fence->fence->GetCompletedValue() >= fence->wait_value)
+                {
+                    fence->has_pending_signal = false;
+                    fence->signaled           = true;
+                    return true;
+                }
+            }
+            Sleep(1);
+        }
+
+        return false;
+    }
+
+    for (uint32_t i = 0; i < fenceCount; ++i)
+    {
+        auto* fence = static_cast<D3D12RHIFence*>(pFence[i]);
+        if (fence == nullptr || fence->fence == nullptr)
+        {
+            return false;
+        }
+
+        const bool completed = waitForD3D12FenceValue(fence->fence.Get(),
+                                                      fence->event,
+                                                      fence->wait_value,
+                                                      remainingD3D12FenceTimeout(timeout, start_tick));
+        if (!completed)
+        {
+            return false;
+        }
+
+        fence->has_pending_signal = false;
+        fence->signaled           = true;
+        if (!waitAll)
+        {
+            return true;
+        }
+    }
+#else
     (void)fenceCount;
     (void)pFence;
     (void)waitAll;
     (void)timeout;
-#ifdef _WIN32
-    waitForGpu();
 #endif
     return true;
 }
 
 bool D3D12RHI::resetFencesPFN(uint32_t fenceCount, RHIFence* const* pFences)
 {
+#ifdef _WIN32
+    if (fenceCount > 0 && pFences == nullptr)
+    {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < fenceCount; ++i)
+    {
+        auto* fence = static_cast<D3D12RHIFence*>(pFences[i]);
+        if (fence == nullptr || fence->fence == nullptr)
+        {
+            return false;
+        }
+
+        fence->wait_value         = fence->next_signal_value + 1ULL;
+        fence->has_pending_signal = true;
+        fence->signaled           = false;
+    }
+#else
     (void)fenceCount;
     (void)pFences;
+#endif
     return true;
 }
 
@@ -5191,10 +5466,12 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
 
 bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence)
 {
-    (void)queue;
-    (void)fence;
 #ifdef _WIN32
-    if (m_d3d12_command_queue == nullptr)
+    auto* d3d_queue = static_cast<D3D12RHIQueue*>(queue);
+    ID3D12CommandQueue* command_queue =
+        (d3d_queue != nullptr && d3d_queue->command_queue != nullptr) ? d3d_queue->command_queue :
+                                                                        m_d3d12_command_queue.Get();
+    if (command_queue == nullptr)
     {
         return false;
     }
@@ -5234,18 +5511,90 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
                     command_lists.push_back(d3d_command_buffer->command_list.Get());
                 }
             }
+
+            for (uint32_t semaphore_index = 0; semaphore_index < pSubmits[i].waitSemaphoreCount; ++semaphore_index)
+            {
+                if (pSubmits[i].pWaitSemaphores == nullptr)
+                {
+                    return false;
+                }
+
+                auto* semaphore = static_cast<D3D12RHISemaphore*>(pSubmits[i].pWaitSemaphores[semaphore_index]);
+                if (semaphore != nullptr &&
+                    semaphore->fence != nullptr &&
+                    semaphore->has_pending_signal)
+                {
+                    if (FAILED(command_queue->Wait(semaphore->fence.Get(), semaphore->wait_value)))
+                    {
+                        return false;
+                    }
+                    semaphore->has_pending_signal = false;
+                }
+            }
         }
     }
 
-    if (command_lists.empty())
+    if (!command_lists.empty())
     {
-        return true;
+        command_queue->ExecuteCommandLists(static_cast<UINT>(command_lists.size()), command_lists.data());
     }
 
-    m_d3d12_command_queue->ExecuteCommandLists(static_cast<UINT>(command_lists.size()), command_lists.data());
-    waitForGpu();
+    if (pSubmits != nullptr)
+    {
+        for (uint32_t i = 0; i < submitCount; ++i)
+        {
+            for (uint32_t semaphore_index = 0; semaphore_index < pSubmits[i].signalSemaphoreCount; ++semaphore_index)
+            {
+                if (pSubmits[i].pSignalSemaphores == nullptr)
+                {
+                    return false;
+                }
+
+                auto* semaphore =
+                    static_cast<D3D12RHISemaphore*>(const_cast<RHISemaphore*>(pSubmits[i].pSignalSemaphores[semaphore_index]));
+                if (semaphore == nullptr || semaphore->fence == nullptr)
+                {
+                    return false;
+                }
+
+                const uint64_t signal_value = semaphore->next_signal_value + 1ULL;
+                if (FAILED(command_queue->Signal(semaphore->fence.Get(), signal_value)))
+                {
+                    return false;
+                }
+                semaphore->next_signal_value = signal_value;
+                semaphore->wait_value        = signal_value;
+                semaphore->has_pending_signal = true;
+            }
+        }
+    }
+
+    if (fence != nullptr)
+    {
+        auto* d3d_fence = static_cast<D3D12RHIFence*>(fence);
+        if (d3d_fence == nullptr || d3d_fence->fence == nullptr)
+        {
+            return false;
+        }
+
+        if (!d3d_fence->has_pending_signal)
+        {
+            d3d_fence->wait_value = d3d_fence->next_signal_value + 1ULL;
+        }
+
+        if (FAILED(command_queue->Signal(d3d_fence->fence.Get(), d3d_fence->wait_value)))
+        {
+            return false;
+        }
+
+        d3d_fence->next_signal_value = (std::max)(d3d_fence->next_signal_value, d3d_fence->wait_value);
+        d3d_fence->has_pending_signal = true;
+        d3d_fence->signaled           = false;
+    }
     return true;
 #else
+    (void)queue;
+    (void)fence;
     (void)submitCount;
     (void)pSubmits;
     return true;
@@ -5254,7 +5603,20 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
 
 bool D3D12RHI::queueWaitIdle(RHIQueue* queue)
 {
+#ifdef _WIN32
+    auto* d3d_queue = static_cast<D3D12RHIQueue*>(queue);
+    if (d3d_queue != nullptr && d3d_queue->command_queue != nullptr && d3d_queue->command_queue != m_d3d12_command_queue.Get())
+    {
+        const uint64_t signal_value = ++m_d3d12_fence_value;
+        if (FAILED(d3d_queue->command_queue->Signal(m_d3d12_fence.Get(), signal_value)))
+        {
+            return false;
+        }
+        return waitForD3D12FenceValue(m_d3d12_fence.Get(), m_d3d12_fence_event, signal_value, UINT64_MAX);
+    }
+#else
     (void)queue;
+#endif
     waitForGpu();
     return true;
 }
@@ -5511,7 +5873,7 @@ void D3D12RHI::destroyShaderModule(RHIShader* shader)
 
 void D3D12RHI::destroySemaphore(RHISemaphore* semaphore)
 {
-    delete semaphore;
+    delete static_cast<D3D12RHISemaphore*>(semaphore);
     return;
 }
 
@@ -5847,7 +6209,11 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
     (void)index;
     if (m_dummy_texture_copy_semaphore == nullptr)
     {
-        m_dummy_texture_copy_semaphore = new D3D12RHISemaphore();
+        RHISemaphoreCreateInfo create_info {};
+        if (!createSemaphore(&create_info, m_dummy_texture_copy_semaphore))
+        {
+            m_dummy_texture_copy_semaphore = nullptr;
+        }
     }
     return m_dummy_texture_copy_semaphore;
 }

@@ -20,9 +20,9 @@
 - 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
 
 ### 后续迁移清单
-- 完善 D3D12 command buffer、queue、fence、semaphore 的真实多对象语义
+- D3D12 queue submit 已接入 fence-backed queue/fence/semaphore 语义，支持按具体 RHI fence 等待、重置和提交 signal
 - 完善 D3D12 resource barrier 的 per-subresource 状态跟踪与 render pass dependency/resolve 语义
-- 继续清理历史 `VulkanMesh` / `VulkanPBRMaterial` 命名，使资源结构命名完全后端无关
+- 继续完善 D3D12 render pass dependency/resolve 和更细粒度资源状态跟踪
 
 # Pilot引擎 0.0.8 版本发布说明
 ✨ 大家好！Pilot引擎自4月4日发布以来，我们很高兴得到很多开发者朋友们的关注，非常感谢社区开发者们的贡献！
