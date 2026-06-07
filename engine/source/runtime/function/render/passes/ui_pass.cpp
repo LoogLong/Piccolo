@@ -150,8 +150,8 @@ namespace Piccolo
         allocInfo.commandPool                 = m_rhi->getCommandPoor();
         allocInfo.commandBufferCount          = 1;
 
-        RHICommandBuffer* commandBuffer = new VulkanCommandBuffer();
-        if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&allocInfo, commandBuffer))
+        RHICommandBuffer* commandBuffer = nullptr;
+        if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&allocInfo, commandBuffer) || commandBuffer == nullptr)
         {
             throw std::runtime_error("failed to allocate command buffers!");
         }
@@ -165,7 +165,8 @@ namespace Piccolo
             throw std::runtime_error("Could not create one-time command buffer!");
         }
 
-        ImGui_ImplVulkan_CreateFontsTexture(((VulkanCommandBuffer*)commandBuffer)->getResource());
+        auto* vulkan_command_buffer = static_cast<VulkanCommandBuffer*>(commandBuffer);
+        ImGui_ImplVulkan_CreateFontsTexture(vulkan_command_buffer->getResource());
 
         if (RHI_SUCCESS != m_rhi->endCommandBuffer(commandBuffer))
         {

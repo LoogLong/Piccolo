@@ -3098,16 +3098,19 @@ namespace Piccolo
         command_buffer_allocate_info.commandBufferCount = pAllocateInfo->commandBufferCount;
 
         VkCommandBuffer vk_command_buffer;
-        pCommandBuffers = new RHICommandBuffer();
+        auto* command_buffer = new VulkanCommandBuffer();
         VkResult result = vkAllocateCommandBuffers(m_device, &command_buffer_allocate_info, &vk_command_buffer);
-        ((VulkanCommandBuffer*)pCommandBuffers)->setResource(vk_command_buffer);
 
         if (result == VK_SUCCESS)
         {
+            command_buffer->setResource(vk_command_buffer);
+            pCommandBuffers = command_buffer;
             return true;
         }
         else
         {
+            delete command_buffer;
+            pCommandBuffers = nullptr;
             LOG_ERROR("vkAllocateCommandBuffers failed!");
             return false;
         }
