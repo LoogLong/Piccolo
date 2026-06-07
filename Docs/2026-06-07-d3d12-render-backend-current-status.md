@@ -7,25 +7,21 @@ Date: 2026-06-07
 - Root repository: `D:\program\Piccolo`
 - Active worktree: `D:\program\Piccolo\.worktrees\d3d12-render-backend`
 - Branch: `feat/d3d12-render-backend`
-- HEAD at time of writing: `8c02a18 feat: handle d3d12 present results`
+- HEAD at time of latest update: `b173485 feat: support d3d12 image copy regions`
 - Main plan: `Docs\2026-06-06-d3d12-render-backend-implementation-plan.md`
 - Related progress docs:
   - `Docs\2026-06-07-d3d12-render-backend-progress.md`
   - `Docs\2026-06-07-d3d12-render-backend-current-status.md`
 
-Current code worktree changes before this status-document update were limited to the in-progress image-copy phase:
+Current worktree status after the latest implementation phase:
 
 ```text
-ReleaseNotes.md
-engine/source/runtime/function/render/interface/d3d12/d3d12_rhi.cpp
-engine/source/runtime/function/render/interface/d3d12/d3d12_rhi.h
-engine/source/runtime/function/render/interface/rhi.h
-engine/source/runtime/function/render/interface/vulkan/vulkan_rhi.cpp
-engine/source/runtime/function/render/interface/vulkan/vulkan_rhi.h
-engine/source/runtime/function/render/passes/particle_pass.cpp
+Clean after local commits:
+697d725 docs: refresh d3d12 backend current status
+b173485 feat: support d3d12 image copy regions
 ```
 
-This status document is documentation-only. It does not represent a completed implementation phase commit.
+This status document records both the documentation refresh and the completed image-copy implementation phase.
 
 ## 2. Completed Stages And Capabilities
 
@@ -33,6 +29,8 @@ The branch already contains multiple committed D3D12 backend phases. Recent comm
 
 ```text
 8c02a18 feat: handle d3d12 present results
+697d725 docs: refresh d3d12 backend current status
+b173485 feat: support d3d12 image copy regions
 6781912 docs: summarize d3d12 backend status
 c3c2b38 docs: add d3d12 backend progress report
 3d4f112 feat: handle d3d12 swapchain resize callbacks
@@ -98,7 +96,7 @@ Confirmed completed or substantially completed areas, mapped to the implementati
 
 - Task 11 - Command recording and submission:
   - Per-command-buffer recording, vertex/index binding, descriptor binding, queue/fence synchronization, command debug markers, submit, and present handling have been implemented.
-  - Task 11 Step 4 image copy generalization is currently in progress; see the next section.
+  - Task 11 Step 4 image copy generalization has been implemented and committed in `b173485`.
 
 - Task 12 - ImGui:
   - DX12 ImGui backend path has been wired.
@@ -109,11 +107,11 @@ Confirmed completed or substantially completed areas, mapped to the implementati
   - Documentation/progress notes exist and continue to be updated.
   - Full final validation matrix is still pending.
 
-## 3. Current In-Progress Work
+## 3. Recently Completed Work
 
 Current phase: Task 11 Step 4 - generalize image-to-image copy to region/subresource.
 
-Uncommitted implementation changes currently include:
+Committed implementation in `b173485 feat: support d3d12 image copy regions` includes:
 
 - `engine/source/runtime/function/render/interface/rhi.h`
   - Adds a new pure virtual `cmdCopyImageToImage` overload that accepts `regionCount` and `RHIImageBlit*`.
@@ -140,30 +138,27 @@ Uncommitted implementation changes currently include:
 - `ReleaseNotes.md`
   - Notes the D3D12 image-to-image copy region/subresource work.
 
-Open reviewer issue from Darwin:
+Darwin reviewer issue resolved:
 
-- In `engine/source/runtime/function/render/interface/d3d12/d3d12_rhi.cpp`, D3D12 region bounds are still clamped against base `src->width`, `src->height`, `dst->width`, and `dst->height`.
-- For non-zero mip copies, bounds must be validated against the selected mip dimensions, e.g. `max(1, base >> mipLevel)`.
-- The fix should compute source and destination dimensions from `region.srcSubresource.mipLevel` and `region.dstSubresource.mipLevel`, then use those dimensions for source-box clamp, destination offset validation, and copy extent clamp.
+- D3D12 region bounds now compute selected source/destination mip dimensions with `max(1, base >> mipLevel)`.
+- Source box clamp, destination offset validation, and destination extent clamp use the selected mip dimensions instead of base-level width/height.
+- This closes the previously reported non-zero mip bounds issue.
 
 Current phase status:
 
-- `git diff --check` was reported as passed before the reviewer finding.
-- Debug `PiccoloEditor` build was reported as passing after explicit aspect-flag casts fixed MSVC narrowing.
-- The D3D12 smoke command and log scan still need to be rerun after the mip-dimension clamp fix.
-- This image-copy phase has not been committed yet.
+- `git diff --check` passed after the mip-dimension clamp fix.
+- Debug `PiccoloEditor` build passed after the mip-dimension clamp fix.
+- D3D12 smoke boot passed after the mip-dimension clamp fix.
+- D3D12 log error scan had no matches; `rg` exit code `1` was the expected no-match result.
+- The image-copy phase is committed as `b173485 feat: support d3d12 image copy regions`.
 
 ## 4. Remaining Work
 
 Immediate next items:
 
-1. Fix Task 11 Step 4 D3D12 mip-dimension bounds validation.
-2. Rerun `git diff --check`.
-3. Rebuild Debug `PiccoloEditor`.
-4. Rerun the D3D12 boot smoke script.
-5. Rerun D3D12 log scan for debug-layer/device-loss/fallback/error patterns.
-6. Get reviewer sign-off for spec compliance and code quality.
-7. Commit the completed image-copy phase locally.
+1. Collect and evaluate any late subagent reviewer findings if they arrive after `b173485`.
+2. Continue plan-level follow-up validation for Windows Vulkan and non-Windows Vulkan paths.
+3. Keep expanding D3D12 runtime validation around resize, long-running editor sessions, and complex resource-state combinations.
 
 Plan-level follow-up items still needing final confirmation:
 
@@ -194,12 +189,13 @@ cmake --build build --config Debug --target PiccoloEditor -- /verbosity:minimal
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -TimeoutSeconds 20
 ```
 
-Reported status:
+Latest verified status:
 
-- `git diff --check`: passed before the latest open reviewer item.
-- Debug `PiccoloEditor` build: passed after explicit aspect-flag casts.
-- D3D12 smoke/log scan: needs rerun after the mip-dimension clamp fix.
-- Current image-copy phase: uncommitted.
+- `git diff --check`: passed.
+- Debug `PiccoloEditor` build: passed; only existing MSVC `stdext::checked_array_iterator` and `LNK4098` warnings were observed.
+- D3D12 smoke: passed; log contained `Initialized RHI backend: D3D12` and `engine start`.
+- D3D12 error log scan: no matches for debug-layer/device-loss/fallback/error patterns.
+- Current image-copy phase: committed as `b173485 feat: support d3d12 image copy regions`.
 
 Recommended verification before the next phase commit:
 
@@ -212,10 +208,10 @@ rg -n "D3D12 ERROR|DEVICE_REMOVED|DXGI_ERROR|resource state|descriptor heap|root
 
 Expected log-scan result: no matches; `rg` exit code `1` is expected when no error patterns are found.
 
-Suggested commit message after the image-copy phase is fixed and verified:
+Completed image-copy phase commit:
 
 ```text
-feat: support d3d12 image copy regions
+b173485 feat: support d3d12 image copy regions
 ```
 
 ## 6. Operating Constraints
@@ -230,6 +226,5 @@ feat: support d3d12 image copy regions
 
 ## 7. Unconfirmed Assumptions
 
-- The current image-copy implementation state is based on the visible git diff summary and reviewer notification, not a fresh full line-by-line review of every changed code block.
-- `Carver` code-quality review may still have been running when this status was prepared; any later findings should supersede this document.
-- The reported build/smoke status reflects the immediately preceding implementation session and should be rerun after the D3D12 mip clamp fix.
+- `Carver` and `Pascal` reviewer agents had not returned before the verified local commit; any later findings should be handled as follow-up review feedback.
+- This document records Debug build and D3D12 smoke validation only; broader Windows Vulkan and non-Windows Vulkan validation remains pending.
