@@ -2624,6 +2624,50 @@ void D3D12RHI::createSwapchain()
     m_swapchain_viewport.maxDepth = 1.0f;
     m_swapchain_scissor.offset    = {0, 0};
     m_swapchain_scissor.extent    = {m_window_width, m_window_height};
+#ifdef _WIN32
+    if (m_d3d12_swapchain == nullptr)
+    {
+        if (m_window == nullptr ||
+            m_dxgi_factory == nullptr ||
+            m_d3d12_device == nullptr ||
+            m_d3d12_command_queue == nullptr)
+        {
+            LOG_ERROR("D3D12 createSwapchain requires an initialized window, DXGI factory, device, and command queue");
+            return;
+        }
+
+        HWND hwnd = glfwGetWin32Window(m_window);
+        if (hwnd == nullptr)
+        {
+            LOG_ERROR("D3D12 createSwapchain failed to get HWND from GLFW window");
+            return;
+        }
+
+        createSwapchain(hwnd);
+
+        if (m_d3d12_rtv_heap == nullptr || m_d3d12_dsv_heap == nullptr)
+        {
+            createRenderTargetViews();
+        }
+        else
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = m_d3d12_rtv_heap->GetCPUDescriptorHandleForHeapStart();
+            for (uint32_t i = 0; i < m_swapchain_buffer_count; ++i)
+            {
+                if (FAILED(m_d3d12_swapchain->GetBuffer(i, IID_PPV_ARGS(&m_d3d12_render_targets[i]))))
+                {
+                    LOG_ERROR("D3D12 createSwapchain failed to get swapchain back buffer");
+                    return;
+                }
+                m_d3d12_device->CreateRenderTargetView(m_d3d12_render_targets[i].Get(), nullptr, rtv_handle);
+                rtv_handle.ptr += static_cast<SIZE_T>(m_d3d12_rtv_descriptor_size);
+            }
+            m_d3d12_rtv_descriptor_next = (std::max)(m_d3d12_rtv_descriptor_next, m_swapchain_buffer_count);
+        }
+
+        m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+    }
+#endif
     return;
 }
 
@@ -3047,55 +3091,68 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
     }
 
 #ifdef _WIN32
-    if (src->resource != nullptr &&
-        dst->resource != nullptr &&
-        dst->heap_type != D3D12_HEAP_TYPE_UPLOAD)
+    if (src->resource == nullptr || dst->resource == nullptr)
     {
-        const D3D12_RESOURCE_STATES src_previous_state = src->current_state;
-        const D3D12_RESOURCE_STATES dst_previous_state = dst->current_state;
-        const bool copied = executeImmediateCommands(
-            [&](ID3D12GraphicsCommandList* command_list)
-            {
-                if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
-                {
-                    transitionResource(command_list,
-                                       src->resource.Get(),
-                                       src->current_state,
-                                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-                }
-                if (dst->heap_type == D3D12_HEAP_TYPE_DEFAULT)
-                {
-                    transitionResource(command_list,
-                                       dst->resource.Get(),
-                                       dst->current_state,
-                                       D3D12_RESOURCE_STATE_COPY_DEST);
-                }
+        LOG_ERROR("D3D12 copyBuffer requires GPU resources");
+        return;
+    }
+    if (dst->heap_type == D3D12_HEAP_TYPE_UPLOAD)
+    {
+        LOG_ERROR("D3D12 copyBuffer cannot copy into an upload heap destination");
+        return;
+    }
 
-                command_list->CopyBufferRegion(dst->resource.Get(), dstOffset, src->resource.Get(), srcOffset, size);
-
-                if (dst->heap_type == D3D12_HEAP_TYPE_DEFAULT)
-                {
-                    transitionResource(command_list, dst->resource.Get(), dst->current_state, dst_previous_state);
-                }
-                if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
-                {
-                    transitionResource(command_list, src->resource.Get(), src->current_state, src_previous_state);
-                }
-            });
-
-        if (copied)
+    const D3D12_RESOURCE_STATES src_previous_state = src->current_state;
+    const D3D12_RESOURCE_STATES dst_previous_state = dst->current_state;
+    const bool copied = executeImmediateCommands(
+        [&](ID3D12GraphicsCommandList* command_list)
         {
-            if (!src->host_data.empty() && !dst->host_data.empty())
+            if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
             {
-                std::memcpy(dst->host_data.data() + static_cast<size_t>(dstOffset),
-                            src->host_data.data() + static_cast<size_t>(srcOffset),
-                            static_cast<size_t>(size));
+                transitionResource(command_list,
+                                   src->resource.Get(),
+                                   src->current_state,
+                                   D3D12_RESOURCE_STATE_COPY_SOURCE);
             }
-            return;
+            if (dst->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+            {
+                transitionResource(command_list,
+                                   dst->resource.Get(),
+                                   dst->current_state,
+                                   D3D12_RESOURCE_STATE_COPY_DEST);
+            }
+
+            command_list->CopyBufferRegion(dst->resource.Get(), dstOffset, src->resource.Get(), srcOffset, size);
+
+            if (dst->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+            {
+                transitionResource(command_list, dst->resource.Get(), dst->current_state, dst_previous_state);
+            }
+            if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+            {
+                transitionResource(command_list, src->resource.Get(), src->current_state, src_previous_state);
+            }
+        });
+
+    if (!copied)
+    {
+        LOG_ERROR("D3D12 copyBuffer command execution failed");
+        return;
+    }
+    if (!src->host_data.empty() && !dst->host_data.empty())
+    {
+        const size_t src_offset = static_cast<size_t>(srcOffset);
+        const size_t dst_offset = static_cast<size_t>(dstOffset);
+        const size_t copy_size  = static_cast<size_t>(size);
+        if (src_offset <= src->host_data.size() &&
+            dst_offset <= dst->host_data.size() &&
+            copy_size <= src->host_data.size() - src_offset &&
+            copy_size <= dst->host_data.size() - dst_offset)
+        {
+            std::memcpy(dst->host_data.data() + dst_offset, src->host_data.data() + src_offset, copy_size);
         }
     }
-#endif
-
+#else
     if (!src->host_data.empty() && !dst->host_data.empty())
     {
         const size_t src_offset = static_cast<size_t>(srcOffset);
@@ -3106,6 +3163,7 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
             std::memcpy(dst->host_data.data() + dst_offset, src->host_data.data() + src_offset, copy_size);
         }
     }
+#endif
     return;
 }
 
@@ -5447,6 +5505,17 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
     auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
     if (command_list == nullptr || src == nullptr || dst == nullptr)
     {
+        LOG_ERROR("D3D12 cmdCopyBuffer requires an open command list and valid buffers");
+        return;
+    }
+    if (src->resource == nullptr || dst->resource == nullptr)
+    {
+        LOG_ERROR("D3D12 cmdCopyBuffer requires GPU resources");
+        return;
+    }
+    if (dst->heap_type == D3D12_HEAP_TYPE_UPLOAD)
+    {
+        LOG_ERROR("D3D12 cmdCopyBuffer cannot copy into an upload heap destination");
         return;
     }
 
@@ -5464,14 +5533,12 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
     for (uint32_t i = 0; i < regionCount; ++i)
     {
         const RHIBufferCopy& region = regions[i];
-        if (src->resource == nullptr ||
-            dst->resource == nullptr ||
-            dst->heap_type == D3D12_HEAP_TYPE_UPLOAD ||
-            region.srcOffset > src->size ||
+        if (region.srcOffset > src->size ||
             region.dstOffset > dst->size ||
             region.size > src->size - region.srcOffset ||
             region.size > dst->size - region.dstOffset)
         {
+            LOG_ERROR("D3D12 cmdCopyBuffer skipped invalid copy region");
             continue;
         }
 
@@ -5497,9 +5564,16 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
         dst->map_host_data = false;
         if (!src->host_data.empty() && !dst->host_data.empty())
         {
-            std::memcpy(dst->host_data.data() + static_cast<size_t>(region.dstOffset),
-                        src->host_data.data() + static_cast<size_t>(region.srcOffset),
-                        static_cast<size_t>(region.size));
+            const size_t src_offset = static_cast<size_t>(region.srcOffset);
+            const size_t dst_offset = static_cast<size_t>(region.dstOffset);
+            const size_t copy_size  = static_cast<size_t>(region.size);
+            if (src_offset <= src->host_data.size() &&
+                dst_offset <= dst->host_data.size() &&
+                copy_size <= src->host_data.size() - src_offset &&
+                copy_size <= dst->host_data.size() - dst_offset)
+            {
+                std::memcpy(dst->host_data.data() + dst_offset, src->host_data.data() + src_offset, copy_size);
+            }
         }
     }
 #else
