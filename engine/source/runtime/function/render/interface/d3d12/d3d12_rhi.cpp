@@ -5891,6 +5891,16 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
         if (!m_d3d12_device)
         {
+            ComPtr<IDXGIAdapter> warp_adapter;
+            if (SUCCEEDED(m_dxgi_factory->EnumWarpAdapter(IID_PPV_ARGS(&warp_adapter))) &&
+                SUCCEEDED(D3D12CreateDevice(warp_adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_d3d12_device))))
+            {
+                LOG_WARN("D3D12 hardware adapter unavailable; using WARP software adapter");
+            }
+        }
+
+        if (!m_d3d12_device)
+        {
             throw std::runtime_error("Failed to create D3D12 device");
         }
     }
@@ -6015,6 +6025,11 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
     ID3D12Device* D3D12RHI::getD3D12Device() const
     {
         return m_d3d12_device.Get();
+    }
+
+    ID3D12CommandQueue* D3D12RHI::getD3D12GraphicsQueue() const
+    {
+        return m_d3d12_command_queue.Get();
     }
 
     ID3D12GraphicsCommandList* D3D12RHI::getD3D12CommandList() const

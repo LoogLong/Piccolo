@@ -30,6 +30,7 @@ namespace Piccolo
 #ifdef _WIN32
         GLFWwindow* getWindow() const;
         ID3D12Device* getD3D12Device() const;
+        ID3D12CommandQueue* getD3D12GraphicsQueue() const;
         ID3D12GraphicsCommandList* getD3D12CommandList() const;
         ID3D12DescriptorHeap* getD3D12ImGuiSrvHeap() const;
         D3D12_CPU_DESCRIPTOR_HANDLE getD3D12ImGuiSrvCpuHandle() const;

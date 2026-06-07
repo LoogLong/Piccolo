@@ -122,8 +122,10 @@ RenderBackendAllowFallback=true
 ```
 
 - `RenderBackend` supports `Auto`, `Vulkan`, `D3D12`.
-- On Windows, `Auto` defaults to `D3D12`.
+- `RenderBackend=Auto` selects D3D12 on Windows and Vulkan on Linux/macOS.
+- `RenderBackend=Vulkan` forces Vulkan on Windows.
 - The bundled PiccoloEditor development and deployment configs explicitly select `RenderBackend=D3D12` on Windows.
 - D3D12 startup requires generated DXIL shader bytecode. Configure the build with `dxc.exe` available to build those shaders.
-- If `RenderBackendAllowFallback=true`, failed `D3D12` initialization will automatically fall back to `Vulkan`.
-- On non-Windows platforms, the D3D12 path is disabled and Vulkan remains the active backend.
+- If no hardware D3D12 adapter is available, the D3D12 backend can initialize through WARP for smoke validation.
+- `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan.
+- On non-Windows platforms, the D3D12 path is disabled.

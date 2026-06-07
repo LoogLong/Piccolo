@@ -12,11 +12,19 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        configuration: [debug, release]
+        configuration: [Debug, Release]
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: 'true'
-        
-      - name: Build
-        run: ./build_windows.bat ${{matrix.configuration}} 
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Build PiccoloEditor
+        run: cmake --build build --config ${{ matrix.configuration }} --target PiccoloEditor --parallel
+
+      - name: D3D12 backend smoke
+        if: matrix.configuration == 'Debug'
+        shell: pwsh
+        run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug

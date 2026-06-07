@@ -11,11 +11,13 @@
 - D3D12 主渲染路径已接入 shader bytecode、descriptor/root signature、render pass/framebuffer、graphics/compute pipeline、命令录制、粒子、拾取、debug draw 与 DX12 ImGui 分支
 - 公共 RHI 与渲染资源接口已从 Vulkan/VMA allocation 类型中解耦，VMA 仅保留在 Vulkan 后端内部
 - D3D12 descriptor 更新改为 CPU staging heap 写入后复制到 shader-visible heap，uniform buffer backing resource 按 CBV 要求对齐，资源创建失败会显式上报
+- D3D12 设备创建在无可用硬件 adapter 时可回退到 WARP software adapter，便于 Windows CI 执行启动烟测
+- Windows CI 已直接通过 CMake 构建 Debug/Release PiccoloEditor，Debug 构建会运行 D3D12 启动烟测
 
 ### 当前状态
 - Windows 随附 Editor 配置默认使用 `RenderBackend=D3D12`，`RenderBackend=Auto` 在 Windows 也会选择 D3D12
 - D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
-- 当前验证以 Debug 构建和 PiccoloEditor D3D12 启动烟测为主，尚未补充测试目标
+- 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
 
 ### 后续迁移清单
 - 完善 D3D12 command buffer、queue、fence、semaphore 的真实多对象语义
