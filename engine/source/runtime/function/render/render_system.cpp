@@ -218,9 +218,8 @@ namespace Piccolo
 
         if (m_rhi)
         {
-            m_rhi->clear();
+            m_rhi->waitForFences();
         }
-        m_rhi.reset();
 
         if (m_render_scene)
         {
@@ -228,17 +227,23 @@ namespace Piccolo
         }
         m_render_scene.reset();
 
-        if (m_render_resource)
-        {
-            m_render_resource->clear();
-        }
-        m_render_resource.reset();
-        
         if (m_render_pipeline)
         {
             m_render_pipeline->clear();
         }
         m_render_pipeline.reset();
+
+        if (m_render_resource)
+        {
+            m_render_resource->clear();
+        }
+        m_render_resource.reset();
+
+        if (m_rhi)
+        {
+            m_rhi->clear();
+        }
+        m_rhi.reset();
     }
 
     void RenderSystem::swapLogicRenderData() { m_swap_context.swapLogicRenderData(); }

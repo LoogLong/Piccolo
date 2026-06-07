@@ -2417,43 +2417,6 @@ namespace Piccolo
         destroyDefaultSampler(Default_Sampler_Linear);
         destroyDefaultSampler(Default_Sampler_Nearest);
         destroyMipmappedSampler();
-
-        if (m_d3d12_fence_event)
-        {
-            CloseHandle(m_d3d12_fence_event);
-            m_d3d12_fence_event = nullptr;
-        }
-
-        m_d3d12_fence.Reset();
-        for (auto& render_target : m_d3d12_render_targets)
-        {
-            render_target.Reset();
-        }
-        m_d3d12_sampler_heap.Reset();
-        m_d3d12_cbv_srv_uav_heap.Reset();
-        m_d3d12_sampler_cpu_heap.Reset();
-        m_d3d12_cbv_srv_uav_cpu_heap.Reset();
-        m_d3d12_dsv_heap.Reset();
-        m_d3d12_rtv_heap.Reset();
-        m_d3d12_swapchain.Reset();
-        m_d3d12_command_list.Reset();
-        m_d3d12_command_allocator.Reset();
-        m_d3d12_command_queue.Reset();
-        m_d3d12_device.Reset();
-        m_dxgi_factory.Reset();
-        m_d3d12_rtv_descriptor_size         = 0;
-        m_d3d12_dsv_descriptor_size         = 0;
-        m_d3d12_cbv_srv_uav_descriptor_size     = 0;
-        m_d3d12_sampler_descriptor_size         = 0;
-        m_d3d12_rtv_descriptor_capacity     = 0;
-        m_d3d12_dsv_descriptor_capacity     = 0;
-        m_d3d12_cbv_srv_uav_descriptor_capacity = 0;
-        m_d3d12_sampler_descriptor_capacity     = 0;
-        m_d3d12_rtv_descriptor_next         = 0;
-        m_d3d12_dsv_descriptor_next         = 0;
-        m_d3d12_cbv_srv_uav_descriptor_next     = 0;
-        m_d3d12_transient_cbv_srv_uav_descriptor_next = 0;
-        m_d3d12_sampler_descriptor_next         = 0;
 #endif
 
         delete m_dummy_command_pool;
@@ -2489,12 +2452,6 @@ namespace Piccolo
         }
         m_owned_swapchain_images.clear();
 
-#ifdef _WIN32
-        m_pending_texture_readbacks.clear();
-        m_pending_upload_buffers.clear();
-        m_d3d12_dispatch_command_signature.Reset();
-#endif
-
         delete m_depth_desc.depth_image;
         m_depth_desc.depth_image = nullptr;
         delete m_depth_desc.depth_image_view;
@@ -2506,6 +2463,8 @@ namespace Piccolo
         m_swapchain_desc.imageViews.clear();
         m_swapchain_desc.viewport = nullptr;
         m_swapchain_desc.scissor  = nullptr;
+
+        destroyDevice();
 
         m_current_command_buffer = nullptr;
         m_bound_graphics_pipeline = nullptr;
@@ -6513,6 +6472,50 @@ void D3D12RHI::destroyFence(RHIFence* fence)
 
 void D3D12RHI::destroyDevice()
 {
+#ifdef _WIN32
+    waitForGpu();
+
+    if (m_d3d12_fence_event)
+    {
+        CloseHandle(m_d3d12_fence_event);
+        m_d3d12_fence_event = nullptr;
+    }
+
+    m_d3d12_fence.Reset();
+    for (auto& render_target : m_d3d12_render_targets)
+    {
+        render_target.Reset();
+    }
+    m_d3d12_dispatch_command_signature.Reset();
+    m_d3d12_sampler_heap.Reset();
+    m_d3d12_cbv_srv_uav_heap.Reset();
+    m_d3d12_sampler_cpu_heap.Reset();
+    m_d3d12_cbv_srv_uav_cpu_heap.Reset();
+    m_d3d12_dsv_heap.Reset();
+    m_d3d12_rtv_heap.Reset();
+    m_d3d12_swapchain.Reset();
+    m_d3d12_command_list.Reset();
+    m_d3d12_command_allocator.Reset();
+    m_d3d12_command_queue.Reset();
+    m_d3d12_device.Reset();
+    m_dxgi_factory.Reset();
+    m_pending_texture_readbacks.clear();
+    m_pending_upload_buffers.clear();
+    m_d3d12_fence_value = 0;
+    m_d3d12_rtv_descriptor_size = 0;
+    m_d3d12_dsv_descriptor_size = 0;
+    m_d3d12_cbv_srv_uav_descriptor_size = 0;
+    m_d3d12_sampler_descriptor_size = 0;
+    m_d3d12_rtv_descriptor_capacity = 0;
+    m_d3d12_dsv_descriptor_capacity = 0;
+    m_d3d12_cbv_srv_uav_descriptor_capacity = 0;
+    m_d3d12_sampler_descriptor_capacity = 0;
+    m_d3d12_rtv_descriptor_next = 0;
+    m_d3d12_dsv_descriptor_next = 0;
+    m_d3d12_cbv_srv_uav_descriptor_next = 0;
+    m_d3d12_transient_cbv_srv_uav_descriptor_next = 0;
+    m_d3d12_sampler_descriptor_next = 0;
+#endif
     return;
 }
 
