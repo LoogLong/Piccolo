@@ -32,6 +32,9 @@ namespace Piccolo
             D3D12_HEAP_TYPE        heap_type {D3D12_HEAP_TYPE_DEFAULT};
             D3D12_RESOURCE_STATES  current_state {D3D12_RESOURCE_STATE_COMMON};
             std::vector<uint8_t>   host_data;
+            bool                   host_data_valid {false};
+            bool                   host_data_write_mapped {false};
+            bool                   host_data_uploadable {false};
             bool                   map_host_data {false};
         };
 
@@ -106,6 +109,9 @@ namespace Piccolo
             RHIDeviceSize        size {0};
             RHIBufferUsageFlags  usage {0};
             std::vector<uint8_t> host_data;
+            bool                 host_data_valid {false};
+            bool                 host_data_write_mapped {false};
+            bool                 host_data_uploadable {false};
             bool                 map_host_data {false};
         };
 
@@ -870,6 +876,129 @@ namespace Piccolo
             return D3D12_RESOURCE_STATE_COMMON;
         }
 
+        bool bufferHostMirrorRangeValid(const D3D12RHIBuffer& buffer, RHIDeviceSize offset, RHIDeviceSize size)
+        {
+            const size_t host_offset = static_cast<size_t>(offset);
+            const size_t host_size   = static_cast<size_t>(size);
+            return host_offset <= buffer.host_data.size() && host_size <= buffer.host_data.size() - host_offset;
+        }
+
+        bool bufferAccessIncludesGpuWrite(RHIAccessFlags access)
+        {
+            return hasFlag(access, RHI_ACCESS_SHADER_WRITE_BIT) ||
+                   hasFlag(access, RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) ||
+                   hasFlag(access, RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT) ||
+                   hasFlag(access, RHI_ACCESS_TRANSFER_WRITE_BIT) ||
+                   hasFlag(access, RHI_ACCESS_HOST_WRITE_BIT) ||
+                   hasFlag(access, RHI_ACCESS_MEMORY_WRITE_BIT) ||
+                   hasFlag(access, RHI_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT) ||
+                   hasFlag(access, RHI_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT) ||
+                   hasFlag(access, RHI_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR) ||
+                   hasFlag(access, RHI_ACCESS_COMMAND_PREPROCESS_WRITE_BIT_NV);
+        }
+
+        bool bufferHasHostVisibleMirror(const D3D12RHIBuffer& buffer)
+        {
+            return buffer.heap_type == D3D12_HEAP_TYPE_DEFAULT &&
+                   hasFlag(buffer.memory_properties, RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+                   !buffer.host_data.empty();
+        }
+
+        bool bufferHostMirrorUploadable(const D3D12RHIBuffer& buffer)
+        {
+            return buffer.host_data_valid || buffer.host_data_uploadable;
+        }
+
+        bool mappedHostRangeContains(const D3D12RHIDeviceMemory& memory, RHIDeviceSize offset, RHIDeviceSize size)
+        {
+            return memory.mapped_ptr != nullptr &&
+                   !memory.mapped_resource &&
+                   memory.owner_buffer != nullptr &&
+                   memory.owner_buffer->host_data_write_mapped &&
+                   offset >= memory.mapped_offset &&
+                   offset - memory.mapped_offset <= memory.mapped_size &&
+                   size <= memory.mapped_size - (offset - memory.mapped_offset);
+        }
+
+        bool bufferHostMirrorWholeRange(const D3D12RHIBuffer& buffer, RHIDeviceSize offset, RHIDeviceSize size)
+        {
+            return offset == 0 &&
+                   size >= buffer.size &&
+                   static_cast<RHIDeviceSize>(buffer.host_data.size()) >= buffer.size;
+        }
+
+        std::vector<D3D12RHIBuffer*>& trackedHostVisibleDefaultBuffers()
+        {
+            static std::vector<D3D12RHIBuffer*> buffers;
+            return buffers;
+        }
+
+        void registerHostVisibleDefaultBuffer(D3D12RHIBuffer& buffer)
+        {
+            if (!bufferHasHostVisibleMirror(buffer))
+            {
+                return;
+            }
+
+            auto& buffers = trackedHostVisibleDefaultBuffers();
+            if (std::find(buffers.begin(), buffers.end(), &buffer) == buffers.end())
+            {
+                buffers.push_back(&buffer);
+            }
+        }
+
+        void unregisterHostVisibleDefaultBuffer(D3D12RHIBuffer* buffer)
+        {
+            if (buffer == nullptr)
+            {
+                return;
+            }
+
+            auto& buffers = trackedHostVisibleDefaultBuffers();
+            buffers.erase(std::remove(buffers.begin(), buffers.end(), buffer), buffers.end());
+        }
+
+        void invalidateTrackedHostVisibleDefaultMirrors()
+        {
+            for (auto* buffer : trackedHostVisibleDefaultBuffers())
+            {
+                if (buffer != nullptr)
+                {
+                    buffer->host_data_valid = false;
+                    buffer->host_data_uploadable = false;
+                }
+            }
+        }
+
+        void updateBufferHostMirrorAfterCopy(D3D12RHIBuffer& src,
+                                             D3D12RHIBuffer& dst,
+                                             bool src_host_data_valid,
+                                             bool dst_host_data_valid,
+                                             RHIDeviceSize src_offset,
+                                             RHIDeviceSize dst_offset,
+                                             RHIDeviceSize size,
+                                             const char* context)
+        {
+            if (src_host_data_valid && dst_host_data_valid && !src.host_data.empty() && !dst.host_data.empty())
+            {
+                if (bufferHostMirrorRangeValid(src, src_offset, size) &&
+                    bufferHostMirrorRangeValid(dst, dst_offset, size))
+                {
+                    std::memcpy(dst.host_data.data() + static_cast<size_t>(dst_offset),
+                                src.host_data.data() + static_cast<size_t>(src_offset),
+                                static_cast<size_t>(size));
+                    dst.host_data_valid = true;
+                    dst.host_data_uploadable = false;
+                    return;
+                }
+
+                LOG_ERROR("{} skipped host mirror update for invalid copy range", context);
+            }
+
+            dst.host_data_valid = false;
+            dst.host_data_uploadable = false;
+        }
+
         D3D12_RESOURCE_FLAGS bufferResourceFlags(RHIBufferUsageFlags usage, D3D12_HEAP_TYPE heap_type)
         {
             if (heap_type == D3D12_HEAP_TYPE_DEFAULT && hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT))
@@ -1192,6 +1321,26 @@ namespace Piccolo
             }
         }
 
+        void rebuildDescriptorSetBufferLists(D3D12RHIDescriptorSet& descriptor_set)
+        {
+            descriptor_set.storage_buffers.clear();
+            descriptor_set.host_visible_default_buffers.clear();
+            for (const auto& descriptor : descriptor_set.buffer_descriptors)
+            {
+                if (descriptor.buffer == nullptr)
+                {
+                    continue;
+                }
+
+                appendUniqueBuffer(descriptor_set.storage_buffers, descriptor.buffer);
+                if (descriptor.buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT &&
+                    hasFlag(descriptor.buffer->memory_properties, RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+                {
+                    appendUniqueBuffer(descriptor_set.host_visible_default_buffers, descriptor.buffer);
+                }
+            }
+        }
+
         void upsertBufferDescriptor(D3D12RHIDescriptorSet& descriptor_set,
                                     const D3D12RHIDescriptorSet::BufferDescriptor& descriptor)
         {
@@ -1205,15 +1354,7 @@ namespace Piccolo
                 descriptor_set.buffer_descriptors.push_back(descriptor);
             }
 
-            if (descriptor.buffer != nullptr)
-            {
-                appendUniqueBuffer(descriptor_set.storage_buffers, descriptor.buffer);
-                if (descriptor.buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT &&
-                    hasFlag(descriptor.buffer->memory_properties, RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
-                {
-                    appendUniqueBuffer(descriptor_set.host_visible_default_buffers, descriptor.buffer);
-                }
-            }
+            rebuildDescriptorSetBufferLists(descriptor_set);
         }
 
         bool formatHasStencil(RHIFormat format)
@@ -1525,6 +1666,7 @@ namespace Piccolo
             if (size == 0)
             {
                 buffer.host_data.resize(static_cast<size_t>(size));
+                buffer.host_data_valid = buffer.heap_type == D3D12_HEAP_TYPE_UPLOAD;
                 return true;
             }
 
@@ -1570,6 +1712,8 @@ namespace Piccolo
             {
                 buffer.resource.Reset();
                 buffer.host_data.clear();
+                buffer.host_data_valid = false;
+                buffer.host_data_uploadable = false;
                 const HRESULT removed_reason = device->GetDeviceRemovedReason();
                 logD3D12InfoQueueMessages(device, "buffer creation failure");
                 LOG_ERROR("Failed to create D3D12 buffer resource (size={}, usage={}, memory_properties={}, heap_type={}, initial_state={}, flags={}, HRESULT=0x{:08X}, removed_reason=0x{:08X})",
@@ -1588,6 +1732,8 @@ namespace Piccolo
             {
                 buffer.host_data.resize(static_cast<size_t>(size));
             }
+            buffer.host_data_valid = false;
+            buffer.host_data_uploadable = false;
             return true;
         }
 
@@ -1928,6 +2074,7 @@ namespace Piccolo
                 buffer.resource == nullptr ||
                 buffer.heap_type != D3D12_HEAP_TYPE_DEFAULT ||
                 buffer.host_data.empty() ||
+                !bufferHostMirrorUploadable(buffer) ||
                 !hasFlag(buffer.memory_properties, RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
             {
                 return false;
@@ -1977,9 +2124,13 @@ namespace Piccolo
 
             const D3D12_RESOURCE_STATES previous_state = buffer.current_state;
             transitionResource(command_list, buffer.resource.Get(), buffer.current_state, D3D12_RESOURCE_STATE_COPY_DEST);
+            buffer.host_data_valid = false;
+            buffer.host_data_uploadable = false;
             command_list->CopyBufferRegion(buffer.resource.Get(), 0, upload_buffer.Get(), 0, buffer.size);
             transitionResource(command_list, buffer.resource.Get(), buffer.current_state, previous_state);
             pending_uploads.push_back(upload_buffer);
+            buffer.host_data_valid = true;
+            buffer.host_data_uploadable = false;
             return true;
         }
 
@@ -2965,10 +3116,12 @@ void D3D12RHI::createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMe
         delete d3d_buffer;
         throw std::runtime_error("Failed to create D3D12 buffer resource");
     }
+    registerHostVisibleDefaultBuffer(*d3d_buffer);
 #else
     d3d_buffer->size  = size;
     d3d_buffer->usage = usage;
     d3d_buffer->host_data.resize(static_cast<size_t>(size));
+    d3d_buffer->host_data_valid = true;
     (void)properties;
 #endif
     buffer = d3d_buffer;
@@ -2997,6 +3150,8 @@ void D3D12RHI::createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPro
             {
                 std::memcpy(mapped_data, data, static_cast<size_t>(copy_size));
                 d3d_buffer->resource->Unmap(0, nullptr);
+                d3d_buffer->host_data_valid = true;
+                d3d_buffer->host_data_uploadable = false;
             }
         }
         else if (d3d_buffer->resource != nullptr)
@@ -3023,11 +3178,15 @@ void D3D12RHI::createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPro
 #else
         const size_t host_copy_size = (std::min)(d3d_buffer->host_data.size(), static_cast<size_t>(copy_size));
         std::memcpy(d3d_buffer->host_data.data(), data, host_copy_size);
+        d3d_buffer->host_data_valid = true;
+        d3d_buffer->host_data_uploadable = false;
 #endif
         if (!d3d_buffer->host_data.empty())
         {
             const size_t host_copy_size = (std::min)(d3d_buffer->host_data.size(), static_cast<size_t>(copy_size));
             std::memcpy(d3d_buffer->host_data.data(), data, host_copy_size);
+            d3d_buffer->host_data_valid = true;
+            d3d_buffer->host_data_uploadable = false;
         }
     }
     return;
@@ -3057,12 +3216,14 @@ bool D3D12RHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCrea
         return false;
     }
 
+    registerHostVisibleDefaultBuffer(*d3d_buffer);
     pBuffer = d3d_buffer;
     return true;
 #else
     d3d_buffer->size  = pBufferCreateInfo->size;
     d3d_buffer->usage = pBufferCreateInfo->usage;
     d3d_buffer->host_data.resize(static_cast<size_t>(pBufferCreateInfo->size));
+    d3d_buffer->host_data_valid = true;
     pBuffer = d3d_buffer;
     return true;
 #endif
@@ -3087,6 +3248,7 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
     auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
     if (srcOffset > src->size || dstOffset > dst->size || size > src->size - srcOffset || size > dst->size - dstOffset)
     {
+        LOG_ERROR("D3D12 copyBuffer skipped invalid copy region");
         return;
     }
 
@@ -3104,6 +3266,8 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
 
     const D3D12_RESOURCE_STATES src_previous_state = src->current_state;
     const D3D12_RESOURCE_STATES dst_previous_state = dst->current_state;
+    const bool src_host_data_valid = src->host_data_valid;
+    const bool dst_host_data_valid = dst->host_data_valid;
     const bool copied = executeImmediateCommands(
         [&](ID3D12GraphicsCommandList* command_list)
         {
@@ -3120,6 +3284,8 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
                                    dst->resource.Get(),
                                    dst->current_state,
                                    D3D12_RESOURCE_STATE_COPY_DEST);
+                dst->host_data_valid = false;
+                dst->host_data_uploadable = false;
             }
 
             command_list->CopyBufferRegion(dst->resource.Get(), dstOffset, src->resource.Get(), srcOffset, size);
@@ -3139,30 +3305,23 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
         LOG_ERROR("D3D12 copyBuffer command execution failed");
         return;
     }
-    if (!src->host_data.empty() && !dst->host_data.empty())
-    {
-        const size_t src_offset = static_cast<size_t>(srcOffset);
-        const size_t dst_offset = static_cast<size_t>(dstOffset);
-        const size_t copy_size  = static_cast<size_t>(size);
-        if (src_offset <= src->host_data.size() &&
-            dst_offset <= dst->host_data.size() &&
-            copy_size <= src->host_data.size() - src_offset &&
-            copy_size <= dst->host_data.size() - dst_offset)
-        {
-            std::memcpy(dst->host_data.data() + dst_offset, src->host_data.data() + src_offset, copy_size);
-        }
-    }
+    updateBufferHostMirrorAfterCopy(*src,
+                                    *dst,
+                                    src_host_data_valid,
+                                    dst_host_data_valid,
+                                    srcOffset,
+                                    dstOffset,
+                                    size,
+                                    "D3D12 copyBuffer");
 #else
-    if (!src->host_data.empty() && !dst->host_data.empty())
-    {
-        const size_t src_offset = static_cast<size_t>(srcOffset);
-        const size_t dst_offset = static_cast<size_t>(dstOffset);
-        const size_t copy_size  = static_cast<size_t>(size);
-        if (src_offset + copy_size <= src->host_data.size() && dst_offset + copy_size <= dst->host_data.size())
-        {
-            std::memcpy(dst->host_data.data() + dst_offset, src->host_data.data() + src_offset, copy_size);
-        }
-    }
+    updateBufferHostMirrorAfterCopy(*src,
+                                    *dst,
+                                    src->host_data_valid,
+                                    dst->host_data_valid,
+                                    srcOffset,
+                                    dstOffset,
+                                    size,
+                                    "D3D12 copyBuffer");
 #endif
     return;
 }
@@ -5542,6 +5701,8 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
             continue;
         }
 
+        const bool src_host_data_valid = src->host_data_valid;
+        const bool dst_host_data_valid = dst->host_data_valid;
         if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
         {
             transitionResource(command_list,
@@ -5555,6 +5716,8 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
                                dst->resource.Get(),
                                dst->current_state,
                                D3D12_RESOURCE_STATE_COPY_DEST);
+            dst->host_data_valid = false;
+            dst->host_data_uploadable = false;
         }
         command_list->CopyBufferRegion(dst->resource.Get(),
                                        region.dstOffset,
@@ -5562,19 +5725,15 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
                                        region.srcOffset,
                                        region.size);
         dst->map_host_data = false;
-        if (!src->host_data.empty() && !dst->host_data.empty())
-        {
-            const size_t src_offset = static_cast<size_t>(region.srcOffset);
-            const size_t dst_offset = static_cast<size_t>(region.dstOffset);
-            const size_t copy_size  = static_cast<size_t>(region.size);
-            if (src_offset <= src->host_data.size() &&
-                dst_offset <= dst->host_data.size() &&
-                copy_size <= src->host_data.size() - src_offset &&
-                copy_size <= dst->host_data.size() - dst_offset)
-            {
-                std::memcpy(dst->host_data.data() + dst_offset, src->host_data.data() + src_offset, copy_size);
-            }
-        }
+        dst->host_data_write_mapped = false;
+        updateBufferHostMirrorAfterCopy(*src,
+                                        *dst,
+                                        src_host_data_valid,
+                                        dst_host_data_valid,
+                                        region.srcOffset,
+                                        region.dstOffset,
+                                        region.size,
+                                        "D3D12 cmdCopyBuffer");
     }
 #else
     (void)commandBuffer;
@@ -5610,9 +5769,14 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
             region.size <= src->host_data.size() - region.srcOffset &&
             region.size <= dst->host_data.size() - region.dstOffset)
         {
-            std::memcpy(dst->host_data.data() + static_cast<size_t>(region.dstOffset),
-                        src->host_data.data() + static_cast<size_t>(region.srcOffset),
-                        static_cast<size_t>(region.size));
+            updateBufferHostMirrorAfterCopy(*src,
+                                            *dst,
+                                            src->host_data_valid,
+                                            dst->host_data_valid,
+                                            region.srcOffset,
+                                            region.dstOffset,
+                                            region.size,
+                                            "D3D12 cmdCopyBuffer");
         }
     }
 #endif
@@ -5704,11 +5868,11 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
         for (uint32_t barrier_index = 0; barrier_index < memoryBarrierCount; ++barrier_index)
         {
             const RHIMemoryBarrier& memory_barrier = pMemoryBarriers[barrier_index];
-            if (hasFlag(memory_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
-                hasFlag(memory_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
-                hasFlag(memory_barrier.srcAccessMask, RHI_ACCESS_MEMORY_WRITE_BIT) ||
-                hasFlag(memory_barrier.dstAccessMask, RHI_ACCESS_MEMORY_WRITE_BIT))
+            if (bufferAccessIncludesGpuWrite(memory_barrier.srcAccessMask) ||
+                bufferAccessIncludesGpuWrite(memory_barrier.dstAccessMask))
             {
+                invalidateTrackedHostVisibleDefaultMirrors();
+
                 D3D12_RESOURCE_BARRIER barrier {};
                 barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
                 barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
@@ -5733,6 +5897,13 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
                 toD3D12BufferState(buffer_barrier.dstAccessMask, buffer->usage, buffer->heap_type);
             if (buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
             {
+                if (bufferAccessIncludesGpuWrite(buffer_barrier.srcAccessMask) ||
+                    bufferAccessIncludesGpuWrite(buffer_barrier.dstAccessMask))
+                {
+                    buffer->host_data_valid = false;
+                    buffer->host_data_uploadable = false;
+                }
+
                 if (buffer->current_state == target_state &&
                     (hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
                      hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT)))
@@ -6800,7 +6971,11 @@ void D3D12RHI::destroyCommandPool(RHICommandPool* commandPool)
 
 void D3D12RHI::destroyBuffer(RHIBuffer* &buffer)
 {
-    delete static_cast<D3D12RHIBuffer*>(buffer);
+    auto* d3d_buffer = static_cast<D3D12RHIBuffer*>(buffer);
+#ifdef _WIN32
+    unregisterHostVisibleDefaultBuffer(d3d_buffer);
+#endif
+    delete d3d_buffer;
     buffer = nullptr;
     return;
 }
@@ -6857,7 +7032,10 @@ bool D3D12RHI::mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDevic
             return false;
         }
 
-        D3D12_RANGE read_range {0, 0};
+        D3D12_RANGE read_range = d3d_buffer->heap_type == D3D12_HEAP_TYPE_READBACK ?
+                                     D3D12_RANGE {static_cast<SIZE_T>(offset),
+                                                  static_cast<SIZE_T>(offset + requested)} :
+                                     D3D12_RANGE {0, 0};
         void* mapped_base = nullptr;
         if (FAILED(d3d_buffer->resource->Map(0, &read_range, &mapped_base)) || mapped_base == nullptr)
         {
@@ -6870,6 +7048,17 @@ bool D3D12RHI::mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDevic
         d3d_memory->mapped_resource = true;
         *ppData                   = d3d_memory->mapped_ptr;
         return true;
+    }
+
+    if (d3d_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT &&
+        !d3d_buffer->map_host_data &&
+        !bufferHasHostVisibleMirror(*d3d_buffer))
+    {
+        return false;
+    }
+    if (d3d_buffer->heap_type != D3D12_HEAP_TYPE_DEFAULT && !d3d_buffer->map_host_data)
+    {
+        return false;
     }
 #endif
 
@@ -6891,6 +7080,12 @@ bool D3D12RHI::mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDevic
 #ifdef _WIN32
     d3d_memory->mapped_offset = offset;
     d3d_memory->mapped_size   = requested;
+    if (bufferHasHostVisibleMirror(*d3d_buffer))
+    {
+        d3d_buffer->host_data_write_mapped = true;
+        d3d_buffer->host_data_uploadable =
+            bufferHostMirrorWholeRange(*d3d_buffer, offset, requested);
+    }
 #endif
     *ppData                = d3d_memory->mapped_ptr;
     return true;
@@ -6909,7 +7104,44 @@ void D3D12RHI::unmapMemory(RHIDeviceMemory* memory)
         {
             D3D12_RANGE written_range {static_cast<SIZE_T>(d3d_memory->mapped_offset),
                                        static_cast<SIZE_T>(d3d_memory->mapped_offset + d3d_memory->mapped_size)};
-            d3d_memory->owner_buffer->resource->Unmap(0, &written_range);
+            D3D12_RANGE read_only_unmap_range {0, 0};
+            if (d3d_memory->owner_buffer->heap_type == D3D12_HEAP_TYPE_UPLOAD &&
+                bufferHostMirrorRangeValid(*d3d_memory->owner_buffer,
+                                           d3d_memory->mapped_offset,
+                                           d3d_memory->mapped_size))
+            {
+                std::memcpy(d3d_memory->owner_buffer->host_data.data() +
+                                static_cast<size_t>(d3d_memory->mapped_offset),
+                            d3d_memory->mapped_ptr,
+                            static_cast<size_t>(d3d_memory->mapped_size));
+                d3d_memory->owner_buffer->host_data_valid = true;
+                d3d_memory->owner_buffer->host_data_uploadable = false;
+            }
+            d3d_memory->owner_buffer->resource->Unmap(
+                0,
+                d3d_memory->owner_buffer->heap_type == D3D12_HEAP_TYPE_READBACK ? &read_only_unmap_range :
+                                                                                   &written_range);
+        }
+        else if (d3d_memory->owner_buffer != nullptr &&
+                 d3d_memory->mapped_ptr != nullptr &&
+                 bufferHasHostVisibleMirror(*d3d_memory->owner_buffer))
+        {
+            if (bufferHostMirrorRangeValid(*d3d_memory->owner_buffer,
+                                           d3d_memory->mapped_offset,
+                                           d3d_memory->mapped_size) &&
+                bufferHostMirrorWholeRange(*d3d_memory->owner_buffer,
+                                           d3d_memory->mapped_offset,
+                                           d3d_memory->mapped_size))
+            {
+                d3d_memory->owner_buffer->host_data_valid = true;
+                d3d_memory->owner_buffer->host_data_uploadable = true;
+            }
+            else
+            {
+                d3d_memory->owner_buffer->host_data_valid = false;
+                d3d_memory->owner_buffer->host_data_uploadable = false;
+            }
+            d3d_memory->owner_buffer->host_data_write_mapped = false;
         }
 #endif
         d3d_memory->mapped_ptr = nullptr;
@@ -6962,6 +7194,13 @@ void D3D12RHI::invalidateMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory
         D3D12_RANGE written_range {0, 0};
         buffer->resource->Unmap(0, &written_range);
         buffer->map_host_data = true;
+        buffer->host_data_valid = true;
+        buffer->host_data_uploadable = false;
+    }
+    else
+    {
+        buffer->host_data_valid = false;
+        buffer->host_data_uploadable = false;
     }
 #else
     (void)memory;
@@ -6974,8 +7213,6 @@ void D3D12RHI::invalidateMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory
 void D3D12RHI::flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size)
 {
     (void)pNext;
-    (void)offset;
-    (void)size;
 #ifdef _WIN32
     auto* d3d_memory = static_cast<D3D12RHIDeviceMemory*>(memory);
     if (d3d_memory == nullptr || d3d_memory->owner_buffer == nullptr)
@@ -6984,12 +7221,49 @@ void D3D12RHI::flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHI
     }
 
     auto* buffer = d3d_memory->owner_buffer;
-    if (buffer->resource == nullptr ||
-        buffer->heap_type != D3D12_HEAP_TYPE_DEFAULT ||
-        buffer->host_data.empty())
+    if (offset > buffer->size)
     {
         return;
     }
+    const RHIDeviceSize flush_size = size == RHI_WHOLE_SIZE ? buffer->size - offset : size;
+    if (flush_size > buffer->size - offset)
+    {
+        return;
+    }
+
+    if (buffer->heap_type == D3D12_HEAP_TYPE_UPLOAD)
+    {
+        if (d3d_memory->mapped_resource &&
+            d3d_memory->mapped_ptr != nullptr &&
+            offset >= d3d_memory->mapped_offset &&
+            offset - d3d_memory->mapped_offset <= d3d_memory->mapped_size &&
+            flush_size <= d3d_memory->mapped_size - (offset - d3d_memory->mapped_offset) &&
+            bufferHostMirrorRangeValid(*buffer, offset, flush_size))
+        {
+            std::memcpy(buffer->host_data.data() + static_cast<size_t>(offset),
+                        static_cast<uint8_t*>(d3d_memory->mapped_ptr) +
+                            static_cast<size_t>(offset - d3d_memory->mapped_offset),
+                        static_cast<size_t>(flush_size));
+            buffer->host_data_valid = true;
+            buffer->host_data_uploadable = false;
+        }
+        return;
+    }
+
+    if (buffer->resource == nullptr ||
+        !bufferHasHostVisibleMirror(*buffer))
+    {
+        return;
+    }
+
+    if (!mappedHostRangeContains(*d3d_memory, offset, flush_size) ||
+        !bufferHostMirrorRangeValid(*buffer, offset, flush_size) ||
+        !bufferHostMirrorWholeRange(*buffer, offset, flush_size))
+    {
+        return;
+    }
+    buffer->host_data_valid = true;
+    buffer->host_data_uploadable = true;
 
     auto* current_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
     auto* current_command_list = d3d12CommandListFor(m_current_command_buffer);
@@ -7784,6 +8058,8 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             D3D12_RANGE written_range {0, 0};
             pending_readback.readback_buffer->Unmap(0, &written_range);
             dst->map_host_data = true;
+            dst->host_data_valid = true;
+            dst->host_data_uploadable = false;
         }
 
         m_pending_texture_readbacks.clear();
