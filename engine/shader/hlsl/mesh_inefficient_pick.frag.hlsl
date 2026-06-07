@@ -1,6 +1,12 @@
 #include "common.hlsli"
 
-uint main(nointerpolation uint node_id : TEXCOORD0) : SV_Target0
+struct PickPSInput
 {
-    return node_id;
+    float4 position : SV_Position;
+    nointerpolation uint node_id : TEXCOORD0;
+};
+
+uint main(PickPSInput input) : SV_Target0
+{
+    return input.node_id;
 }
