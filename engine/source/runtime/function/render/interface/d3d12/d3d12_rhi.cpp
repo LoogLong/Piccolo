@@ -234,8 +234,10 @@ namespace Piccolo
 #ifdef _WIN32
             D3D12_CPU_DESCRIPTOR_HANDLE cbv_srv_uav_cpu_base {0};
             D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav_gpu_base {0};
+            D3D12_CPU_DESCRIPTOR_HANDLE cbv_srv_uav_staging_cpu_base {0};
             D3D12_CPU_DESCRIPTOR_HANDLE sampler_cpu_base {0};
             D3D12_GPU_DESCRIPTOR_HANDLE sampler_gpu_base {0};
+            D3D12_CPU_DESCRIPTOR_HANDLE sampler_staging_cpu_base {0};
 #endif
             std::vector<D3D12RHIBuffer*> storage_buffers;
             std::vector<D3D12RHIBuffer*> host_visible_default_buffers;
@@ -547,6 +549,60 @@ namespace Piccolo
             descriptor_capacity = desc.NumDescriptors;
             descriptor_next     = 0;
             return true;
+        }
+
+        bool createCpuDescriptorHeap(ID3D12Device* device,
+                                     D3D12_DESCRIPTOR_HEAP_TYPE type,
+                                     uint32_t descriptor_count,
+                                     ComPtr<ID3D12DescriptorHeap>& heap)
+        {
+            uint32_t descriptor_size = 0;
+            uint32_t descriptor_capacity = 0;
+            uint32_t descriptor_next = 0;
+            return createDescriptorHeap(device,
+                                        type,
+                                        descriptor_count,
+                                        false,
+                                        heap,
+                                        descriptor_size,
+                                        descriptor_capacity,
+                                        descriptor_next);
+        }
+
+        void logD3D12InfoQueueMessages(ID3D12Device* device, const char* context, UINT64 max_messages = 16)
+        {
+            if (device == nullptr)
+            {
+                return;
+            }
+
+            ComPtr<ID3D12InfoQueue> info_queue;
+            if (FAILED(device->QueryInterface(IID_PPV_ARGS(&info_queue))) || info_queue == nullptr)
+            {
+                return;
+            }
+
+            const UINT64 message_count = info_queue->GetNumStoredMessages();
+            const UINT64 first_message = message_count > max_messages ? message_count - max_messages : 0;
+            for (UINT64 message_index = first_message; message_index < message_count; ++message_index)
+            {
+                SIZE_T message_size = 0;
+                if (FAILED(info_queue->GetMessage(message_index, nullptr, &message_size)) || message_size == 0)
+                {
+                    continue;
+                }
+
+                std::vector<char> message_storage(message_size);
+                auto* message = reinterpret_cast<D3D12_MESSAGE*>(message_storage.data());
+                if (SUCCEEDED(info_queue->GetMessage(message_index, message, &message_size)) &&
+                    message->pDescription != nullptr)
+                {
+                    LOG_ERROR("D3D12 {} message {}: {}",
+                              context != nullptr ? context : "debug",
+                              static_cast<uint64_t>(message_index),
+                              message->pDescription);
+                }
+            }
         }
 
         bool reserveDescriptors(uint32_t count, uint32_t& next, uint32_t capacity, uint32_t& base)
@@ -1150,6 +1206,19 @@ namespace Piccolo
             return (std::min)(descriptor.range, descriptor.buffer->size - byte_offset);
         }
 
+        uint32_t resolvedStructuredBufferStride(uint32_t stride, RHIDeviceSize range)
+        {
+            if (range == 0)
+            {
+                return 0;
+            }
+
+            const RHIDeviceSize clamped_stride =
+                stride == 0 ? range : (std::min)(static_cast<RHIDeviceSize>(stride), range);
+            return static_cast<uint32_t>((std::min)(clamped_stride,
+                                                    static_cast<RHIDeviceSize>((std::numeric_limits<uint32_t>::max)())));
+        }
+
         void writeBufferDescriptor(ID3D12Device* device,
                                    D3D12_CPU_DESCRIPTOR_HANDLE dst_handle,
                                    const D3D12RHIDescriptorSetLayout::BindingRange& binding,
@@ -1171,26 +1240,49 @@ namespace Piccolo
                     return;
                 }
 
+                const RHIDeviceSize resource_width = descriptor.buffer->resource->GetDesc().Width;
+                if (byte_offset >= resource_width)
+                {
+                    device->CreateConstantBufferView(nullptr, dst_handle);
+                    return;
+                }
+
+                const RHIDeviceSize available_size = resource_width - byte_offset;
+                const RHIDeviceSize aligned_range = alignUp(range, 256);
+                if (aligned_range == 0 || aligned_range > available_size)
+                {
+                    device->CreateConstantBufferView(nullptr, dst_handle);
+                    return;
+                }
+
                 D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc {};
                 cbv_desc.BufferLocation = descriptor.buffer->resource->GetGPUVirtualAddress() + byte_offset;
-                cbv_desc.SizeInBytes    = static_cast<UINT>(alignUp(range, 256));
+                cbv_desc.SizeInBytes    = static_cast<UINT>(aligned_range);
                 device->CreateConstantBufferView(&cbv_desc, dst_handle);
                 return;
             }
 
-            const uint32_t stride = structuredBufferStride(binding, descriptor, range);
+            const uint32_t stride = resolvedStructuredBufferStride(structuredBufferStride(binding, descriptor, range),
+                                                                   range);
             if (descriptor.range_type == D3D12_DESCRIPTOR_RANGE_TYPE_UAV)
             {
                 D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc {};
+                const bool has_valid_view_resource =
+                    descriptor.buffer != nullptr &&
+                    descriptor.buffer->resource != nullptr &&
+                    stride != 0 &&
+                    range != 0;
                 uav_desc.Format                     = DXGI_FORMAT_UNKNOWN;
                 uav_desc.ViewDimension              = D3D12_UAV_DIMENSION_BUFFER;
-                uav_desc.Buffer.StructureByteStride = stride;
-                if (descriptor.buffer != nullptr && descriptor.buffer->resource != nullptr && stride != 0)
+                uav_desc.Buffer.StructureByteStride = has_valid_view_resource ? stride : 4;
+                uav_desc.Buffer.NumElements         = 1;
+                if (has_valid_view_resource)
                 {
                     uav_desc.Buffer.FirstElement = byte_offset / stride;
-                    uav_desc.Buffer.NumElements  = static_cast<UINT>(range / stride);
+                    uav_desc.Buffer.NumElements  = static_cast<UINT>((std::max)(static_cast<RHIDeviceSize>(1),
+                                                                                 range / stride));
                 }
-                device->CreateUnorderedAccessView(descriptor.buffer != nullptr ? descriptor.buffer->resource.Get() : nullptr,
+                device->CreateUnorderedAccessView(has_valid_view_resource ? descriptor.buffer->resource.Get() : nullptr,
                                                   nullptr,
                                                   &uav_desc,
                                                   dst_handle);
@@ -1198,16 +1290,23 @@ namespace Piccolo
             }
 
             D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc {};
+            const bool has_valid_view_resource =
+                descriptor.buffer != nullptr &&
+                descriptor.buffer->resource != nullptr &&
+                stride != 0 &&
+                range != 0;
             srv_desc.Format                     = DXGI_FORMAT_UNKNOWN;
             srv_desc.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
             srv_desc.Shader4ComponentMapping    = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srv_desc.Buffer.StructureByteStride = stride;
-            if (descriptor.buffer != nullptr && descriptor.buffer->resource != nullptr && stride != 0)
+            srv_desc.Buffer.StructureByteStride = has_valid_view_resource ? stride : 4;
+            srv_desc.Buffer.NumElements         = 1;
+            if (has_valid_view_resource)
             {
                 srv_desc.Buffer.FirstElement = byte_offset / stride;
-                srv_desc.Buffer.NumElements  = static_cast<UINT>(range / stride);
+                srv_desc.Buffer.NumElements  = static_cast<UINT>((std::max)(static_cast<RHIDeviceSize>(1),
+                                                                             range / stride));
             }
-            device->CreateShaderResourceView(descriptor.buffer != nullptr ? descriptor.buffer->resource.Get() : nullptr,
+            device->CreateShaderResourceView(has_valid_view_resource ? descriptor.buffer->resource.Get() : nullptr,
                                              &srv_desc,
                                              dst_handle);
         }
@@ -1315,10 +1414,17 @@ namespace Piccolo
             buffer.heap_type         = chooseBufferHeapType(usage, properties);
             buffer.current_state     = initialBufferState(buffer.heap_type);
 
-            if (size == 0 || device == nullptr)
+            if (size == 0)
             {
                 buffer.host_data.resize(static_cast<size_t>(size));
                 return true;
+            }
+
+            if (device == nullptr)
+            {
+                buffer.host_data.clear();
+                LOG_ERROR("Failed to create D3D12 buffer resource: device is null (size={})", size);
+                return false;
             }
 
             D3D12_HEAP_PROPERTIES heap_properties {};
@@ -1331,7 +1437,11 @@ namespace Piccolo
             D3D12_RESOURCE_DESC resource_desc {};
             resource_desc.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
             resource_desc.Alignment          = 0;
-            resource_desc.Width              = (std::max)(static_cast<RHIDeviceSize>(1), size);
+            const RHIDeviceSize resource_width =
+                hasFlag(usage, RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT) ?
+                    alignUp((std::max)(static_cast<RHIDeviceSize>(1), size), 256) :
+                    (std::max)(static_cast<RHIDeviceSize>(1), size);
+            resource_desc.Width              = resource_width;
             resource_desc.Height             = 1;
             resource_desc.DepthOrArraySize   = 1;
             resource_desc.MipLevels          = 1;
@@ -1341,14 +1451,28 @@ namespace Piccolo
             resource_desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
             resource_desc.Flags              = bufferResourceFlags(usage, buffer.heap_type);
 
-            if (FAILED(device->CreateCommittedResource(&heap_properties,
-                                                       D3D12_HEAP_FLAG_NONE,
-                                                       &resource_desc,
-                                                       buffer.current_state,
-                                                       nullptr,
-                                                       IID_PPV_ARGS(&buffer.resource))))
+            const HRESULT resource_result =
+                device->CreateCommittedResource(&heap_properties,
+                                                D3D12_HEAP_FLAG_NONE,
+                                                &resource_desc,
+                                                buffer.current_state,
+                                                nullptr,
+                                                IID_PPV_ARGS(&buffer.resource));
+            if (FAILED(resource_result))
             {
-                buffer.host_data.resize(static_cast<size_t>(size));
+                buffer.resource.Reset();
+                buffer.host_data.clear();
+                const HRESULT removed_reason = device->GetDeviceRemovedReason();
+                logD3D12InfoQueueMessages(device, "buffer creation failure");
+                LOG_ERROR("Failed to create D3D12 buffer resource (size={}, usage={}, memory_properties={}, heap_type={}, initial_state={}, flags={}, HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                          size,
+                          usage,
+                          properties,
+                          static_cast<uint32_t>(buffer.heap_type),
+                          static_cast<uint32_t>(buffer.current_state),
+                          static_cast<uint32_t>(resource_desc.Flags),
+                          static_cast<unsigned int>(resource_result),
+                          static_cast<unsigned int>(removed_reason));
                 return false;
             }
 
@@ -1753,6 +1877,13 @@ namespace Piccolo
         {
             throw std::runtime_error("Failed to create D3D12 CBV/SRV/UAV descriptor heap");
         }
+        if (!createCpuDescriptorHeap(m_d3d12_device.Get(),
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                                     m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                     m_d3d12_cbv_srv_uav_cpu_heap))
+        {
+            throw std::runtime_error("Failed to create D3D12 CPU CBV/SRV/UAV descriptor heap");
+        }
         m_d3d12_cbv_srv_uav_descriptor_next = 1;
         m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
         if (!createDescriptorHeap(m_d3d12_device.Get(),
@@ -1765,6 +1896,13 @@ namespace Piccolo
                                   m_d3d12_sampler_descriptor_next))
         {
             throw std::runtime_error("Failed to create D3D12 sampler descriptor heap");
+        }
+        if (!createCpuDescriptorHeap(m_d3d12_device.Get(),
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
+                                     m_d3d12_sampler_descriptor_capacity,
+                                     m_d3d12_sampler_cpu_heap))
+        {
+            throw std::runtime_error("Failed to create D3D12 CPU sampler descriptor heap");
         }
         createFence();
 
@@ -1839,6 +1977,8 @@ namespace Piccolo
         }
         m_d3d12_sampler_heap.Reset();
         m_d3d12_cbv_srv_uav_heap.Reset();
+        m_d3d12_sampler_cpu_heap.Reset();
+        m_d3d12_cbv_srv_uav_cpu_heap.Reset();
         m_d3d12_dsv_heap.Reset();
         m_d3d12_rtv_heap.Reset();
         m_d3d12_swapchain.Reset();
@@ -1982,6 +2122,15 @@ bool D3D12RHI::allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAlloc
     }
 
 #ifdef _WIN32
+    if ((descriptor_set->layout->cbv_srv_uav_descriptor_count > 0 &&
+         (m_d3d12_cbv_srv_uav_heap == nullptr || m_d3d12_cbv_srv_uav_cpu_heap == nullptr)) ||
+        (descriptor_set->layout->sampler_descriptor_count > 0 &&
+         (m_d3d12_sampler_heap == nullptr || m_d3d12_sampler_cpu_heap == nullptr)))
+    {
+        delete descriptor_set;
+        return false;
+    }
+
     uint32_t cbv_srv_uav_next = m_d3d12_cbv_srv_uav_descriptor_next;
     uint32_t sampler_next     = m_d3d12_sampler_descriptor_next;
     if (!reserveDescriptors(descriptor_set->layout->cbv_srv_uav_descriptor_count,
@@ -2007,12 +2156,18 @@ bool D3D12RHI::allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAlloc
     descriptor_set->cbv_srv_uav_gpu_base = gpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
                                                          m_d3d12_cbv_srv_uav_descriptor_size,
                                                          descriptor_set->cbv_srv_uav_base);
+    descriptor_set->cbv_srv_uav_staging_cpu_base = cpuDescriptor(m_d3d12_cbv_srv_uav_cpu_heap.Get(),
+                                                                 m_d3d12_cbv_srv_uav_descriptor_size,
+                                                                 descriptor_set->cbv_srv_uav_base);
     descriptor_set->sampler_cpu_base = cpuDescriptor(m_d3d12_sampler_heap.Get(),
                                                      m_d3d12_sampler_descriptor_size,
                                                      descriptor_set->sampler_base);
     descriptor_set->sampler_gpu_base = gpuDescriptor(m_d3d12_sampler_heap.Get(),
                                                      m_d3d12_sampler_descriptor_size,
                                                      descriptor_set->sampler_base);
+    descriptor_set->sampler_staging_cpu_base = cpuDescriptor(m_d3d12_sampler_cpu_heap.Get(),
+                                                             m_d3d12_sampler_descriptor_size,
+                                                             descriptor_set->sampler_base);
     m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
 #endif
 
@@ -2296,9 +2451,16 @@ RHIShader* D3D12RHI::createShaderModule(const std::vector<unsigned char>& shader
 
 void D3D12RHI::createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory)
 {
+    buffer        = nullptr;
+    buffer_memory = nullptr;
+
     auto* d3d_buffer = new D3D12RHIBuffer();
 #ifdef _WIN32
-    (void)createCommittedBuffer(m_d3d12_device.Get(), size, usage, properties, *d3d_buffer);
+    if (!createCommittedBuffer(m_d3d12_device.Get(), size, usage, properties, *d3d_buffer))
+    {
+        delete d3d_buffer;
+        throw std::runtime_error("Failed to create D3D12 buffer resource");
+    }
 #else
     d3d_buffer->size  = size;
     d3d_buffer->usage = usage;
@@ -2375,6 +2537,7 @@ bool D3D12RHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCrea
         pBufferCreateInfo = &default_buffer_info;
     }
 
+    pBuffer     = nullptr;
     pAllocation = nullptr;
 
     auto* d3d_buffer = new D3D12RHIBuffer();
@@ -2384,8 +2547,14 @@ bool D3D12RHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCrea
                                                pBufferCreateInfo->usage,
                                                memoryPropertyFlags,
                                                *d3d_buffer);
+    if (!created)
+    {
+        delete d3d_buffer;
+        return false;
+    }
+
     pBuffer = d3d_buffer;
-    return created;
+    return true;
 #else
     d3d_buffer->size  = pBufferCreateInfo->size;
     d3d_buffer->usage = pBufferCreateInfo->usage;
@@ -2482,6 +2651,9 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
 
 void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags, RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels)
 {
+    image  = nullptr;
+    memory = nullptr;
+
     auto* d3d_image = new D3D12RHIImage();
     d3d_image->width                    = image_width;
     d3d_image->height                   = image_height;
@@ -2498,10 +2670,22 @@ void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIForma
     d3d_image->source_bytes_per_pixel   = sourceBytesPerPixel(format);
     d3d_image->resource_bytes_per_pixel = resourceBytesPerPixel(format);
 
-    if (m_d3d12_device != nullptr &&
-        image_width > 0 &&
-        image_height > 0 &&
-        d3d_image->dxgi_format != DXGI_FORMAT_UNKNOWN)
+    if (m_d3d12_device == nullptr)
+    {
+        delete d3d_image;
+        throw std::runtime_error("Failed to create D3D12 image resource: device is null");
+    }
+
+    if (image_width == 0 || image_height == 0 || d3d_image->dxgi_format == DXGI_FORMAT_UNKNOWN)
+    {
+        LOG_ERROR("Failed to create D3D12 image resource (width={}, height={}, format={})",
+                  image_width,
+                  image_height,
+                  static_cast<uint32_t>(format));
+        delete d3d_image;
+        throw std::runtime_error("Failed to create D3D12 image resource");
+    }
+
     {
         D3D12_HEAP_PROPERTIES heap_properties {};
         heap_properties.Type                 = D3D12_HEAP_TYPE_DEFAULT;
@@ -2542,12 +2726,26 @@ void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIForma
             clear_value_ptr      = &clear_value;
         }
 
-        (void)m_d3d12_device->CreateCommittedResource(&heap_properties,
-                                                      D3D12_HEAP_FLAG_NONE,
-                                                      &resource_desc,
-                                                      d3d_image->current_state,
-                                                      clear_value_ptr,
-                                                      IID_PPV_ARGS(&d3d_image->resource));
+        const HRESULT resource_result =
+            m_d3d12_device->CreateCommittedResource(&heap_properties,
+                                                    D3D12_HEAP_FLAG_NONE,
+                                                    &resource_desc,
+                                                    d3d_image->current_state,
+                                                    clear_value_ptr,
+                                                    IID_PPV_ARGS(&d3d_image->resource));
+        if (FAILED(resource_result))
+        {
+            LOG_ERROR("Failed to create D3D12 image resource (width={}, height={}, layers={}, mips={}, format={}, usage={}, HRESULT=0x{:08X})",
+                      image_width,
+                      image_height,
+                      d3d_image->array_layers,
+                      d3d_image->mip_levels,
+                      static_cast<uint32_t>(format),
+                      image_usage_flags,
+                      static_cast<unsigned int>(resource_result));
+            delete d3d_image;
+            throw std::runtime_error("Failed to create D3D12 image resource");
+        }
     }
 #endif
     image = d3d_image;
@@ -2810,14 +3008,34 @@ bool D3D12RHI::createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateIn
                 delete pool;
                 return false;
             }
+            if (!createCpuDescriptorHeap(m_d3d12_device.Get(),
+                                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                                         m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                         m_d3d12_cbv_srv_uav_cpu_heap))
+            {
+                delete pool;
+                return false;
+            }
             m_d3d12_cbv_srv_uav_descriptor_next = 1;
             m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
         }
     }
-    else if (cbv_srv_uav_required > m_d3d12_cbv_srv_uav_descriptor_capacity - m_d3d12_cbv_srv_uav_descriptor_next)
+    else
     {
-        delete pool;
-        return false;
+        if (cbv_srv_uav_required > m_d3d12_cbv_srv_uav_descriptor_capacity - m_d3d12_cbv_srv_uav_descriptor_next)
+        {
+            delete pool;
+            return false;
+        }
+        if (m_d3d12_cbv_srv_uav_cpu_heap == nullptr &&
+            !createCpuDescriptorHeap(m_d3d12_device.Get(),
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                                     m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                     m_d3d12_cbv_srv_uav_cpu_heap))
+        {
+            delete pool;
+            return false;
+        }
     }
 
     const uint32_t sampler_required =
@@ -2840,12 +3058,32 @@ bool D3D12RHI::createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateIn
                 delete pool;
                 return false;
             }
+            if (!createCpuDescriptorHeap(m_d3d12_device.Get(),
+                                         D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
+                                         m_d3d12_sampler_descriptor_capacity,
+                                         m_d3d12_sampler_cpu_heap))
+            {
+                delete pool;
+                return false;
+            }
         }
     }
-    else if (sampler_required > m_d3d12_sampler_descriptor_capacity - m_d3d12_sampler_descriptor_next)
+    else
     {
-        delete pool;
-        return false;
+        if (sampler_required > m_d3d12_sampler_descriptor_capacity - m_d3d12_sampler_descriptor_next)
+        {
+            delete pool;
+            return false;
+        }
+        if (m_d3d12_sampler_cpu_heap == nullptr &&
+            !createCpuDescriptorHeap(m_d3d12_device.Get(),
+                                     D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
+                                     m_d3d12_sampler_descriptor_capacity,
+                                     m_d3d12_sampler_cpu_heap))
+        {
+            delete pool;
+            return false;
+        }
     }
 #endif
 
@@ -3513,6 +3751,11 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
         return false;
     }
 
+    if (m_command_list_open)
+    {
+        return true;
+    }
+
     waitForGpu();
 
     if (FAILED(m_d3d12_command_allocator->Reset()))
@@ -3860,7 +4103,8 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             preflight_dynamic_offset_index > dynamicOffsetCount ||
             required_dynamic_descriptor_count > dynamicOffsetCount - preflight_dynamic_offset_index ||
             !descriptor_set->has_cbv_srv_uav_descriptors ||
-            m_d3d12_cbv_srv_uav_heap == nullptr)
+            m_d3d12_cbv_srv_uav_heap == nullptr ||
+            m_d3d12_cbv_srv_uav_cpu_heap == nullptr)
         {
             return;
         }
@@ -3957,7 +4201,7 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
                                                                               transient_base);
                 m_d3d12_device->CopyDescriptorsSimple(set_layout->cbv_srv_uav_descriptor_count,
                                                       transient_cpu_base,
-                                                      descriptor_set->cbv_srv_uav_cpu_base,
+                                                      descriptor_set->cbv_srv_uav_staging_cpu_base,
                                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
                 for (const auto& range : set_layout->ranges)
@@ -4623,14 +4867,19 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
             const uint32_t array_index = write.dstArrayElement + descriptor_index;
             if (descriptorUsesResourceHeap(write.descriptorType))
             {
-                if (!descriptor_set->has_cbv_srv_uav_descriptors || m_d3d12_cbv_srv_uav_heap == nullptr)
+                if (!descriptor_set->has_cbv_srv_uav_descriptors ||
+                    m_d3d12_cbv_srv_uav_heap == nullptr ||
+                    m_d3d12_cbv_srv_uav_cpu_heap == nullptr)
                 {
                     continue;
                 }
                 const uint32_t heap_index = descriptor_set->cbv_srv_uav_base + binding->cbv_srv_uav_offset + array_index;
-                D3D12_CPU_DESCRIPTOR_HANDLE dst_handle = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
-                                                                       m_d3d12_cbv_srv_uav_descriptor_size,
-                                                                       heap_index);
+                D3D12_CPU_DESCRIPTOR_HANDLE staging_handle = cpuDescriptor(m_d3d12_cbv_srv_uav_cpu_heap.Get(),
+                                                                           m_d3d12_cbv_srv_uav_descriptor_size,
+                                                                           heap_index);
+                D3D12_CPU_DESCRIPTOR_HANDLE shader_handle = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
+                                                                          m_d3d12_cbv_srv_uav_descriptor_size,
+                                                                          heap_index);
                 if (write.descriptorType == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
                     write.descriptorType == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
                     write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
@@ -4651,7 +4900,7 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                     const auto* descriptor_to_write = descriptor_set->findBufferDescriptor(write.dstBinding, array_index);
                     if (descriptor_to_write != nullptr)
                     {
-                        writeBufferDescriptor(m_d3d12_device.Get(), dst_handle, *binding, *descriptor_to_write, 0);
+                        writeBufferDescriptor(m_d3d12_device.Get(), staging_handle, *binding, *descriptor_to_write, 0);
                     }
                 }
                 else if (write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE)
@@ -4660,7 +4909,7 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                     auto* image_view = static_cast<D3D12RHIImageView*>(image_info->imageView);
                     if (image_view != nullptr && image_view->image != nullptr && image_view->image->resource != nullptr && image_view->has_uav)
                     {
-                        m_d3d12_device->CreateUnorderedAccessView(image_view->image->resource.Get(), nullptr, &image_view->uav_desc, dst_handle);
+                        m_d3d12_device->CreateUnorderedAccessView(image_view->image->resource.Get(), nullptr, &image_view->uav_desc, staging_handle);
                     }
                 }
                 else
@@ -4669,14 +4918,20 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                     auto* image_view = static_cast<D3D12RHIImageView*>(image_info->imageView);
                     if (image_view != nullptr && image_view->image != nullptr && image_view->image->resource != nullptr && image_view->has_srv)
                     {
-                        m_d3d12_device->CreateShaderResourceView(image_view->image->resource.Get(), &image_view->srv_desc, dst_handle);
+                        m_d3d12_device->CreateShaderResourceView(image_view->image->resource.Get(), &image_view->srv_desc, staging_handle);
                     }
                 }
+                m_d3d12_device->CopyDescriptorsSimple(1,
+                                                      shader_handle,
+                                                      staging_handle,
+                                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
             }
 
             if (descriptorUsesSamplerHeap(write.descriptorType))
             {
-                if (!descriptor_set->has_sampler_descriptors || m_d3d12_sampler_heap == nullptr)
+                if (!descriptor_set->has_sampler_descriptors ||
+                    m_d3d12_sampler_heap == nullptr ||
+                    m_d3d12_sampler_cpu_heap == nullptr)
                 {
                     continue;
                 }
@@ -4689,10 +4944,17 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                 if (sampler != nullptr)
                 {
                     const uint32_t heap_index = descriptor_set->sampler_base + binding->sampler_offset + array_index;
-                    D3D12_CPU_DESCRIPTOR_HANDLE dst_handle = cpuDescriptor(m_d3d12_sampler_heap.Get(),
-                                                                           m_d3d12_sampler_descriptor_size,
-                                                                           heap_index);
-                    m_d3d12_device->CreateSampler(&sampler->desc, dst_handle);
+                    D3D12_CPU_DESCRIPTOR_HANDLE staging_handle = cpuDescriptor(m_d3d12_sampler_cpu_heap.Get(),
+                                                                               m_d3d12_sampler_descriptor_size,
+                                                                               heap_index);
+                    D3D12_CPU_DESCRIPTOR_HANDLE shader_handle = cpuDescriptor(m_d3d12_sampler_heap.Get(),
+                                                                              m_d3d12_sampler_descriptor_size,
+                                                                              heap_index);
+                    m_d3d12_device->CreateSampler(&sampler->desc, staging_handle);
+                    m_d3d12_device->CopyDescriptorsSimple(1,
+                                                          shader_handle,
+                                                          staging_handle,
+                                                          D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
                 }
             }
         }
@@ -4723,15 +4985,20 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
             descriptorUsesResourceHeap(dst_binding->binding.descriptorType))
         {
             if (!src_set->has_cbv_srv_uav_descriptors || !dst_set->has_cbv_srv_uav_descriptors ||
-                m_d3d12_cbv_srv_uav_heap == nullptr)
+                m_d3d12_cbv_srv_uav_heap == nullptr ||
+                m_d3d12_cbv_srv_uav_cpu_heap == nullptr)
             {
                 continue;
             }
             const uint32_t src_index = src_set->cbv_srv_uav_base + src_binding->cbv_srv_uav_offset + copy.srcArrayElement;
             const uint32_t dst_index = dst_set->cbv_srv_uav_base + dst_binding->cbv_srv_uav_offset + copy.dstArrayElement;
             m_d3d12_device->CopyDescriptorsSimple(copy.descriptorCount,
+                                                  cpuDescriptor(m_d3d12_cbv_srv_uav_cpu_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, dst_index),
+                                                  cpuDescriptor(m_d3d12_cbv_srv_uav_cpu_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, src_index),
+                                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            m_d3d12_device->CopyDescriptorsSimple(copy.descriptorCount,
                                                   cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, dst_index),
-                                                  cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, src_index),
+                                                  cpuDescriptor(m_d3d12_cbv_srv_uav_cpu_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, dst_index),
                                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
             if (descriptorUsesBufferInfo(src_binding->binding.descriptorType) &&
@@ -4760,15 +5027,20 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
             descriptorUsesSamplerHeap(dst_binding->binding.descriptorType))
         {
             if (!src_set->has_sampler_descriptors || !dst_set->has_sampler_descriptors ||
-                m_d3d12_sampler_heap == nullptr)
+                m_d3d12_sampler_heap == nullptr ||
+                m_d3d12_sampler_cpu_heap == nullptr)
             {
                 continue;
             }
             const uint32_t src_index = src_set->sampler_base + src_binding->sampler_offset + copy.srcArrayElement;
             const uint32_t dst_index = dst_set->sampler_base + dst_binding->sampler_offset + copy.dstArrayElement;
             m_d3d12_device->CopyDescriptorsSimple(copy.descriptorCount,
+                                                  cpuDescriptor(m_d3d12_sampler_cpu_heap.Get(), m_d3d12_sampler_descriptor_size, dst_index),
+                                                  cpuDescriptor(m_d3d12_sampler_cpu_heap.Get(), m_d3d12_sampler_descriptor_size, src_index),
+                                                  D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+            m_d3d12_device->CopyDescriptorsSimple(copy.descriptorCount,
                                                   cpuDescriptor(m_d3d12_sampler_heap.Get(), m_d3d12_sampler_descriptor_size, dst_index),
-                                                  cpuDescriptor(m_d3d12_sampler_heap.Get(), m_d3d12_sampler_descriptor_size, src_index),
+                                                  cpuDescriptor(m_d3d12_sampler_cpu_heap.Get(), m_d3d12_sampler_descriptor_size, dst_index),
                                                   D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
         }
     }
@@ -4840,6 +5112,11 @@ void D3D12RHI::resetCommandPool()
 {
 #ifdef _WIN32
     if (!m_d3d12_command_allocator || !m_d3d12_command_list)
+    {
+        return;
+    }
+
+    if (m_command_list_open)
     {
         return;
     }
@@ -5005,9 +5282,13 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
 
     if (m_d3d12_command_allocator && m_d3d12_command_list)
     {
-        (void)m_d3d12_command_allocator->Reset();
-        (void)m_d3d12_command_list->Reset(m_d3d12_command_allocator.Get(), nullptr);
-        m_command_list_open = true;
+        if (!m_command_list_open)
+        {
+            waitForGpu();
+            (void)m_d3d12_command_allocator->Reset();
+            (void)m_d3d12_command_list->Reset(m_d3d12_command_allocator.Get(), nullptr);
+            m_command_list_open = true;
+        }
         m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
     }
 #endif
@@ -6089,8 +6370,14 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         }
 
         const uint64_t fence_value = m_d3d12_fence_value;
-        if (FAILED(m_d3d12_command_queue->Signal(m_d3d12_fence.Get(), fence_value)))
+        const HRESULT signal_result = m_d3d12_command_queue->Signal(m_d3d12_fence.Get(), fence_value);
+        if (FAILED(signal_result))
         {
+            const HRESULT removed_reason = m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+            logD3D12InfoQueueMessages(m_d3d12_device.Get(), "waitForGpu signal failure");
+            LOG_ERROR("D3D12 queue Signal failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                      static_cast<unsigned int>(signal_result),
+                      static_cast<unsigned int>(removed_reason));
             return;
         }
 
@@ -6098,8 +6385,14 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
         if (m_d3d12_fence->GetCompletedValue() < fence_value)
         {
-            if (FAILED(m_d3d12_fence->SetEventOnCompletion(fence_value, m_d3d12_fence_event)))
+            const HRESULT event_result = m_d3d12_fence->SetEventOnCompletion(fence_value, m_d3d12_fence_event);
+            if (FAILED(event_result))
             {
+                const HRESULT removed_reason = m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "waitForGpu event failure");
+                LOG_ERROR("D3D12 fence SetEventOnCompletion failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+                          static_cast<unsigned int>(event_result),
+                          static_cast<unsigned int>(removed_reason));
                 return;
             }
             WaitForSingleObject(m_d3d12_fence_event, INFINITE);

@@ -180,6 +180,8 @@ namespace Piccolo
         ComPtr<ID3D12DescriptorHeap> m_d3d12_dsv_heap;
         ComPtr<ID3D12DescriptorHeap> m_d3d12_cbv_srv_uav_heap;
         ComPtr<ID3D12DescriptorHeap> m_d3d12_sampler_heap;
+        ComPtr<ID3D12DescriptorHeap> m_d3d12_cbv_srv_uav_cpu_heap;
+        ComPtr<ID3D12DescriptorHeap> m_d3d12_sampler_cpu_heap;
         ComPtr<ID3D12CommandSignature> m_d3d12_dispatch_command_signature;
         std::array<ComPtr<ID3D12Resource>, m_swapchain_buffer_count> m_d3d12_render_targets;
         ComPtr<ID3D12Fence> m_d3d12_fence;
