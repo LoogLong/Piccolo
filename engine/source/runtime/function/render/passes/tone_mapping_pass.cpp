@@ -2,6 +2,7 @@
 
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_util.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 
 #include <post_process_vert.h>
 #include <tone_mapping_frag.h>
@@ -62,8 +63,10 @@ namespace Piccolo
             throw std::runtime_error("create post process pipeline layout");
         }
 
-        RHIShader* vert_shader_module = m_rhi->createShaderModule(POST_PROCESS_VERT);
-        RHIShader* frag_shader_module = m_rhi->createShaderModule(TONE_MAPPING_FRAG);
+        RHIShader* vert_shader_module =
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, POST_PROCESS_VERT));
+        RHIShader* frag_shader_module =
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, TONE_MAPPING_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

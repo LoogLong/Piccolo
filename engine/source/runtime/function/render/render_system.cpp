@@ -7,6 +7,7 @@
 
 #include "runtime/function/render/render_camera.h"
 #include "runtime/function/render/render_backend.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/render_pass.h"
 #include "runtime/function/render/render_pipeline.h"
 #include "runtime/function/render/render_resource.h"
@@ -72,6 +73,12 @@ namespace Piccolo
         }
 
         auto tryInitializeBackend = [&](RHIBackendType backend) -> bool {
+            if (backend == RHIBackendType::D3D12 && !d3d12ShaderBytecodeAvailable())
+            {
+                LOG_ERROR("RHI backend initialization failed for D3D12: DXIL shader bytecode is unavailable. Install dxc.exe and reconfigure the build to enable D3D12.");
+                return false;
+            }
+
             std::shared_ptr<RHI> rhi = createRHIBackend(backend);
             if (!rhi)
             {

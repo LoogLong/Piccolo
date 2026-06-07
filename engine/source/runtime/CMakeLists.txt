@@ -56,7 +56,7 @@ if(ENABLE_PHYSICS_DEBUG_RENDERER)
 endif()
 
 if(WIN32)
-  target_link_libraries(${TARGET_NAME} PUBLIC d3d12.lib dxgi.lib)
+  target_link_libraries(${TARGET_NAME} PUBLIC d3d12.lib dxgi.lib dxguid.lib)
 endif()
 
 target_include_directories(
@@ -68,6 +68,9 @@ target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${ENGINE_ROOT_DIR}/shader/generated/cpp>)
 
+target_include_directories(
+  ${TARGET_NAME}
+  PUBLIC $<BUILD_INTERFACE:${ENGINE_ROOT_DIR}/shader/generated>)
 
 target_include_directories(
   ${TARGET_NAME} 

@@ -5,6 +5,7 @@
 
 #include "runtime/function/global/global_context.h"
 #include "runtime/function/render/render_camera.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/render_system.h"
 
 #include "core/base/macro.h"
@@ -48,7 +49,7 @@ namespace Piccolo
         uint8_t index =
             (m_rhi->getCurrentFrameIndex() + m_rhi->getMaxFramesInFlight() - 1) % m_rhi->getMaxFramesInFlight();
 
-        m_rhi->waitForFencesPFN(1, &(m_rhi->getFenceList()[index]), VK_TRUE, UINT64_MAX);
+        m_rhi->waitForFencesPFN(1, &(m_rhi->getFenceList()[index]), RHI_TRUE, UINT64_MAX);
 
         RHICommandBufferBeginInfo command_buffer_begin_info {};
         command_buffer_begin_info.sType            = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -502,7 +503,7 @@ namespace Piccolo
 
     void ParticlePass::createEmitter(int id, const ParticleEmitterDesc& desc)
     {
-        const VkDeviceSize counterBufferSize = sizeof(ParticleCounter);
+        const RHIDeviceSize counterBufferSize = sizeof(ParticleCounter);
         ParticleCounter    counter;
         counter.alive_count           = m_emitter_buffer_batches[id].m_num_particle;
         counter.dead_count            = s_max_particles - m_emitter_buffer_batches[id].m_num_particle;
@@ -520,7 +521,7 @@ namespace Piccolo
         }
 
         {
-            const VkDeviceSize      indirectArgumentSize = sizeof(IndirectArgumemt);
+            const RHIDeviceSize     indirectArgumentSize = sizeof(IndirectArgumemt);
             struct IndirectArgumemt indirectargument     = {};
             indirectargument.alive_flap_bit              = 1;
             m_rhi->createBufferAndInitialize(RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT | RHI_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
@@ -531,7 +532,7 @@ namespace Piccolo
                                              &indirectargument,
                                              indirectArgumentSize);
 
-            const VkDeviceSize aliveListSize = 4 * sizeof(uint32_t) * s_max_particles;
+            const RHIDeviceSize aliveListSize = 4 * sizeof(uint32_t) * s_max_particles;
             std::vector<int>   aliveindices(s_max_particles * 4, 0);
             for (int i = 0; i < s_max_particles; ++i)
                 aliveindices[i * 4] = i;
@@ -550,7 +551,7 @@ namespace Piccolo
                                              m_emitter_buffer_batches[id].m_alive_list_next_memory,
                                              aliveListSize);
 
-            const VkDeviceSize   deadListSize = 4 * sizeof(uint32_t) * s_max_particles;
+            const RHIDeviceSize  deadListSize = 4 * sizeof(uint32_t) * s_max_particles;
             std::vector<int32_t> deadindices(s_max_particles * 4, 0);
             for (int32_t i = 0; i < s_max_particles; ++i)
                 deadindices[i * 4] = s_max_particles - 1 - i;
@@ -653,7 +654,7 @@ namespace Piccolo
             m_rhi->freeCommandBuffers(m_rhi->getCommandPoor(), 1, copyCmd);
         }
 
-        const VkDeviceSize staggingBuferSize        = s_max_particles * sizeof(Particle);
+        const RHIDeviceSize staggingBuferSize       = s_max_particles * sizeof(Particle);
         m_emitter_buffer_batches[id].m_emitter_desc = desc;
 
         // fill in data
@@ -1023,7 +1024,8 @@ namespace Piccolo
         shaderStage.pSpecializationInfo              = RHI_NULL_HANDLE;
 
         {
-            shaderStage.module = m_rhi->createShaderModule(PARTICLE_KICKOFF_COMP);
+            shaderStage.module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLE_KICKOFF_COMP));
             assert(shaderStage.module != RHI_NULL_HANDLE);
 
             computePipelineCreateInfo.pStages = &shaderStage;
@@ -1035,7 +1037,8 @@ namespace Piccolo
         }
 
         {
-            shaderStage.module = m_rhi->createShaderModule(PARTICLE_EMIT_COMP);
+            shaderStage.module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLE_EMIT_COMP));
             assert(shaderStage.module != RHI_NULL_HANDLE);
 
             computePipelineCreateInfo.pStages = &shaderStage;
@@ -1047,7 +1050,8 @@ namespace Piccolo
         }
 
         {
-            shaderStage.module = m_rhi->createShaderModule(PARTICLE_SIMULATE_COMP);
+            shaderStage.module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLE_SIMULATE_COMP));
             assert(shaderStage.module != RHI_NULL_HANDLE);
 
             computePipelineCreateInfo.pStages = &shaderStage;
@@ -1072,8 +1076,10 @@ namespace Piccolo
                 throw std::runtime_error("create particle billboard pipeline layout");
             }
 
-            RHIShader* vert_shader_module = m_rhi->createShaderModule(PARTICLEBILLBOARD_VERT);
-            RHIShader* frag_shader_module = m_rhi->createShaderModule(PARTICLEBILLBOARD_FRAG);
+            RHIShader* vert_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLEBILLBOARD_VERT));
+            RHIShader* frag_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLEBILLBOARD_FRAG));
 
             RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
             vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1754,7 +1760,7 @@ namespace Piccolo
             // Submit compute work
             m_rhi->resetFencesPFN(1, &m_fence);
             computeSubmitInfo                        = {};
-            const VkPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
             computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
             computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
             computeSubmitInfo.commandBufferCount     = 1;

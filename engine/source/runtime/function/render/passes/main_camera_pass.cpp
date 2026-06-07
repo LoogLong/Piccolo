@@ -2,6 +2,7 @@
 #include "runtime/function/render/render_helper.h"
 #include "runtime/function/render/render_mesh.h"
 #include "runtime/function/render/render_resource.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_util.h"
@@ -819,8 +820,10 @@ namespace Piccolo
                 throw std::runtime_error("create mesh gbuffer pipeline layout");
             }
 
-            RHIShader* vert_shader_module = m_rhi->createShaderModule(MESH_VERT);
-            RHIShader* frag_shader_module = m_rhi->createShaderModule(MESH_GBUFFER_FRAG);
+            RHIShader* vert_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_VERT));
+            RHIShader* frag_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_GBUFFER_FRAG));
 
             RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
             vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -977,8 +980,10 @@ namespace Piccolo
                 throw std::runtime_error("create deferred lighting pipeline layout");
             }
 
-            RHIShader* vert_shader_module = m_rhi->createShaderModule(DEFERRED_LIGHTING_VERT);
-            RHIShader* frag_shader_module = m_rhi->createShaderModule(DEFERRED_LIGHTING_FRAG);
+            RHIShader* vert_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEFERRED_LIGHTING_VERT));
+            RHIShader* frag_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEFERRED_LIGHTING_FRAG));
 
             RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
             vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1116,8 +1121,10 @@ namespace Piccolo
                 throw std::runtime_error("create mesh lighting pipeline layout");
             }
 
-            RHIShader* vert_shader_module = m_rhi->createShaderModule(MESH_VERT);
-            RHIShader* frag_shader_module = m_rhi->createShaderModule(MESH_FRAG);
+            RHIShader* vert_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_VERT));
+            RHIShader* frag_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_FRAG));
 
             RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
             vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1253,8 +1260,10 @@ namespace Piccolo
                 throw std::runtime_error("create skybox pipeline layout");
             }
 
-            RHIShader* vert_shader_module = m_rhi->createShaderModule(SKYBOX_VERT);
-            RHIShader* frag_shader_module = m_rhi->createShaderModule(SKYBOX_FRAG);
+            RHIShader* vert_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, SKYBOX_VERT));
+            RHIShader* frag_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, SKYBOX_FRAG));
 
             RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
             vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1390,8 +1399,10 @@ namespace Piccolo
                 throw std::runtime_error("create axis pipeline layout");
             }
 
-            RHIShader* vert_shader_module = m_rhi->createShaderModule(AXIS_VERT);
-            RHIShader* frag_shader_module = m_rhi->createShaderModule(AXIS_FRAG);
+            RHIShader* vert_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, AXIS_VERT));
+            RHIShader* frag_shader_module =
+                m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, AXIS_FRAG));
 
             RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
             vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -1879,7 +1890,6 @@ namespace Piccolo
             framebuffer_create_info.height       = m_rhi->getSwapchainInfo().extent.height;
             framebuffer_create_info.layers       = 1;
 
-            m_swapchain_framebuffers[i] = new VulkanFramebuffer();
             if (RHI_SUCCESS != m_rhi->createFramebuffer(&framebuffer_create_info, m_swapchain_framebuffers[i]))
             {
                 throw std::runtime_error("create main camera framebuffer");

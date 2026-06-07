@@ -1,5 +1,8 @@
 #include "runtime/function/render/passes/ui_pass.h"
 
+#ifdef _WIN32
+#include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
+#endif
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 
 #include "runtime/core/base/macro.h"
@@ -9,6 +12,9 @@
 #include "runtime/function/ui/window_ui.h"
 
 #include <backends/imgui_impl_glfw.h>
+#ifdef _WIN32
+#include <backends/imgui_impl_dx12.h>
+#endif
 #include <backends/imgui_impl_vulkan.h>
 
 namespace Piccolo
@@ -24,36 +30,60 @@ namespace Piccolo
     {
         m_window_ui = window_ui;
 
-        if (m_rhi->getBackendType() != RHIBackendType::Vulkan)
+        switch (m_rhi->getBackendType())
         {
-            LOG_WARN("UI backend is only implemented for Vulkan currently; skip UI backend initialization");
-            return;
+            case RHIBackendType::Vulkan:
+            {
+                ImGui_ImplGlfw_InitForVulkan(std::static_pointer_cast<VulkanRHI>(m_rhi)->m_window, true);
+                ImGui_ImplVulkan_InitInfo init_info = {};
+                init_info.Instance                  = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_instance;
+                init_info.PhysicalDevice            = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_physical_device;
+                init_info.Device                    = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_device;
+                init_info.QueueFamily               = m_rhi->getQueueFamilyIndices().graphics_family.value();
+                init_info.Queue                     = ((VulkanQueue*)m_rhi->getGraphicsQueue())->getResource();
+                init_info.DescriptorPool            = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_vk_descriptor_pool;
+                init_info.Subpass                   = _main_camera_subpass_ui;
+
+                // may be different from the real swapchain image count
+                // see ImGui_ImplVulkanH_GetMinImageCountFromPresentMode
+                init_info.MinImageCount = 3;
+                init_info.ImageCount    = 3;
+                ImGui_ImplVulkan_Init(&init_info, ((VulkanRenderPass*)m_framebuffer.render_pass)->getResource());
+
+                uploadFonts();
+                break;
+            }
+            case RHIBackendType::D3D12:
+            {
+#ifdef _WIN32
+                auto d3d12_rhi = std::static_pointer_cast<D3D12RHI>(m_rhi);
+                ImGui_ImplGlfw_InitForOther(d3d12_rhi->getWindow(), true);
+                ImGui_ImplDX12_Init(d3d12_rhi->getD3D12Device(),
+                                    d3d12_rhi->getMaxFramesInFlight(),
+                                    d3d12_rhi->getD3D12SwapchainFormat(),
+                                    d3d12_rhi->getD3D12ImGuiSrvHeap(),
+                                    d3d12_rhi->getD3D12ImGuiSrvCpuHandle(),
+                                    d3d12_rhi->getD3D12ImGuiSrvGpuHandle());
+#else
+                LOG_WARN("D3D12 UI backend is only available on Windows");
+#endif
+                break;
+            }
+            default:
+                LOG_WARN("Unsupported UI render backend; skip UI backend initialization");
+                break;
         }
-
-        ImGui_ImplGlfw_InitForVulkan(std::static_pointer_cast<VulkanRHI>(m_rhi)->m_window, true);
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance                  = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_instance;
-        init_info.PhysicalDevice            = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_physical_device;
-        init_info.Device                    = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_device;
-        init_info.QueueFamily               = m_rhi->getQueueFamilyIndices().graphics_family.value();
-        init_info.Queue                     = ((VulkanQueue*)m_rhi->getGraphicsQueue())->getResource();
-        init_info.DescriptorPool            = std::static_pointer_cast<VulkanRHI>(m_rhi)->m_vk_descriptor_pool;
-        init_info.Subpass                   = _main_camera_subpass_ui;
-        
-        // may be different from the real swapchain image count
-        // see ImGui_ImplVulkanH_GetMinImageCountFromPresentMode
-        init_info.MinImageCount = 3;
-        init_info.ImageCount    = 3;
-        ImGui_ImplVulkan_Init(&init_info, ((VulkanRenderPass*)m_framebuffer.render_pass)->getResource());
-
-        uploadFonts();
     }
 
     void UIPass::uploadFonts()
     {
-        if (m_rhi->getBackendType() != RHIBackendType::Vulkan)
+        switch (m_rhi->getBackendType())
         {
-            return;
+            case RHIBackendType::Vulkan:
+                break;
+            case RHIBackendType::D3D12:
+            default:
+                return;
         }
 
         RHICommandBufferAllocateInfo allocInfo = {};
@@ -101,25 +131,55 @@ namespace Piccolo
     {
         if (m_window_ui)
         {
-            if (m_rhi->getBackendType() != RHIBackendType::Vulkan)
+            switch (m_rhi->getBackendType())
             {
-                return;
+                case RHIBackendType::Vulkan:
+                {
+                    ImGui_ImplVulkan_NewFrame();
+                    ImGui_ImplGlfw_NewFrame();
+                    ImGui::NewFrame();
+
+                    m_window_ui->preRender();
+
+                    float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+                    m_rhi->pushEvent(m_rhi->getCurrentCommandBuffer(), "ImGUI", color);
+
+                    ImGui::Render();
+
+                    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), std::static_pointer_cast<VulkanRHI>(m_rhi)->m_vk_current_command_buffer);
+
+                    m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
+                    break;
+                }
+                case RHIBackendType::D3D12:
+                {
+#ifdef _WIN32
+                    auto d3d12_rhi = std::static_pointer_cast<D3D12RHI>(m_rhi);
+
+                    ImGui_ImplDX12_NewFrame();
+                    ImGui_ImplGlfw_NewFrame();
+                    ImGui::NewFrame();
+
+                    m_window_ui->preRender();
+
+                    float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+                    m_rhi->pushEvent(m_rhi->getCurrentCommandBuffer(), "ImGUI", color);
+
+                    ImGui::Render();
+
+                    ID3D12DescriptorHeap* descriptor_heaps[] = {d3d12_rhi->getD3D12ImGuiSrvHeap()};
+                    d3d12_rhi->getD3D12CommandList()->SetDescriptorHeaps(1, descriptor_heaps);
+                    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), d3d12_rhi->getD3D12CommandList());
+
+                    m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
+                    break;
+#else
+                    return;
+#endif
+                }
+                default:
+                    return;
             }
-
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
-
-            m_window_ui->preRender();
-
-            float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-            m_rhi->pushEvent(m_rhi->getCurrentCommandBuffer(), "ImGUI", color);
-
-            ImGui::Render();
-
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), std::static_pointer_cast<VulkanRHI>(m_rhi)->m_vk_current_command_buffer);
-
-            m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
         }
     }
 } // namespace Piccolo

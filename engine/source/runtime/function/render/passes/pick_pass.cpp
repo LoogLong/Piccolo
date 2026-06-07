@@ -1,6 +1,7 @@
 #include "runtime/function/render/passes/pick_pass.h"
 
 #include "runtime/function/render/render_mesh.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_util.h"
 
@@ -149,7 +150,7 @@ namespace Piccolo
         mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.descriptorType =
             RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.descriptorCount = 1;
-        mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.stageFlags = RHI_SHADER_STAGE_VERTEX_BIT;
         mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.pImmutableSamplers = NULL;
 
         RHIDescriptorSetLayoutBinding& mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding =
@@ -158,7 +159,7 @@ namespace Piccolo
         mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.descriptorType =
             RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.descriptorCount = 1;
-        mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.stageFlags = RHI_SHADER_STAGE_VERTEX_BIT;
         mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.pImmutableSamplers = NULL;
 
         RHIDescriptorSetLayoutBinding&
@@ -205,9 +206,9 @@ namespace Piccolo
         }
 
         RHIShader* vert_shader_module =
-            m_rhi->createShaderModule(MESH_INEFFICIENT_PICK_VERT);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_INEFFICIENT_PICK_VERT));
         RHIShader* frag_shader_module =
-            m_rhi->createShaderModule(MESH_INEFFICIENT_PICK_FRAG);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_INEFFICIENT_PICK_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

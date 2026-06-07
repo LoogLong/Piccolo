@@ -31,6 +31,30 @@ if(WIN32)
     set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/Win32/vulkan-1.lib)
     set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32/glslangValidator.exe)
     add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32")
+
+    set(_dxc_search_paths
+        "${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32"
+        "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/x64"
+        "${THIRD_PARTY_DIR}/DXC/bin/x64")
+
+    if(DEFINED ENV{VULKAN_SDK})
+        list(APPEND _dxc_search_paths "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32")
+    endif()
+
+    if(DEFINED ENV{WindowsSdkDir})
+        file(GLOB _windows_sdk_dxc_paths "$ENV{WindowsSdkDir}/bin/*/x64" "$ENV{WindowsSdkDir}/bin/x64")
+        list(APPEND _dxc_search_paths ${_windows_sdk_dxc_paths})
+    endif()
+
+    find_program(dxc_executable NAMES dxc.exe dxc HINTS ${_dxc_search_paths})
+
+    if(dxc_executable)
+        message(STATUS "Found dxc: ${dxc_executable}")
+        add_compile_definitions(PICCOLO_D3D12_SHADER_BYTECODE_AVAILABLE=1)
+    else()
+        message(WARNING "dxc.exe not found; D3D12 HLSL shaders will be skipped. Set dxc_executable to enable DXIL generation.")
+        add_compile_definitions(PICCOLO_D3D12_SHADER_BYTECODE_AVAILABLE=0)
+    endif()
 elseif(UNIX)
     if(APPLE)
       set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/MacOS/libvulkan.1.dylib)

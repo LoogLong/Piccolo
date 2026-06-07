@@ -2,6 +2,7 @@
 
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_util.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 
 #include <combine_ui_frag.h>
 #include <post_process_vert.h>
@@ -72,8 +73,10 @@ namespace Piccolo
             throw std::runtime_error("create combine ui pipeline layout");
         }
 
-        RHIShader* vert_shader_module = m_rhi->createShaderModule(POST_PROCESS_VERT);
-        RHIShader* frag_shader_module = m_rhi->createShaderModule(COMBINE_UI_FRAG);
+        RHIShader* vert_shader_module =
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, POST_PROCESS_VERT));
+        RHIShader* frag_shader_module =
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, COMBINE_UI_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

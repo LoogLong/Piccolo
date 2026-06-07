@@ -2,6 +2,7 @@
 
 #include "runtime/function/render/render_helper.h"
 #include "runtime/function/render/render_mesh.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_util.h"
 
@@ -236,9 +237,11 @@ namespace Piccolo
         }
 
         RHIShader* vert_shader_module =
-            m_rhi->createShaderModule(MESH_DIRECTIONAL_LIGHT_SHADOW_VERT);
+            m_rhi->createShaderModule(
+                PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_DIRECTIONAL_LIGHT_SHADOW_VERT));
         RHIShader* frag_shader_module =
-            m_rhi->createShaderModule(MESH_DIRECTIONAL_LIGHT_SHADOW_FRAG);
+            m_rhi->createShaderModule(
+                PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_DIRECTIONAL_LIGHT_SHADOW_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
