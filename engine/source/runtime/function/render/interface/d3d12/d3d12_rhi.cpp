@@ -149,6 +149,18 @@ namespace Piccolo
 
         struct D3D12RHICommandBuffer final : RHICommandBuffer
         {
+#ifdef _WIN32
+            ComPtr<ID3D12CommandAllocator>    command_allocator;
+            ComPtr<ID3D12GraphicsCommandList> command_list;
+            bool                              is_open {false};
+            bool                              has_recorded_commands {false};
+            bool                              in_render_pass {false};
+            RHIPipeline*                      bound_graphics_pipeline {nullptr};
+            RHIRenderPass*                    active_render_pass {nullptr};
+            RHIFramebuffer*                   active_framebuffer {nullptr};
+            uint32_t                          active_subpass_index {0};
+            uint32_t                          transient_cbv_srv_uav_descriptor_next {0};
+#endif
             bool owns_recording {false};
         };
 
@@ -2073,8 +2085,21 @@ bool D3D12RHI::isPointLightShadowEnabled()
 
 bool D3D12RHI::allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers)
 {
-    (void)pAllocateInfo;
-    pCommandBuffers = new D3D12RHICommandBuffer();
+    if (pAllocateInfo != nullptr && pAllocateInfo->commandBufferCount != 1)
+    {
+        return false;
+    }
+
+    auto* command_buffer = new D3D12RHICommandBuffer();
+#ifdef _WIN32
+    if (m_d3d12_device != nullptr && !ensureCommandBufferObjects(command_buffer))
+    {
+        delete command_buffer;
+        pCommandBuffers = nullptr;
+        return false;
+    }
+#endif
+    pCommandBuffers = command_buffer;
     return true;
 }
 
@@ -3743,105 +3768,131 @@ bool D3D12RHI::resetCommandPoolPFN(RHICommandPool* commandPool, RHICommandPoolRe
 
 bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHICommandBufferBeginInfo* pBeginInfo)
 {
-    (void)commandBuffer;
     (void)pBeginInfo;
 #ifdef _WIN32
-    if (m_d3d12_command_allocator == nullptr || m_d3d12_command_list == nullptr)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    if (d3d_command_buffer == nullptr || !ensureCommandBufferObjects(commandBuffer))
     {
         return false;
     }
 
-    if (m_command_list_open)
+    if (d3d_command_buffer->is_open)
     {
         return true;
     }
 
     waitForGpu();
 
-    if (FAILED(m_d3d12_command_allocator->Reset()))
+    if (FAILED(d3d_command_buffer->command_allocator->Reset()))
     {
         return false;
     }
 
-    if (FAILED(m_d3d12_command_list->Reset(m_d3d12_command_allocator.Get(), nullptr)))
+    if (FAILED(d3d_command_buffer->command_list->Reset(d3d_command_buffer->command_allocator.Get(), nullptr)))
     {
         return false;
     }
 
-    m_in_render_pass = false;
-    m_command_list_open = true;
-    m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
+    d3d_command_buffer->is_open = true;
+    d3d_command_buffer->has_recorded_commands = false;
+    d3d_command_buffer->in_render_pass = false;
+    d3d_command_buffer->bound_graphics_pipeline = nullptr;
+    d3d_command_buffer->active_render_pass = nullptr;
+    d3d_command_buffer->active_framebuffer = nullptr;
+    d3d_command_buffer->active_subpass_index = 0;
+    d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
     return true;
 #else
+    (void)commandBuffer;
     return true;
 #endif
 }
 
 bool D3D12RHI::endCommandBufferPFN(RHICommandBuffer* commandBuffer)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    if (d3d_command_buffer == nullptr || d3d_command_buffer->command_list == nullptr)
     {
         return false;
     }
 
-    if (FAILED(m_d3d12_command_list->Close()))
+    if (!d3d_command_buffer->is_open)
+    {
+        return true;
+    }
+
+    if (FAILED(d3d_command_buffer->command_list->Close()))
     {
         return false;
     }
 
-    m_command_list_open = false;
+    d3d_command_buffer->is_open = false;
+    d3d_command_buffer->has_recorded_commands = true;
     return true;
 #else
+    (void)commandBuffer;
     return true;
 #endif
 }
 
 void D3D12RHI::cmdBeginRenderPassPFN(RHICommandBuffer* commandBuffer, const RHIRenderPassBeginInfo* pRenderPassBegin, RHISubpassContents contents)
 {
-    (void)commandBuffer;
     (void)contents;
 #ifdef _WIN32
-    m_active_render_pass      = pRenderPassBegin != nullptr ? pRenderPassBegin->renderPass : nullptr;
-    m_active_framebuffer      = pRenderPassBegin != nullptr ? pRenderPassBegin->framebuffer : nullptr;
-    m_active_subpass_index    = 0;
-    bindFramebufferForSubpass(pRenderPassBegin, m_active_subpass_index, true);
-    m_in_render_pass = true;
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (d3d_command_buffer == nullptr || command_list == nullptr)
+    {
+        return;
+    }
+
+    d3d_command_buffer->active_render_pass      = pRenderPassBegin != nullptr ? pRenderPassBegin->renderPass : nullptr;
+    d3d_command_buffer->active_framebuffer      = pRenderPassBegin != nullptr ? pRenderPassBegin->framebuffer : nullptr;
+    d3d_command_buffer->active_subpass_index    = 0;
+    bindFramebufferForSubpass(command_list, pRenderPassBegin, d3d_command_buffer->active_subpass_index, true);
+    d3d_command_buffer->in_render_pass = true;
+#else
+    (void)commandBuffer;
+    (void)pRenderPassBegin;
 #endif
 }
 
 void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassContents contents)
 {
-    (void)commandBuffer;
     (void)contents;
 #ifdef _WIN32
-    if (!m_in_render_pass)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (d3d_command_buffer == nullptr || command_list == nullptr || !d3d_command_buffer->in_render_pass)
     {
         return;
     }
 
-    ++m_active_subpass_index;
+    ++d3d_command_buffer->active_subpass_index;
     RHIRenderPassBeginInfo render_pass_begin_info {};
-    render_pass_begin_info.renderPass  = m_active_render_pass;
-    render_pass_begin_info.framebuffer = m_active_framebuffer;
+    render_pass_begin_info.renderPass  = d3d_command_buffer->active_render_pass;
+    render_pass_begin_info.framebuffer = d3d_command_buffer->active_framebuffer;
     render_pass_begin_info.renderArea.offset = m_swapchain_scissor.offset;
     render_pass_begin_info.renderArea.extent = m_swapchain_scissor.extent;
-    bindFramebufferForSubpass(&render_pass_begin_info, m_active_subpass_index, false);
+    bindFramebufferForSubpass(command_list, &render_pass_begin_info, d3d_command_buffer->active_subpass_index, false);
+#else
+    (void)commandBuffer;
 #endif
 }
 
 void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (d3d_command_buffer == nullptr || command_list == nullptr)
     {
         return;
     }
 
-    auto* render_pass = static_cast<D3D12RHIRenderPass*>(m_active_render_pass);
-    auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(m_active_framebuffer);
+    auto* render_pass = static_cast<D3D12RHIRenderPass*>(d3d_command_buffer->active_render_pass);
+    auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(d3d_command_buffer->active_framebuffer);
     if (render_pass != nullptr && framebuffer != nullptr)
     {
         for (uint32_t attachment_index = 0; attachment_index < framebuffer->attachments.size(); ++attachment_index)
@@ -3856,7 +3907,7 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
                 toD3D12ResourceState(render_pass->attachments[attachment_index].finalLayout);
             if (view != nullptr && view->image != nullptr && view->image->resource != nullptr)
             {
-                transitionResource(m_d3d12_command_list.Get(),
+                transitionResource(command_list,
                                    view->image->resource.Get(),
                                    view->image->current_state,
                                    final_state);
@@ -3876,47 +3927,51 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
                     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
                     barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-                    m_d3d12_command_list->ResourceBarrier(1, &barrier);
+                    command_list->ResourceBarrier(1, &barrier);
                 }
             }
         }
     }
 
-    m_in_render_pass = false;
-    m_active_render_pass = nullptr;
-    m_active_framebuffer = nullptr;
-    m_active_subpass_index = 0;
+    d3d_command_buffer->in_render_pass = false;
+    d3d_command_buffer->active_render_pass = nullptr;
+    d3d_command_buffer->active_framebuffer = nullptr;
+    d3d_command_buffer->active_subpass_index = 0;
+#else
+    (void)commandBuffer;
 #endif
 }
 
 void D3D12RHI::cmdBindPipelinePFN(RHICommandBuffer* commandBuffer, RHIPipelineBindPoint pipelineBindPoint, RHIPipeline* pipeline)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* d3d_pipeline = static_cast<D3D12RHIPipeline*>(pipeline);
-    if (m_d3d12_command_list == nullptr || d3d_pipeline == nullptr)
+    if (d3d_command_buffer == nullptr || command_list == nullptr || d3d_pipeline == nullptr)
     {
         return;
     }
 
     if (d3d_pipeline->pipeline_state != nullptr)
     {
-        m_d3d12_command_list->SetPipelineState(d3d_pipeline->pipeline_state.Get());
+        command_list->SetPipelineState(d3d_pipeline->pipeline_state.Get());
     }
     if (d3d_pipeline->layout != nullptr && d3d_pipeline->layout->root_signature != nullptr)
     {
         if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
         {
-            m_d3d12_command_list->SetComputeRootSignature(d3d_pipeline->layout->root_signature.Get());
+            command_list->SetComputeRootSignature(d3d_pipeline->layout->root_signature.Get());
         }
         else
         {
-            m_bound_graphics_pipeline = pipeline;
-            m_d3d12_command_list->SetGraphicsRootSignature(d3d_pipeline->layout->root_signature.Get());
-            m_d3d12_command_list->IASetPrimitiveTopology(d3d_pipeline->primitive_topology);
+            d3d_command_buffer->bound_graphics_pipeline = pipeline;
+            command_list->SetGraphicsRootSignature(d3d_pipeline->layout->root_signature.Get());
+            command_list->IASetPrimitiveTopology(d3d_pipeline->primitive_topology);
         }
     }
 #else
+    (void)commandBuffer;
     (void)pipelineBindPoint;
     (void)pipeline;
 #endif
@@ -3925,9 +3980,9 @@ void D3D12RHI::cmdBindPipelinePFN(RHICommandBuffer* commandBuffer, RHIPipelineBi
 
 void D3D12RHI::cmdSetViewportPFN(RHICommandBuffer* commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const RHIViewport* pViewports)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr || pViewports == nullptr || viewportCount == 0)
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (command_list == nullptr || pViewports == nullptr || viewportCount == 0)
     {
         return;
     }
@@ -3949,16 +4004,21 @@ void D3D12RHI::cmdSetViewportPFN(RHICommandBuffer* commandBuffer, uint32_t first
 
     if (firstViewport < d3d_viewports.size())
     {
-        m_d3d12_command_list->RSSetViewports(viewportCount - firstViewport, d3d_viewports.data() + firstViewport);
+        command_list->RSSetViewports(viewportCount - firstViewport, d3d_viewports.data() + firstViewport);
     }
+#else
+    (void)commandBuffer;
+    (void)firstViewport;
+    (void)viewportCount;
+    (void)pViewports;
 #endif
 }
 
 void D3D12RHI::cmdSetScissorPFN(RHICommandBuffer* commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const RHIRect2D* pScissors)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr || pScissors == nullptr || scissorCount == 0)
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (command_list == nullptr || pScissors == nullptr || scissorCount == 0)
     {
         return;
     }
@@ -3978,21 +4038,27 @@ void D3D12RHI::cmdSetScissorPFN(RHICommandBuffer* commandBuffer, uint32_t firstS
 
     if (firstScissor < d3d_scissors.size())
     {
-        m_d3d12_command_list->RSSetScissorRects(scissorCount - firstScissor, d3d_scissors.data() + firstScissor);
+        command_list->RSSetScissorRects(scissorCount - firstScissor, d3d_scissors.data() + firstScissor);
     }
+#else
+    (void)commandBuffer;
+    (void)firstScissor;
+    (void)scissorCount;
+    (void)pScissors;
 #endif
 }
 
 void D3D12RHI::cmdBindVertexBuffersPFN( RHICommandBuffer* commandBuffer, uint32_t firstBinding, uint32_t bindingCount, RHIBuffer* const* pBuffers, const RHIDeviceSize* pOffsets)
 {
 #ifdef _WIN32
-    (void)commandBuffer;
-    if (m_d3d12_command_list == nullptr || pBuffers == nullptr || bindingCount == 0)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (d3d_command_buffer == nullptr || command_list == nullptr || pBuffers == nullptr || bindingCount == 0)
     {
         return;
     }
 
-    const auto* bound_pipeline = static_cast<const D3D12RHIPipeline*>(m_bound_graphics_pipeline);
+    const auto* bound_pipeline = static_cast<const D3D12RHIPipeline*>(d3d_command_buffer->bound_graphics_pipeline);
     std::vector<D3D12_VERTEX_BUFFER_VIEW> views;
     views.reserve(bindingCount);
     for (uint32_t i = 0; i < bindingCount; ++i)
@@ -4007,7 +4073,7 @@ void D3D12RHI::cmdBindVertexBuffersPFN( RHICommandBuffer* commandBuffer, uint32_
         const RHIDeviceSize offset = pOffsets != nullptr ? pOffsets[i] : 0;
         if (buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
         {
-            transitionResource(m_d3d12_command_list.Get(),
+            transitionResource(command_list,
                                buffer->resource.Get(),
                                buffer->current_state,
                                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
@@ -4023,7 +4089,7 @@ void D3D12RHI::cmdBindVertexBuffersPFN( RHICommandBuffer* commandBuffer, uint32_
         views.push_back(view);
     }
 
-    m_d3d12_command_list->IASetVertexBuffers(firstBinding, static_cast<UINT>(views.size()), views.data());
+    command_list->IASetVertexBuffers(firstBinding, static_cast<UINT>(views.size()), views.data());
 #else
     (void)commandBuffer;
     (void)firstBinding;
@@ -4037,16 +4103,16 @@ void D3D12RHI::cmdBindVertexBuffersPFN( RHICommandBuffer* commandBuffer, uint32_
 void D3D12RHI::cmdBindIndexBufferPFN(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset, RHIIndexType indexType)
 {
 #ifdef _WIN32
-    (void)commandBuffer;
+    auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* d3d_buffer = static_cast<D3D12RHIBuffer*>(buffer);
-    if (m_d3d12_command_list == nullptr || d3d_buffer == nullptr || d3d_buffer->resource == nullptr)
+    if (command_list == nullptr || d3d_buffer == nullptr || d3d_buffer->resource == nullptr)
     {
         return;
     }
 
     if (d3d_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
     {
-        transitionResource(m_d3d12_command_list.Get(),
+        transitionResource(command_list,
                            d3d_buffer->resource.Get(),
                            d3d_buffer->current_state,
                            D3D12_RESOURCE_STATE_INDEX_BUFFER);
@@ -4056,7 +4122,7 @@ void D3D12RHI::cmdBindIndexBufferPFN(RHICommandBuffer* commandBuffer, RHIBuffer*
     view.BufferLocation = d3d_buffer->resource->GetGPUVirtualAddress() + offset;
     view.SizeInBytes    = offset < d3d_buffer->size ? static_cast<UINT>(d3d_buffer->size - offset) : 0;
     view.Format         = indexType == RHI_INDEX_TYPE_UINT32 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;
-    m_d3d12_command_list->IASetIndexBuffer(&view);
+    command_list->IASetIndexBuffer(&view);
 #else
     (void)commandBuffer;
     (void)buffer;
@@ -4068,16 +4134,17 @@ void D3D12RHI::cmdBindIndexBufferPFN(RHICommandBuffer* commandBuffer, RHIBuffer*
 
 void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPipelineBindPoint pipelineBindPoint, RHIPipelineLayout* layout, uint32_t firstSet, uint32_t descriptorSetCount, const RHIDescriptorSet* const* pDescriptorSets, uint32_t dynamicOffsetCount, const uint32_t* pDynamicOffsets)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* d3d_layout = static_cast<D3D12RHIPipelineLayout*>(layout);
-    if (m_d3d12_command_list == nullptr || d3d_layout == nullptr || pDescriptorSets == nullptr)
+    if (d3d_command_buffer == nullptr || command_list == nullptr || d3d_layout == nullptr || pDescriptorSets == nullptr)
     {
         return;
     }
 
     uint32_t preflight_dynamic_offset_index = 0;
-    uint32_t preflight_transient_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
+    uint32_t preflight_transient_next = d3d_command_buffer->transient_cbv_srv_uav_descriptor_next;
     for (uint32_t i = 0; i < descriptorSetCount; ++i)
     {
         const uint32_t set_index = firstSet + i;
@@ -4133,7 +4200,7 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
     }
     if (heap_count > 0)
     {
-        m_d3d12_command_list->SetDescriptorHeaps(heap_count, heaps);
+        command_list->SetDescriptorHeaps(heap_count, heaps);
     }
 
     uint32_t dynamic_offset_index = 0;
@@ -4157,7 +4224,7 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             if (buffer != nullptr)
             {
                 (void)recordHostDataUpload(m_d3d12_device.Get(),
-                                           m_d3d12_command_list.Get(),
+                                           command_list,
                                            m_pending_upload_buffers,
                                            *buffer);
             }
@@ -4168,7 +4235,7 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             auto* buffer = buffer_descriptor.buffer;
             if (buffer != nullptr && buffer->resource != nullptr && buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
             {
-                transitionResource(m_d3d12_command_list.Get(),
+                transitionResource(command_list,
                                     buffer->resource.Get(),
                                     buffer->current_state,
                                     descriptorBufferState(buffer_descriptor.range_type));
@@ -4192,10 +4259,14 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
         {
             uint32_t transient_base = 0;
             if (reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
-                                   m_d3d12_transient_cbv_srv_uav_descriptor_next,
+                                   d3d_command_buffer->transient_cbv_srv_uav_descriptor_next,
                                    m_d3d12_cbv_srv_uav_descriptor_capacity,
                                    transient_base))
             {
+                m_d3d12_transient_cbv_srv_uav_descriptor_next =
+                    (std::max)(m_d3d12_transient_cbv_srv_uav_descriptor_next,
+                               d3d_command_buffer->transient_cbv_srv_uav_descriptor_next);
+
                 D3D12_CPU_DESCRIPTOR_HANDLE transient_cpu_base = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
                                                                               m_d3d12_cbv_srv_uav_descriptor_size,
                                                                               transient_base);
@@ -4256,11 +4327,11 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             const uint32_t root_index = d3d_layout->cbv_srv_uav_root_parameter_indices[set_index];
             if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
             {
-                m_d3d12_command_list->SetComputeRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
+                command_list->SetComputeRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
             }
             else
             {
-                m_d3d12_command_list->SetGraphicsRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
+                command_list->SetGraphicsRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
             }
         }
         if (descriptor_set->has_sampler_descriptors &&
@@ -4270,15 +4341,16 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             const uint32_t root_index = d3d_layout->sampler_root_parameter_indices[set_index];
             if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
             {
-                m_d3d12_command_list->SetComputeRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
+                command_list->SetComputeRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
             }
             else
             {
-                m_d3d12_command_list->SetGraphicsRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
+                command_list->SetGraphicsRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
             }
         }
     }
 #else
+    (void)commandBuffer;
     (void)pipelineBindPoint;
     (void)layout;
     (void)firstSet;
@@ -4290,22 +4362,31 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
 
 void D3D12RHI::cmdDrawIndexedPFN(RHICommandBuffer* commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr)
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (command_list == nullptr)
     {
         return;
     }
 
-    m_d3d12_command_list->DrawIndexedInstanced(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    command_list->DrawIndexedInstanced(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+#else
+    (void)commandBuffer;
+    (void)indexCount;
+    (void)instanceCount;
+    (void)firstIndex;
+    (void)vertexOffset;
+    (void)firstInstance;
 #endif
 }
 
 void D3D12RHI::cmdClearAttachmentsPFN(RHICommandBuffer* commandBuffer, uint32_t attachmentCount, const RHIClearAttachment* pAttachments, uint32_t rectCount, const RHIClearRect* pRects)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr ||
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (d3d_command_buffer == nullptr ||
+        command_list == nullptr ||
         pAttachments == nullptr ||
         attachmentCount == 0 ||
         (rectCount > 0 && pRects == nullptr))
@@ -4313,9 +4394,9 @@ void D3D12RHI::cmdClearAttachmentsPFN(RHICommandBuffer* commandBuffer, uint32_t 
         return;
     }
 
-    auto* render_pass = static_cast<D3D12RHIRenderPass*>(m_active_render_pass);
-    auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(m_active_framebuffer);
-    if (render_pass == nullptr || framebuffer == nullptr || m_active_subpass_index >= render_pass->subpasses.size())
+    auto* render_pass = static_cast<D3D12RHIRenderPass*>(d3d_command_buffer->active_render_pass);
+    auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(d3d_command_buffer->active_framebuffer);
+    if (render_pass == nullptr || framebuffer == nullptr || d3d_command_buffer->active_subpass_index >= render_pass->subpasses.size())
     {
         return;
     }
@@ -4332,7 +4413,7 @@ void D3D12RHI::cmdClearAttachmentsPFN(RHICommandBuffer* commandBuffer, uint32_t 
         clear_rects.push_back(rect);
     }
 
-    const D3D12RHIRenderPass::SubpassInfo& subpass = render_pass->subpasses[m_active_subpass_index];
+    const D3D12RHIRenderPass::SubpassInfo& subpass = render_pass->subpasses[d3d_command_buffer->active_subpass_index];
     for (uint32_t attachment_index = 0; attachment_index < attachmentCount; ++attachment_index)
     {
         const RHIClearAttachment& clear_attachment = pAttachments[attachment_index];
@@ -4359,10 +4440,10 @@ void D3D12RHI::cmdClearAttachmentsPFN(RHICommandBuffer* commandBuffer, uint32_t 
                                     clear_attachment.clearValue.color.float32[1],
                                     clear_attachment.clearValue.color.float32[2],
                                     clear_attachment.clearValue.color.float32[3]};
-            m_d3d12_command_list->ClearRenderTargetView(view->cpu_descriptor,
-                                                        color,
-                                                        static_cast<UINT>(clear_rects.size()),
-                                                        clear_rects.empty() ? nullptr : clear_rects.data());
+            command_list->ClearRenderTargetView(view->cpu_descriptor,
+                                                color,
+                                                static_cast<UINT>(clear_rects.size()),
+                                                clear_rects.empty() ? nullptr : clear_rects.data());
         }
 
         if (hasFlag(clear_attachment.aspectMask, RHI_IMAGE_ASPECT_DEPTH_BIT) ||
@@ -4394,15 +4475,16 @@ void D3D12RHI::cmdClearAttachmentsPFN(RHICommandBuffer* commandBuffer, uint32_t 
                 continue;
             }
 
-            m_d3d12_command_list->ClearDepthStencilView(depth_view->cpu_descriptor,
-                                                        clear_flags,
-                                                        clear_attachment.clearValue.depthStencil.depth,
-                                                        static_cast<UINT8>(clear_attachment.clearValue.depthStencil.stencil),
-                                                        static_cast<UINT>(clear_rects.size()),
-                                                        clear_rects.empty() ? nullptr : clear_rects.data());
+            command_list->ClearDepthStencilView(depth_view->cpu_descriptor,
+                                                clear_flags,
+                                                clear_attachment.clearValue.depthStencil.depth,
+                                                static_cast<UINT8>(clear_attachment.clearValue.depthStencil.stencil),
+                                                static_cast<UINT>(clear_rects.size()),
+                                                clear_rects.empty() ? nullptr : clear_rects.data());
         }
     }
 #else
+    (void)commandBuffer;
     (void)attachmentCount;
     (void)pAttachments;
     (void)rectCount;
@@ -4418,13 +4500,13 @@ bool D3D12RHI::beginCommandBuffer(RHICommandBuffer* commandBuffer, const RHIComm
 
 void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageLayout srcImageLayout, RHIBuffer* dstBuffer, uint32_t regionCount, const RHIBufferImageCopy* pRegions)
 {
-    (void)commandBuffer;
     (void)srcImageLayout;
 #ifdef _WIN32
+    auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* src = static_cast<D3D12RHIImage*>(srcImage);
     auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
     if (m_d3d12_device == nullptr ||
-        m_d3d12_command_list == nullptr ||
+        command_list == nullptr ||
         src == nullptr ||
         dst == nullptr ||
         src->resource == nullptr ||
@@ -4435,7 +4517,7 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
         return;
     }
 
-    transitionResource(m_d3d12_command_list.Get(),
+    transitionResource(command_list,
                        src->resource.Get(),
                        src->current_state,
                        D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -4526,7 +4608,7 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
             source_box.bottom = source_box.top + region.imageExtent.height;
             source_box.back   = source_box.front + (std::max)(1U, region.imageExtent.depth);
 
-            m_d3d12_command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, &source_box);
+            command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, &source_box);
 
             D3D12PendingTextureReadback pending_readback {};
             pending_readback.destination_buffer    = dstBuffer;
@@ -4541,6 +4623,7 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
         }
     }
 #else
+    (void)commandBuffer;
     (void)srcImage;
     (void)dstBuffer;
     (void)regionCount;
@@ -4551,13 +4634,13 @@ void D3D12RHI::cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* s
 
 void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height)
 {
-    (void)commandBuffer;
     (void)srcFlag;
     (void)dstFlag;
 #ifdef _WIN32
+    auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* src = static_cast<D3D12RHIImage*>(srcImage);
     auto* dst = static_cast<D3D12RHIImage*>(dstImage);
-    if (m_d3d12_command_list == nullptr ||
+    if (command_list == nullptr ||
         src == nullptr ||
         dst == nullptr ||
         src->resource == nullptr ||
@@ -4566,8 +4649,8 @@ void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* sr
         return;
     }
 
-    transitionResource(m_d3d12_command_list.Get(), src->resource.Get(), src->current_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    transitionResource(m_d3d12_command_list.Get(), dst->resource.Get(), dst->current_state, D3D12_RESOURCE_STATE_COPY_DEST);
+    transitionResource(command_list, src->resource.Get(), src->current_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    transitionResource(command_list, dst->resource.Get(), dst->current_state, D3D12_RESOURCE_STATE_COPY_DEST);
 
     D3D12_TEXTURE_COPY_LOCATION src_location {};
     src_location.pResource        = src->resource.Get();
@@ -4586,8 +4669,9 @@ void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* sr
     source_box.right  = (std::min)(width, src->width);
     source_box.bottom = (std::min)(height, src->height);
     source_box.back   = 1;
-    m_d3d12_command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, &source_box);
+    command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, &source_box);
 #else
+    (void)commandBuffer;
     (void)srcImage;
     (void)dstImage;
     (void)width;
@@ -4598,99 +4682,149 @@ void D3D12RHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* sr
 
 void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, uint32_t regionCount, RHIBufferCopy* pRegions)
 {
+#ifdef _WIN32
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    auto* src = static_cast<D3D12RHIBuffer*>(srcBuffer);
+    auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
+    if (command_list == nullptr || src == nullptr || dst == nullptr)
+    {
+        return;
+    }
+
+    RHIBufferCopy default_region {};
+    const RHIBufferCopy* regions = pRegions;
+    if (regions == nullptr || regionCount == 0)
+    {
+        default_region.srcOffset = 0;
+        default_region.dstOffset = 0;
+        default_region.size = (std::min)(src->size, dst->size);
+        regions = &default_region;
+        regionCount = default_region.size > 0 ? 1 : 0;
+    }
+
+    for (uint32_t i = 0; i < regionCount; ++i)
+    {
+        const RHIBufferCopy& region = regions[i];
+        if (src->resource == nullptr ||
+            dst->resource == nullptr ||
+            dst->heap_type == D3D12_HEAP_TYPE_UPLOAD ||
+            region.srcOffset > src->size ||
+            region.dstOffset > dst->size ||
+            region.size > src->size - region.srcOffset ||
+            region.size > dst->size - region.dstOffset)
+        {
+            continue;
+        }
+
+        if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+        {
+            transitionResource(command_list,
+                               src->resource.Get(),
+                               src->current_state,
+                               D3D12_RESOURCE_STATE_COPY_SOURCE);
+        }
+        if (dst->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+        {
+            transitionResource(command_list,
+                               dst->resource.Get(),
+                               dst->current_state,
+                               D3D12_RESOURCE_STATE_COPY_DEST);
+        }
+        command_list->CopyBufferRegion(dst->resource.Get(),
+                                       region.dstOffset,
+                                       src->resource.Get(),
+                                       region.srcOffset,
+                                       region.size);
+        dst->map_host_data = false;
+        if (!src->host_data.empty() && !dst->host_data.empty())
+        {
+            std::memcpy(dst->host_data.data() + static_cast<size_t>(region.dstOffset),
+                        src->host_data.data() + static_cast<size_t>(region.srcOffset),
+                        static_cast<size_t>(region.size));
+        }
+    }
+#else
     (void)commandBuffer;
     if (srcBuffer == nullptr || dstBuffer == nullptr)
     {
         return;
     }
 
+    auto* src = static_cast<D3D12RHIBuffer*>(srcBuffer);
+    auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
+    if (src == nullptr || dst == nullptr)
+    {
+        return;
+    }
+
+    RHIBufferCopy default_region {};
+    const RHIBufferCopy* regions = pRegions;
     if (pRegions == nullptr || regionCount == 0)
     {
-        auto* src = static_cast<D3D12RHIBuffer*>(srcBuffer);
-        const RHIDeviceSize fallback_size = static_cast<RHIDeviceSize>(src->host_data.size());
-        copyBuffer(srcBuffer, dstBuffer, 0, 0, fallback_size);
-        return;
+        default_region.srcOffset = 0;
+        default_region.dstOffset = 0;
+        default_region.size = (std::min)(static_cast<RHIDeviceSize>(src->host_data.size()),
+                                         static_cast<RHIDeviceSize>(dst->host_data.size()));
+        regions = &default_region;
+        regionCount = default_region.size > 0 ? 1 : 0;
     }
 
     for (uint32_t i = 0; i < regionCount; ++i)
     {
-#ifdef _WIN32
-        auto* src = static_cast<D3D12RHIBuffer*>(srcBuffer);
-        auto* dst = static_cast<D3D12RHIBuffer*>(dstBuffer);
-        const RHIBufferCopy& region = pRegions[i];
-        if (m_d3d12_command_list != nullptr &&
-            src->resource != nullptr &&
-            dst->resource != nullptr &&
-            dst->heap_type != D3D12_HEAP_TYPE_UPLOAD &&
-            region.srcOffset <= src->size &&
-            region.dstOffset <= dst->size &&
-            region.size <= src->size - region.srcOffset &&
-            region.size <= dst->size - region.dstOffset)
+        const RHIBufferCopy& region = regions[i];
+        if (region.srcOffset <= src->host_data.size() &&
+            region.dstOffset <= dst->host_data.size() &&
+            region.size <= src->host_data.size() - region.srcOffset &&
+            region.size <= dst->host_data.size() - region.dstOffset)
         {
-            if (src->heap_type == D3D12_HEAP_TYPE_DEFAULT)
-            {
-                transitionResource(m_d3d12_command_list.Get(),
-                                   src->resource.Get(),
-                                   src->current_state,
-                                   D3D12_RESOURCE_STATE_COPY_SOURCE);
-            }
-            if (dst->heap_type == D3D12_HEAP_TYPE_DEFAULT)
-            {
-                transitionResource(m_d3d12_command_list.Get(),
-                                   dst->resource.Get(),
-                                   dst->current_state,
-                                   D3D12_RESOURCE_STATE_COPY_DEST);
-            }
-            m_d3d12_command_list->CopyBufferRegion(dst->resource.Get(),
-                                                   region.dstOffset,
-                                                   src->resource.Get(),
-                                                   region.srcOffset,
-                                                   region.size);
-            dst->map_host_data = false;
-            if (!src->host_data.empty() && !dst->host_data.empty())
-            {
-                std::memcpy(dst->host_data.data() + static_cast<size_t>(region.dstOffset),
-                            src->host_data.data() + static_cast<size_t>(region.srcOffset),
-                            static_cast<size_t>(region.size));
-            }
-            continue;
+            std::memcpy(dst->host_data.data() + static_cast<size_t>(region.dstOffset),
+                        src->host_data.data() + static_cast<size_t>(region.srcOffset),
+                        static_cast<size_t>(region.size));
         }
-#endif
-        copyBuffer(srcBuffer, dstBuffer, pRegions[i].srcOffset, pRegions[i].dstOffset, pRegions[i].size);
     }
+#endif
     return;
 }
 
 void D3D12RHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list != nullptr)
+    if (auto* command_list = d3d12CommandListFor(commandBuffer))
     {
-        m_d3d12_command_list->DrawInstanced(vertexCount, instanceCount, firstVertex, firstInstance);
+        command_list->DrawInstanced(vertexCount, instanceCount, firstVertex, firstInstance);
     }
+#else
+    (void)commandBuffer;
+    (void)vertexCount;
+    (void)instanceCount;
+    (void)firstVertex;
+    (void)firstInstance;
 #endif
     return;
 }
 
 void D3D12RHI::cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
-    if (m_d3d12_command_list != nullptr)
+    if (auto* command_list = d3d12CommandListFor(commandBuffer))
     {
-        m_d3d12_command_list->Dispatch(groupCountX, groupCountY, groupCountZ);
+        command_list->Dispatch(groupCountX, groupCountY, groupCountZ);
     }
+#else
+    (void)commandBuffer;
+    (void)groupCountX;
+    (void)groupCountY;
+    (void)groupCountZ;
 #endif
     return;
 }
 
 void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset)
 {
-    (void)commandBuffer;
 #ifdef _WIN32
+    auto* command_list = d3d12CommandListFor(commandBuffer);
     auto* d3d_buffer = static_cast<D3D12RHIBuffer*>(buffer);
-    if (m_d3d12_command_list == nullptr ||
+    if (command_list == nullptr ||
         d3d_buffer == nullptr ||
         d3d_buffer->resource == nullptr ||
         !ensureDispatchCommandSignature())
@@ -4700,19 +4834,20 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
 
     if (d3d_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
     {
-        transitionResource(m_d3d12_command_list.Get(),
+        transitionResource(command_list,
                            d3d_buffer->resource.Get(),
                            d3d_buffer->current_state,
                            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     }
 
-    m_d3d12_command_list->ExecuteIndirect(m_d3d12_dispatch_command_signature.Get(),
-                                          1,
-                                          d3d_buffer->resource.Get(),
-                                          offset,
-                                          nullptr,
-                                          0);
+    command_list->ExecuteIndirect(m_d3d12_dispatch_command_signature.Get(),
+                                  1,
+                                  d3d_buffer->resource.Get(),
+                                  offset,
+                                  nullptr,
+                                  0);
 #else
+    (void)commandBuffer;
     (void)buffer;
     (void)offset;
 #endif
@@ -4721,12 +4856,12 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
 
 void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers)
 {
-    (void)commandBuffer;
     (void)srcStageMask;
     (void)dstStageMask;
     (void)dependencyFlags;
 #ifdef _WIN32
-    if (m_d3d12_command_list == nullptr)
+    auto* command_list = d3d12CommandListFor(commandBuffer);
+    if (command_list == nullptr)
     {
         return;
     }
@@ -4745,7 +4880,7 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
                 barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
                 barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
                 barrier.UAV.pResource = nullptr;
-                m_d3d12_command_list->ResourceBarrier(1, &barrier);
+                command_list->ResourceBarrier(1, &barrier);
             }
         }
     }
@@ -4773,11 +4908,11 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
                     barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
                     barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
                     barrier.UAV.pResource = buffer->resource.Get();
-                    m_d3d12_command_list->ResourceBarrier(1, &barrier);
+                    command_list->ResourceBarrier(1, &barrier);
                 }
                 else
                 {
-                    transitionResource(m_d3d12_command_list.Get(),
+                    transitionResource(command_list,
                                        buffer->resource.Get(),
                                        buffer->current_state,
                                        target_state);
@@ -4806,11 +4941,11 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
                 barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
                 barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
                 barrier.UAV.pResource = image->resource.Get();
-                m_d3d12_command_list->ResourceBarrier(1, &barrier);
+                command_list->ResourceBarrier(1, &barrier);
             }
             else
             {
-                transitionResource(m_d3d12_command_list.Get(),
+                transitionResource(command_list,
                                    image->resource.Get(),
                                    image->current_state,
                                    target_state);
@@ -4818,6 +4953,7 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
         }
     }
 #else
+    (void)commandBuffer;
     (void)memoryBarrierCount;
     (void)pMemoryBarriers;
     (void)bufferMemoryBarrierCount;
@@ -5058,40 +5194,55 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
     (void)queue;
     (void)fence;
 #ifdef _WIN32
-    if (m_d3d12_command_queue == nullptr || m_d3d12_command_list == nullptr)
+    if (m_d3d12_command_queue == nullptr)
     {
         return false;
     }
 
-    bool has_work = false;
+    std::vector<ID3D12CommandList*> command_lists;
     if (pSubmits != nullptr)
     {
         for (uint32_t i = 0; i < submitCount; ++i)
         {
-            if (pSubmits[i].commandBufferCount > 0 && pSubmits[i].pCommandBuffers != nullptr)
+            if (pSubmits[i].commandBufferCount == 0 || pSubmits[i].pCommandBuffers == nullptr)
             {
-                has_work = true;
-                break;
+                continue;
+            }
+
+            for (uint32_t command_buffer_index = 0; command_buffer_index < pSubmits[i].commandBufferCount; ++command_buffer_index)
+            {
+                auto* d3d_command_buffer =
+                    static_cast<D3D12RHICommandBuffer*>(pSubmits[i].pCommandBuffers[command_buffer_index]);
+                if (d3d_command_buffer == nullptr || d3d_command_buffer->command_list == nullptr)
+                {
+                    continue;
+                }
+
+                if (d3d_command_buffer->is_open)
+                {
+                    if (FAILED(d3d_command_buffer->command_list->Close()))
+                    {
+                        d3d_command_buffer->is_open = false;
+                        return false;
+                    }
+                    d3d_command_buffer->is_open = false;
+                    d3d_command_buffer->has_recorded_commands = true;
+                }
+
+                if (d3d_command_buffer->has_recorded_commands)
+                {
+                    command_lists.push_back(d3d_command_buffer->command_list.Get());
+                }
             }
         }
     }
 
-    if (!has_work)
+    if (command_lists.empty())
     {
         return true;
     }
 
-    if (m_command_list_open)
-    {
-        if (FAILED(m_d3d12_command_list->Close()))
-        {
-            return false;
-        }
-        m_command_list_open = false;
-    }
-
-    ID3D12CommandList* command_lists[] = {m_d3d12_command_list.Get()};
-    m_d3d12_command_queue->ExecuteCommandLists(1, command_lists);
+    m_d3d12_command_queue->ExecuteCommandLists(static_cast<UINT>(command_lists.size()), command_lists.data());
     waitForGpu();
     return true;
 #else
@@ -5111,21 +5262,15 @@ bool D3D12RHI::queueWaitIdle(RHIQueue* queue)
 void D3D12RHI::resetCommandPool()
 {
 #ifdef _WIN32
-    if (!m_d3d12_command_allocator || !m_d3d12_command_list)
-    {
-        return;
-    }
-
-    if (m_command_list_open)
-    {
-        return;
-    }
-
     waitForGpu();
-
-    (void)m_d3d12_command_allocator->Reset();
-    (void)m_d3d12_command_list->Reset(m_d3d12_command_allocator.Get(), nullptr);
-    m_command_list_open = true;
+    if (auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer))
+    {
+        if (d3d_command_buffer->is_open)
+        {
+            return;
+        }
+        d3d_command_buffer->has_recorded_commands = false;
+    }
     m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
 #endif
     return;
@@ -5226,14 +5371,11 @@ RHICommandBuffer* D3D12RHI::beginSingleTimeCommands()
 {
     auto* command_buffer = new D3D12RHICommandBuffer();
 #ifdef _WIN32
-    if (!m_command_list_open)
+    RHICommandBufferBeginInfo begin_info {};
+    begin_info.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    if (beginCommandBufferPFN(command_buffer, &begin_info))
     {
-        RHICommandBufferBeginInfo begin_info {};
-        begin_info.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        if (beginCommandBufferPFN(command_buffer, &begin_info))
-        {
-            command_buffer->owns_recording = true;
-        }
+        command_buffer->owns_recording = true;
     }
 #endif
     return command_buffer;
@@ -5245,20 +5387,21 @@ void D3D12RHI::endSingleTimeCommands(RHICommandBuffer* command_buffer)
 #ifdef _WIN32
     if (d3d_command_buffer != nullptr && d3d_command_buffer->owns_recording)
     {
-        if (m_d3d12_command_queue != nullptr && m_d3d12_command_list != nullptr)
+        if (m_d3d12_command_queue != nullptr && d3d_command_buffer->command_list != nullptr)
         {
-            if (m_command_list_open)
+            if (d3d_command_buffer->is_open)
             {
-                if (FAILED(m_d3d12_command_list->Close()))
+                if (FAILED(d3d_command_buffer->command_list->Close()))
                 {
+                    d3d_command_buffer->is_open = false;
                     delete d3d_command_buffer;
-                    m_command_list_open = false;
                     return;
                 }
-                m_command_list_open = false;
+                d3d_command_buffer->is_open = false;
+                d3d_command_buffer->has_recorded_commands = true;
             }
 
-            ID3D12CommandList* command_lists[] = {m_d3d12_command_list.Get()};
+            ID3D12CommandList* command_lists[] = {d3d_command_buffer->command_list.Get()};
             m_d3d12_command_queue->ExecuteCommandLists(1, command_lists);
             waitForGpu();
         }
@@ -5280,16 +5423,23 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
     m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
     m_current_command_buffer = m_dummy_command_buffers[m_current_frame_index % m_dummy_command_buffers.size()];
 
-    if (m_d3d12_command_allocator && m_d3d12_command_list)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
+    if (d3d_command_buffer != nullptr && ensureCommandBufferObjects(m_current_command_buffer))
     {
-        if (!m_command_list_open)
+        if (!d3d_command_buffer->is_open)
         {
             waitForGpu();
-            (void)m_d3d12_command_allocator->Reset();
-            (void)m_d3d12_command_list->Reset(m_d3d12_command_allocator.Get(), nullptr);
-            m_command_list_open = true;
+            (void)d3d_command_buffer->command_allocator->Reset();
+            (void)d3d_command_buffer->command_list->Reset(d3d_command_buffer->command_allocator.Get(), nullptr);
+            d3d_command_buffer->is_open = true;
+            d3d_command_buffer->has_recorded_commands = false;
+            d3d_command_buffer->in_render_pass = false;
+            d3d_command_buffer->bound_graphics_pipeline = nullptr;
+            d3d_command_buffer->active_render_pass = nullptr;
+            d3d_command_buffer->active_framebuffer = nullptr;
+            d3d_command_buffer->active_subpass_index = 0;
+            d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
         }
-        m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
     }
 #endif
     return false;
@@ -5299,18 +5449,24 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
 {
     (void)passUpdateAfterRecreateSwapchain;
 #ifdef _WIN32
-    if (!m_d3d12_swapchain || !m_d3d12_command_queue || !m_d3d12_command_list)
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
+    if (!m_d3d12_swapchain ||
+        !m_d3d12_command_queue ||
+        d3d_command_buffer == nullptr ||
+        d3d_command_buffer->command_list == nullptr)
     {
         return;
     }
 
-    if (m_command_list_open && FAILED(m_d3d12_command_list->Close()))
+    if (d3d_command_buffer->is_open && FAILED(d3d_command_buffer->command_list->Close()))
     {
+        d3d_command_buffer->is_open = false;
         return;
     }
-    m_command_list_open = false;
+    d3d_command_buffer->is_open = false;
+    d3d_command_buffer->has_recorded_commands = true;
 
-    ID3D12CommandList* command_lists[] = {m_d3d12_command_list.Get()};
+    ID3D12CommandList* command_lists[] = {d3d_command_buffer->command_list.Get()};
     m_d3d12_command_queue->ExecuteCommandLists(1, command_lists);
     (void)m_d3d12_swapchain->Present(1, 0);
     waitForGpu();
@@ -5660,10 +5816,12 @@ void D3D12RHI::flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHI
         return;
     }
 
-    if (m_command_list_open && m_d3d12_command_list != nullptr)
+    auto* current_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
+    auto* current_command_list = d3d12CommandListFor(m_current_command_buffer);
+    if (current_command_buffer != nullptr && current_command_buffer->is_open && current_command_list != nullptr)
     {
         (void)recordHostDataUpload(m_d3d12_device.Get(),
-                                   m_d3d12_command_list.Get(),
+                                   current_command_list,
                                    m_pending_upload_buffers,
                                    *buffer);
     }
@@ -5861,6 +6019,10 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
     ID3D12GraphicsCommandList* D3D12RHI::getD3D12CommandList() const
     {
+        if (auto* current_command_list = d3d12CommandListFor(m_current_command_buffer))
+        {
+            return current_command_list;
+        }
         return m_d3d12_command_list.Get();
     }
 
@@ -5882,6 +6044,64 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
     DXGI_FORMAT D3D12RHI::getD3D12SwapchainFormat() const
     {
         return DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+
+    bool D3D12RHI::ensureCommandBufferObjects(RHICommandBuffer* commandBuffer)
+    {
+        auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+        if (d3d_command_buffer == nullptr || m_d3d12_device == nullptr)
+        {
+            return false;
+        }
+
+        if (d3d_command_buffer->command_allocator == nullptr)
+        {
+            const HRESULT allocator_result =
+                m_d3d12_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                       IID_PPV_ARGS(&d3d_command_buffer->command_allocator));
+            if (FAILED(allocator_result))
+            {
+                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "command buffer allocator creation failure");
+                LOG_ERROR("D3D12 command allocator creation failed (HRESULT=0x{:08X})",
+                          static_cast<unsigned int>(allocator_result));
+                return false;
+            }
+        }
+
+        if (d3d_command_buffer->command_list == nullptr)
+        {
+            const HRESULT list_result =
+                m_d3d12_device->CreateCommandList(0,
+                                                  D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                  d3d_command_buffer->command_allocator.Get(),
+                                                  nullptr,
+                                                  IID_PPV_ARGS(&d3d_command_buffer->command_list));
+            if (FAILED(list_result))
+            {
+                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "command buffer list creation failure");
+                LOG_ERROR("D3D12 command list creation failed (HRESULT=0x{:08X})",
+                          static_cast<unsigned int>(list_result));
+                return false;
+            }
+            if (FAILED(d3d_command_buffer->command_list->Close()))
+            {
+                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "initial command buffer list close failure");
+                return false;
+            }
+            d3d_command_buffer->is_open = false;
+        }
+
+        return true;
+    }
+
+    ID3D12GraphicsCommandList* D3D12RHI::d3d12CommandListFor(RHICommandBuffer* commandBuffer) const
+    {
+        auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
+        if (d3d_command_buffer == nullptr || d3d_command_buffer->command_list == nullptr)
+        {
+            return nullptr;
+        }
+        return d3d_command_buffer->command_list.Get();
     }
 
     bool D3D12RHI::executeImmediateCommands(const std::function<void(ID3D12GraphicsCommandList*)>& record_commands)
@@ -6074,7 +6294,8 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             });
     }
 
-    void D3D12RHI::bindFramebufferForSubpass(const RHIRenderPassBeginInfo* pRenderPassBegin,
+    void D3D12RHI::bindFramebufferForSubpass(ID3D12GraphicsCommandList* command_list,
+                                             const RHIRenderPassBeginInfo* pRenderPassBegin,
                                              uint32_t subpass_index,
                                              bool clear_attachments)
     {
@@ -6084,7 +6305,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         auto* framebuffer = static_cast<D3D12RHIFramebuffer*>(pRenderPassBegin != nullptr ?
                                                                   pRenderPassBegin->framebuffer :
                                                                   m_active_framebuffer);
-        if (m_d3d12_command_list == nullptr ||
+        if (command_list == nullptr ||
             render_pass == nullptr ||
             framebuffer == nullptr ||
             subpass_index >= render_pass->subpasses.size())
@@ -6115,7 +6336,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) :
                     (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            transitionResource(m_d3d12_command_list.Get(),
+            transitionResource(command_list,
                                view->image->resource.Get(),
                                view->image->current_state,
                                shader_read_state);
@@ -6140,7 +6361,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
 
             if (view->image != nullptr && view->image->resource != nullptr)
             {
-                transitionResource(m_d3d12_command_list.Get(),
+                transitionResource(command_list,
                                    view->image->resource.Get(),
                                    view->image->current_state,
                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -6158,7 +6379,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
                     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
                     barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                    m_d3d12_command_list->ResourceBarrier(1, &barrier);
+                    command_list->ResourceBarrier(1, &barrier);
                 }
             }
 
@@ -6192,7 +6413,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) :
                             D3D12_RESOURCE_STATE_DEPTH_WRITE;
-                    transitionResource(m_d3d12_command_list.Get(),
+                    transitionResource(command_list,
                                        depth_view->image->resource.Get(),
                                        depth_view->image->current_state,
                                        depth_state);
@@ -6200,10 +6421,10 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             }
         }
 
-        m_d3d12_command_list->OMSetRenderTargets(static_cast<UINT>(rtv_handles.size()),
-                                                 rtv_handles.empty() ? nullptr : rtv_handles.data(),
-                                                 FALSE,
-                                                 dsv_handle.ptr != 0 ? &dsv_handle : nullptr);
+        command_list->OMSetRenderTargets(static_cast<UINT>(rtv_handles.size()),
+                                         rtv_handles.empty() ? nullptr : rtv_handles.data(),
+                                         FALSE,
+                                         dsv_handle.ptr != 0 ? &dsv_handle : nullptr);
 
         RHIRect2D render_area = pRenderPassBegin != nullptr ? pRenderPassBegin->renderArea : RHIRect2D {};
         if (render_area.extent.width == 0 || render_area.extent.height == 0)
@@ -6226,8 +6447,8 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         d3d_scissor.right  = render_area.offset.x + static_cast<LONG>(render_area.extent.width);
         d3d_scissor.bottom = render_area.offset.y + static_cast<LONG>(render_area.extent.height);
 
-        m_d3d12_command_list->RSSetViewports(1, &d3d_viewport);
-        m_d3d12_command_list->RSSetScissorRects(1, &d3d_scissor);
+        command_list->RSSetViewports(1, &d3d_viewport);
+        command_list->RSSetScissorRects(1, &d3d_scissor);
 
         if (!clear_attachments ||
             pRenderPassBegin == nullptr ||
@@ -6253,7 +6474,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
                                     clear_color.float32[1],
                                     clear_color.float32[2],
                                     clear_color.float32[3]};
-            m_d3d12_command_list->ClearRenderTargetView(rtv_handles[color_slot], color, 0, nullptr);
+            command_list->ClearRenderTargetView(rtv_handles[color_slot], color, 0, nullptr);
         }
 
         if (has_depth_attachment &&
@@ -6278,12 +6499,12 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             {
                 return;
             }
-            m_d3d12_command_list->ClearDepthStencilView(dsv_handle,
-                                                        clear_flags,
-                                                        depth_stencil.depth,
-                                                        static_cast<UINT8>(depth_stencil.stencil),
-                                                        0,
-                                                        nullptr);
+            command_list->ClearDepthStencilView(dsv_handle,
+                                                clear_flags,
+                                                depth_stencil.depth,
+                                                static_cast<UINT8>(depth_stencil.stencil),
+                                                0,
+                                                nullptr);
         }
     }
 
