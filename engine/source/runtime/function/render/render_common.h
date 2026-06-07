@@ -7,9 +7,6 @@
 #include "runtime/function/render/render_type.h"
 #include "interface/rhi.h"
 
-#include <vk_mem_alloc.h>
-#include <vulkan/vulkan.h>
-
 namespace Piccolo
 {
     static const uint32_t s_point_light_shadow_map_dimension       = 2048;

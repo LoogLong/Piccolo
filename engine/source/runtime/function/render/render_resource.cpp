@@ -11,6 +11,8 @@
 
 #include "runtime/core/base/macro.h"
 
+#include <vk_mem_alloc.h>
+
 #include <stdexcept>
 
 namespace Piccolo
