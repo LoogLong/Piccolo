@@ -2320,7 +2320,11 @@ namespace Piccolo
         }
         createFence();
 
-        m_dummy_command_pool    = new D3D12RHICommandPool();
+        createCommandPool();
+        if (m_dummy_command_pool == nullptr)
+        {
+            throw std::runtime_error("Failed to create D3D12 default command pool");
+        }
         m_dummy_descriptor_pool = new D3D12RHIDescriptorPool();
         m_dummy_graphics_queue  = new D3D12RHIQueue();
         m_dummy_compute_queue   = new D3D12RHIQueue();
@@ -2331,7 +2335,13 @@ namespace Piccolo
 
         for (auto& command_buffer : m_dummy_command_buffers)
         {
-            command_buffer = new D3D12RHICommandBuffer();
+            RHICommandBufferAllocateInfo allocate_info {};
+            allocate_info.commandPool = m_dummy_command_pool;
+            allocate_info.commandBufferCount = 1;
+            if (!allocateCommandBuffers(&allocate_info, command_buffer))
+            {
+                throw std::runtime_error("Failed to create D3D12 frame command buffer");
+            }
         }
 
         RHIFenceCreateInfo signaled_fence_info {};
@@ -3425,6 +3435,10 @@ void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAll
 
 void D3D12RHI::createCommandPool()
 {
+    if (!createCommandPool(nullptr, m_dummy_command_pool))
+    {
+        throw std::runtime_error("Failed to create D3D12 command pool");
+    }
     return;
 }
 
