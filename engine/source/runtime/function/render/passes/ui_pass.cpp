@@ -1,9 +1,14 @@
 #include "runtime/function/render/passes/ui_pass.h"
 
-#ifdef _WIN32
-#include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
-#endif
+#if PICCOLO_ENABLE_VULKAN_BACKEND
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
+#include <backends/imgui_impl_vulkan.h>
+#endif
+
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
+#include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
+#include <backends/imgui_impl_dx12.h>
+#endif
 
 #include "runtime/core/base/macro.h"
 
@@ -12,10 +17,6 @@
 #include "runtime/function/ui/window_ui.h"
 
 #include <backends/imgui_impl_glfw.h>
-#ifdef _WIN32
-#include <backends/imgui_impl_dx12.h>
-#endif
-#include <backends/imgui_impl_vulkan.h>
 
 namespace Piccolo
 {
@@ -34,6 +35,7 @@ namespace Piccolo
         {
             case RHIBackendType::Vulkan:
             {
+#if PICCOLO_ENABLE_VULKAN_BACKEND
                 if (!ImGui_ImplGlfw_InitForVulkan(std::static_pointer_cast<VulkanRHI>(m_rhi)->m_window, true))
                 {
                     LOG_WARN("Failed to initialize ImGui GLFW backend for Vulkan");
@@ -65,11 +67,14 @@ namespace Piccolo
                 m_window_ui                    = window_ui;
 
                 uploadFonts();
+#else
+                LOG_WARN("Vulkan UI backend is not compiled in this build");
+#endif
                 break;
             }
             case RHIBackendType::D3D12:
             {
-#ifdef _WIN32
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
                 auto d3d12_rhi = std::static_pointer_cast<D3D12RHI>(m_rhi);
                 if (!ImGui_ImplGlfw_InitForOther(d3d12_rhi->getWindow(), true))
                 {
@@ -93,7 +98,7 @@ namespace Piccolo
                 m_initialized_backend          = RHIBackendType::D3D12;
                 m_window_ui                    = window_ui;
 #else
-                LOG_WARN("D3D12 UI backend is only available on Windows");
+                LOG_WARN("D3D12 UI backend is not compiled in this build");
 #endif
                 break;
             }
@@ -110,10 +115,12 @@ namespace Piccolo
             switch (m_initialized_backend)
             {
                 case RHIBackendType::Vulkan:
+#if PICCOLO_ENABLE_VULKAN_BACKEND
                     ImGui_ImplVulkan_Shutdown();
+#endif
                     break;
                 case RHIBackendType::D3D12:
-#ifdef _WIN32
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
                     ImGui_ImplDX12_Shutdown();
 #endif
                     break;
@@ -133,6 +140,7 @@ namespace Piccolo
         m_window_ui           = nullptr;
     }
 
+#if PICCOLO_ENABLE_VULKAN_BACKEND
     void UIPass::uploadFonts()
     {
         switch (m_rhi->getBackendType())
@@ -185,6 +193,11 @@ namespace Piccolo
 
         ImGui_ImplVulkan_DestroyFontUploadObjects();
     }
+#else
+    void UIPass::uploadFonts()
+    {
+    }
+#endif
 
     void UIPass::draw()
     {
@@ -194,6 +207,7 @@ namespace Piccolo
             {
                 case RHIBackendType::Vulkan:
                 {
+#if PICCOLO_ENABLE_VULKAN_BACKEND
                     ImGui_ImplVulkan_NewFrame();
                     ImGui_ImplGlfw_NewFrame();
                     ImGui::NewFrame();
@@ -208,11 +222,14 @@ namespace Piccolo
                     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), std::static_pointer_cast<VulkanRHI>(m_rhi)->m_vk_current_command_buffer);
 
                     m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
+#else
+                    LOG_WARN("Vulkan UI backend is not compiled in this build");
+#endif
                     break;
                 }
                 case RHIBackendType::D3D12:
                 {
-#ifdef _WIN32
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
                     auto d3d12_rhi = std::static_pointer_cast<D3D12RHI>(m_rhi);
 
                     ImGui_ImplDX12_NewFrame();
@@ -233,6 +250,7 @@ namespace Piccolo
                     m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
                     break;
 #else
+                    LOG_WARN("D3D12 UI backend is not compiled in this build");
                     return;
 #endif
                 }

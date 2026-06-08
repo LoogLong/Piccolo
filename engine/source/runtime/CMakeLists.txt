@@ -7,6 +7,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(JSON_INCLUDE ${THIRD_PARTY_DIR}/json11)
 
+if(NOT DEFINED PICCOLO_ENABLE_VULKAN_BACKEND)
+  set(PICCOLO_ENABLE_VULKAN_BACKEND ON)
+endif()
+
+if(NOT DEFINED PICCOLO_ENABLE_D3D12_BACKEND)
+  if(WIN32)
+    set(PICCOLO_ENABLE_D3D12_BACKEND ON)
+  else()
+    set(PICCOLO_ENABLE_D3D12_BACKEND OFF)
+  endif()
+endif()
+
 add_library(json11 ${JSON_INCLUDE}/json11.cpp)
 set_target_properties(json11 PROPERTIES FOLDER "ThirdParty/json11")
 # ---- Add source files ----
@@ -43,6 +55,11 @@ set_target_properties(${TARGET_NAME} PROPERTIES FOLDER "Engine")
 # being a cross-platform target, we enforce standards conformance on MSVC
 target_compile_options(${TARGET_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/permissive->")
 target_compile_options(${TARGET_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/WX->")
+target_compile_definitions(${TARGET_NAME}
+  PUBLIC
+    PICCOLO_ENABLE_VULKAN_BACKEND=$<BOOL:${PICCOLO_ENABLE_VULKAN_BACKEND}>
+    PICCOLO_ENABLE_D3D12_BACKEND=$<BOOL:${PICCOLO_ENABLE_D3D12_BACKEND}>
+)
 
 # Link dependencies    
 target_link_libraries(${TARGET_NAME} PUBLIC spdlog::spdlog)
