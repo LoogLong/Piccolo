@@ -17,13 +17,14 @@
 - Hosted Windows Vulkan smoke now provisions the Vulkan runtime with SwiftShader and pins `VK_ICD_FILENAMES` to that software ICD before launch.
 - D3D12 源文件已在非 Windows 构建中通过 CMake 和 RHI factory guard 排除，Linux/macOS 路径继续使用 Vulkan
 - D3D12 ImGui 初始化使用实际 swapchain format 创建 DX12 renderer backend，避免 UI PSO render target format 与 back buffer 不一致
-- Windows deployment config now treats D3D12 as the primary backend and forbids silent Vulkan fallback; developer configs may opt into fallback for diagnosis.
+- Windows deployment config now treats D3D12 as the primary backend when D3D12 is enabled and forbids silent Vulkan fallback; Windows Vulkan-only packages receive an explicit Vulkan deployment config.
 - Non-Windows deployment output now receives a Vulkan-compatible `RenderBackend=Auto` config instead of the Windows D3D12-primary config.
 - CMake now exposes `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`; Windows can build D3D12-only without linking PiccoloRuntime/imgui against Vulkan, while non-Windows builds continue to require Vulkan.
 - D3D12 builds require `dxc.exe`; Vulkan builds require Vulkan SDK/glslang.
 
 ### 当前状态
-- Windows primary mode is D3D12; Windows 随附 Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退，不会静默回退 Vulkan
+- Windows primary mode is D3D12; Windows D3D12-capable Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退，不会静默回退 Vulkan
+- Windows Vulkan-only deployment 配置使用 `RenderBackend=Vulkan` 且禁用回退，避免 `Auto` 在 Windows 上解析到 D3D12
 - Windows 可通过 smoke 脚本分别验证 `RenderBackend=D3D12`、`RenderBackend=Auto` 和 `RenderBackend=Vulkan` 初始化路径
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 D3D12-only 构建，验证运行时和 ImGui 目标不再链接 Vulkan。
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 dual-backend 构建，验证 D3D12 主路径与显式 Vulkan 路径可共存。

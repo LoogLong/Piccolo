@@ -25,7 +25,8 @@
 
 - `RenderBackend` 支持 `Auto`、`Vulkan`、`D3D12`。
 - Windows primary mode is D3D12。
-- Windows deployment config 使用 `RenderBackend=D3D12` 且 `RenderBackendAllowFallback=false`，不会静默回退 Vulkan。
+- Windows D3D12-capable deployment config 使用 `RenderBackend=D3D12` 且 `RenderBackendAllowFallback=false`，不会静默回退 Vulkan。
+- Windows Vulkan-only deployment config 使用 `RenderBackend=Vulkan` 且 `RenderBackendAllowFallback=false`，避免 `Auto` 在 Windows 上解析到 D3D12。
 - `RenderBackendAllowFallback=true` 仍可用于开发/诊断场景，但只有构建包含 Vulkan 后端时才可回退。
 - Linux/macOS deployment 使用 `RenderBackend=Auto` 并解析到 Vulkan。
 

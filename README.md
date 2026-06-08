@@ -126,7 +126,8 @@ RenderBackendAllowFallback=true
 - Windows D3D12-only builds can be configured with `PICCOLO_ENABLE_VULKAN_BACKEND=OFF`.
 - Vulkan remains available for Windows debug/fallback builds when `PICCOLO_ENABLE_VULKAN_BACKEND=ON`.
 - Linux/macOS continue to use Vulkan.
-- The bundled Windows PiccoloEditor deployment config explicitly selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
+- The bundled Windows PiccoloEditor deployment config explicitly selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false` when D3D12 is enabled.
+- Windows Vulkan-only builds package `RenderBackend=Vulkan` and `RenderBackendAllowFallback=false` because `Auto` resolves to D3D12 on Windows.
 - Non-Windows deployment output uses `RenderBackend=Auto`, which resolves to Vulkan on Linux/macOS.
 - D3D12 builds require `dxc.exe`.
 - Vulkan builds require Vulkan SDK/glslang.
@@ -161,7 +162,10 @@ cmake --build build_d3d12_only --config Release --target PiccoloEditor -- /verbo
 cmake -S . -B build_dual_backend -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON
 cmake --build build_dual_backend --config Debug --target PiccoloEditor -- /verbosity:minimal
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+
+cmake -S . -B build_vulkan_only -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=OFF
+cmake --build build_vulkan_only --config Debug --target PiccoloEditor -- /verbosity:minimal
 ```
 
-The smoke script temporarily overrides the built editor config and restores it after the run. On Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and the deployment config selects a Vulkan-compatible backend.
+The smoke script temporarily overrides the built editor config and restores it after the run. Windows Vulkan-only builds should package `RenderBackend=Vulkan`; on Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and the deployment config selects a Vulkan-compatible backend.
 Windows CI installs the Vulkan runtime with SwiftShader and sets `VK_ICD_FILENAMES` to the SwiftShader ICD before running the hosted Vulkan smoke.

@@ -13,7 +13,8 @@ Date: 2026-06-08
 ## Final Backend State
 
 - Windows primary mode is D3D12.
-- Windows PiccoloEditor deployment config selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`, so deployment does not silently fall back to Vulkan.
+- Windows PiccoloEditor deployment config selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false` when D3D12 is enabled, so D3D12-capable deployment does not silently fall back to Vulkan.
+- Windows Vulkan-only builds package an explicit `RenderBackend=Vulkan` deployment config because `Auto` resolves to D3D12 on Windows.
 - Windows D3D12-only builds are supported with `PICCOLO_ENABLE_VULKAN_BACKEND=OFF` and `PICCOLO_ENABLE_D3D12_BACKEND=ON`; this removes Vulkan runtime/imgui link dependencies from that build graph.
 - Optional Windows Vulkan remains available for debug/fallback validation when `PICCOLO_ENABLE_VULKAN_BACKEND=ON`.
 - Linux/macOS continue to use Vulkan; D3D12 remains Windows-only and is forced out of non-Windows builds.
@@ -24,7 +25,7 @@ Date: 2026-06-08
 
 - Backend selection supports `Auto`, `Vulkan`, and `D3D12`.
 - Windows `Auto` selects D3D12; non-Windows `Auto` selects Vulkan.
-- Explicit fallback is controlled by `RenderBackendAllowFallback`; fallback is not used in Windows deployment config.
+- Explicit fallback is controlled by `RenderBackendAllowFallback`; fallback is not used in Windows deployment configs.
 - D3D12 RHI wrapper naming has been cleaned up; final source scan found no D3D12 `dummy` wrapper names.
 - Public/shared render-layer Vulkan references are limited to backend selection and optional Vulkan UI branches guarded by `PICCOLO_ENABLE_VULKAN_BACKEND`; backend-local Vulkan implementation remains under `interface/vulkan`.
 - D3D12-only build scan found no `vulkan-1`, `imgui_impl_vulkan`, or `vk_mem_alloc` references in `build_d3d12_only`.
