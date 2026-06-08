@@ -7,6 +7,24 @@ set(DEPLOY_CONFIG_DIR "configs/deployment")
 set(DEVELOP_CONFIG_DIR "configs/development")
 
 option(ENABLE_PHYSICS_DEBUG_RENDERER "Enable Physics Debug Renderer" OFF)
+option(PICCOLO_ENABLE_VULKAN_BACKEND "Build the Vulkan render backend" ON)
+option(PICCOLO_ENABLE_D3D12_BACKEND "Build the D3D12 render backend on Windows" ON)
+
+if(NOT WIN32)
+  set(PICCOLO_ENABLE_D3D12_BACKEND OFF CACHE BOOL "" FORCE)
+endif()
+
+if(WIN32 AND NOT PICCOLO_ENABLE_VULKAN_BACKEND AND NOT PICCOLO_ENABLE_D3D12_BACKEND)
+  message(FATAL_ERROR "At least one render backend must be enabled")
+endif()
+
+if(NOT WIN32 AND NOT PICCOLO_ENABLE_VULKAN_BACKEND)
+  message(FATAL_ERROR "Non-Windows builds require the Vulkan backend")
+endif()
+
+add_compile_definitions(
+  PICCOLO_ENABLE_VULKAN_BACKEND=$<BOOL:${PICCOLO_ENABLE_VULKAN_BACKEND}>
+  PICCOLO_ENABLE_D3D12_BACKEND=$<BOOL:${PICCOLO_ENABLE_D3D12_BACKEND}>)
 
 # only support physics debug render at windows platform
 if(NOT WIN32)
@@ -25,13 +43,34 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT PiccoloEditor)
 endif()
 
-set(vulkan_include ${THIRD_PARTY_DIR}/VulkanSDK/include)
+if(PICCOLO_ENABLE_VULKAN_BACKEND)
+    set(vulkan_include ${THIRD_PARTY_DIR}/VulkanSDK/include)
 
-if(WIN32)
-    set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/Win32/vulkan-1.lib)
-    set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32/glslangValidator.exe)
-    add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32")
+    if(WIN32)
+        set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/Win32/vulkan-1.lib)
+        set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32/glslangValidator.exe)
+        add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32")
+    elseif(UNIX)
+        if(APPLE)
+          set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/MacOS/libvulkan.1.dylib)
+          set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/MacOS/glslangValidator)
+          add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/MacOS")
+          add_compile_definitions("PICCOLO_VK_ICD_FILENAMES=${THIRD_PARTY_DIR}/VulkanSDK/bin/MacOS/MoltenVK_icd.json")
+        else()
+          set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/Linux/libvulkan.so.1)
+          set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/Linux/glslangValidator)
+          add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/Linux")
+        endif()
+    else()
+      message(FATAL_ERROR "Unknown Platform")
+    endif()
 
+    if(NOT EXISTS "${glslangValidator_executable}")
+        message(FATAL_ERROR "glslangValidator is required to build the Vulkan backend shaders: ${glslangValidator_executable}")
+    endif()
+endif()
+
+if(WIN32 AND PICCOLO_ENABLE_D3D12_BACKEND)
     set(_dxc_search_paths
         "${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32"
         "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/x64"
@@ -71,19 +110,6 @@ if(WIN32)
     else()
         message(FATAL_ERROR "dxc.exe is required to build the D3D12 backend shaders. Install the Windows SDK, Vulkan SDK, or set dxc_executable.")
     endif()
-elseif(UNIX)
-    if(APPLE)
-      set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/MacOS/libvulkan.1.dylib)
-      set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/MacOS/glslangValidator)
-      add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/MacOS")
-      add_compile_definitions("PICCOLO_VK_ICD_FILENAMES=${THIRD_PARTY_DIR}/VulkanSDK/bin/MacOS/MoltenVK_icd.json")
-    else()
-      set(vulkan_lib ${THIRD_PARTY_DIR}/VulkanSDK/lib/Linux/libvulkan.so.1)
-      set(glslangValidator_executable ${THIRD_PARTY_DIR}/VulkanSDK/bin/Linux/glslangValidator)
-      add_compile_definitions("PICCOLO_VK_LAYER_PATH=${THIRD_PARTY_DIR}/VulkanSDK/bin/Linux")
-    endif()
-else()
-  message(FATAL_ERROR "Unknown Platform")
 endif()
 
 

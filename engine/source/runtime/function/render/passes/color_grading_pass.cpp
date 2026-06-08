@@ -2,9 +2,6 @@
 
 #include "runtime/function/render/render_shader_bytecode.h"
 
-#include <color_grading_frag.h>
-#include <post_process_vert.h>
-
 #include <stdexcept>
 
 namespace Piccolo

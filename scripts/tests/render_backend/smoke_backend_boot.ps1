@@ -1,4 +1,5 @@
 param(
+    [string]$BuildDir = 'build',
     [string]$Configuration = 'Debug',
     [int]$TimeoutSeconds = 20,
     [string]$EditorPath,
@@ -16,7 +17,11 @@ if ($TimeoutSeconds -lt 1) {
 }
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
-$buildDir = Join-Path $repoRoot 'build'
+if ([System.IO.Path]::IsPathRooted($BuildDir)) {
+    $buildDir = [System.IO.Path]::GetFullPath($BuildDir)
+} else {
+    $buildDir = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $BuildDir))
+}
 
 if (-not $EditorPath) {
     $engineDir = Join-Path $buildDir 'engine'

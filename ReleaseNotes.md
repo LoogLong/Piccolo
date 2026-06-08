@@ -17,10 +17,12 @@
 - D3D12 ImGui 初始化使用实际 swapchain format 创建 DX12 renderer backend，避免 UI PSO render target format 与 back buffer 不一致
 - Windows deployment config now treats D3D12 as the primary backend and forbids silent Vulkan fallback; developer configs may opt into fallback for diagnosis.
 - Non-Windows deployment output now receives a Vulkan-compatible `RenderBackend=Auto` config instead of the Windows D3D12-primary config.
+- CMake now exposes `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`; Windows can build D3D12-only without linking PiccoloRuntime/imgui against Vulkan, while non-Windows builds continue to require Vulkan.
 
 ### 当前状态
 - Windows 随附 Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退；Linux/macOS deployment 输出使用 `RenderBackend=Auto` 并解析到 Vulkan
 - Windows 可通过 smoke 脚本分别验证 `RenderBackend=D3D12`、`RenderBackend=Auto` 和 `RenderBackend=Vulkan` 初始化路径
+- Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 D3D12-only 构建，验证运行时和 ImGui 目标不再链接 Vulkan。
 - D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
 - 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
 - 当前后续目标是把 Windows D3D12 从“默认可回退 Vulkan”推进到“D3D12-primary 且可选 Vulkan”，并补齐 D3D12 长跑、resize、粒子、拾取、UI 与无 Vulkan 链接依赖验证。
@@ -33,6 +35,14 @@ cmake --build build --config Debug --target PiccoloEditor --parallel
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+```
+
+Windows D3D12-only 验证：
+
+```powershell
+cmake -S . -B build_d3d12_only -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+cmake --build build_d3d12_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 ```
 
 Linux/macOS 验证应执行常规 editor 构建，确认 D3D12 源文件未参与非 Windows 编译且默认后端仍为 Vulkan。

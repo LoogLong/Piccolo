@@ -130,6 +130,9 @@ RenderBackendAllowFallback=true
 - If no hardware D3D12 adapter is available, the D3D12 backend can initialize through WARP for smoke validation.
 - `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan.
 - On non-Windows platforms, the D3D12 path is disabled.
+- Build-time backend switches are available with `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`.
+- Windows builds may disable Vulkan with `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` for a D3D12-only runtime/imgui link graph.
+- Linux/macOS builds require `PICCOLO_ENABLE_VULKAN_BACKEND=ON`; `PICCOLO_ENABLE_D3D12_BACKEND` is forced off outside Windows.
 
 For Windows D3D12-primary validation, set `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
 Use `RenderBackendAllowFallback=true` only when you intentionally want a Vulkan debug fallback.
@@ -142,6 +145,14 @@ cmake --build build --config Debug --target PiccoloEditor --parallel
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+```
+
+Windows D3D12-only build validation:
+
+```powershell
+cmake -S . -B build_d3d12_only -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+cmake --build build_d3d12_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 ```
 
 The smoke script temporarily overrides the built editor config and restores it after the run. On Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and the deployment config selects a Vulkan-compatible backend.

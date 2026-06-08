@@ -8,12 +8,6 @@
 #include "core/base/macro.h"
 #include <fstream>
 
-#include "particle_emit_comp.h"
-#include "particle_kickoff_comp.h"
-#include "particle_simulate_comp.h"
-#include <particlebillboard_frag.h>
-#include <particlebillboard_vert.h>
-
 namespace Piccolo
 {
     void ParticleEmitterBufferBatch::freeUpBatch(std::shared_ptr<RHI> rhi)

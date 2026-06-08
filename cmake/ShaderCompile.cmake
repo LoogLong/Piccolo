@@ -1,4 +1,7 @@
 function(compile_shader SHADERS TARGET_NAME SHADER_INCLUDE_FOLDER GENERATED_DIR GLSLANG_BIN)
+    if(NOT GLSLANG_BIN)
+        message(FATAL_ERROR "glslangValidator is required to compile Vulkan GLSL shaders")
+    endif()
 
     set(working_dir "${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -40,7 +43,8 @@ function(compile_shader SHADERS TARGET_NAME SHADER_INCLUDE_FOLDER GENERATED_DIR 
     endforeach()
 
     add_custom_target(${TARGET_NAME}
-        DEPENDS ${ALL_GENERATED_SPV_FILES} ${ALL_GENERATED_CPP_FILES} SOURCES ${SHADERS})
+        DEPENDS ${ALL_GENERATED_SPV_FILES} ${ALL_GENERATED_CPP_FILES}
+        SOURCES ${SHADERS})
 
 endfunction()
 

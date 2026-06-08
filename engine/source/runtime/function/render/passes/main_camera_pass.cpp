@@ -8,16 +8,6 @@
 #include <map>
 #include <stdexcept>
 
-#include <axis_frag.h>
-#include <axis_vert.h>
-#include <deferred_lighting_frag.h>
-#include <deferred_lighting_vert.h>
-#include <mesh_frag.h>
-#include <mesh_gbuffer_frag.h>
-#include <mesh_vert.h>
-#include <skybox_frag.h>
-#include <skybox_vert.h>
-
 namespace Piccolo
 {
     void MainCameraPass::initialize(const RenderPassInitInfo* init_info)

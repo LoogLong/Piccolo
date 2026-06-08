@@ -4,8 +4,6 @@
 #include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
 #include "runtime/function/render/render_shader_bytecode.h"
-#include <mesh_directional_light_shadow_frag.h>
-#include <mesh_directional_light_shadow_vert.h>
 
 #include <stdexcept>
 

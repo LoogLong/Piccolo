@@ -2,9 +2,6 @@
 
 #include "runtime/function/render/render_shader_bytecode.h"
 
-#include <post_process_vert.h>
-#include <tone_mapping_frag.h>
-
 #include <stdexcept>
 
 namespace Piccolo

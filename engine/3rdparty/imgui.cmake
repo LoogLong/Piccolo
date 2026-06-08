@@ -1,17 +1,5 @@
 set(imgui_SOURCE_DIR_ ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
 
-if(NOT DEFINED PICCOLO_ENABLE_VULKAN_BACKEND)
-    set(PICCOLO_ENABLE_VULKAN_BACKEND ON)
-endif()
-
-if(NOT DEFINED PICCOLO_ENABLE_D3D12_BACKEND)
-    if(WIN32)
-        set(PICCOLO_ENABLE_D3D12_BACKEND ON)
-    else()
-        set(PICCOLO_ENABLE_D3D12_BACKEND OFF)
-    endif()
-endif()
-
 file(GLOB imgui_sources CONFIGURE_DEPENDS  "${imgui_SOURCE_DIR_}/*.cpp")
 file(GLOB imgui_impl CONFIGURE_DEPENDS  
 "${imgui_SOURCE_DIR_}/backends/imgui_impl_glfw.cpp" 

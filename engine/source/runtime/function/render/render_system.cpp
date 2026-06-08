@@ -20,9 +20,11 @@
 #include "runtime/function/render/passes/main_camera_pass.h"
 #include "runtime/function/render/passes/particle_pass.h"
 
+#if PICCOLO_ENABLE_VULKAN_BACKEND
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
+#endif
 
-#ifdef _WIN32
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
 #include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
 #endif
 
@@ -39,9 +41,13 @@ namespace
         switch (backend)
         {
             case RHIBackendType::Vulkan:
+#if PICCOLO_ENABLE_VULKAN_BACKEND
                 return std::make_shared<VulkanRHI>();
+#else
+                return nullptr;
+#endif
             case RHIBackendType::D3D12:
-#ifdef _WIN32
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
                 return std::make_shared<D3D12RHI>();
 #else
                 return nullptr;
@@ -80,16 +86,16 @@ namespace Piccolo
         }
 
         auto tryInitializeBackend = [&](RHIBackendType backend) -> bool {
-            if (backend == RHIBackendType::D3D12 && !d3d12ShaderBytecodeAvailable())
-            {
-                LOG_ERROR("RHI backend initialization failed for D3D12: DXIL shader bytecode is unavailable. Install dxc.exe and reconfigure the build to enable D3D12.");
-                return false;
-            }
-
             std::shared_ptr<RHI> rhi = createRHIBackend(backend);
             if (!rhi)
             {
                 LOG_WARN(std::string("RHI backend ") + renderBackendToString(backend) + " is not implemented in this build");
+                return false;
+            }
+
+            if (backend == RHIBackendType::D3D12 && !d3d12ShaderBytecodeAvailable())
+            {
+                LOG_ERROR("RHI backend initialization failed for D3D12: DXIL shader bytecode is unavailable. Install dxc.exe and reconfigure the build to enable D3D12.");
                 return false;
             }
 

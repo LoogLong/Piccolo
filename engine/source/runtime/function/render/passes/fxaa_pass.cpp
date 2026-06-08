@@ -7,9 +7,6 @@
 
 #include "runtime/core/base/macro.h"
 
-#include <fxaa_frag.h>
-#include <fxaa_vert.h>
-
 #include <stdexcept>
 
 namespace Piccolo

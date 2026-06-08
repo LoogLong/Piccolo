@@ -5,11 +5,6 @@
 #include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/render_helper.h"
 
-#include <mesh_inefficient_pick_frag.h>
-#include <mesh_inefficient_pick_vert.h>
-
-
-
 #include <map>
 #include <stdexcept>
 
