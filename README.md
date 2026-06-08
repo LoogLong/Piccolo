@@ -122,16 +122,18 @@ RenderBackendAllowFallback=true
 ```
 
 - `RenderBackend` supports `Auto`, `Vulkan`, `D3D12`.
-- `RenderBackend=Auto` selects D3D12 on Windows and Vulkan on Linux/macOS.
-- `RenderBackend=Vulkan` forces Vulkan on Windows.
+- Windows primary mode is D3D12.
+- Windows D3D12-only builds can be configured with `PICCOLO_ENABLE_VULKAN_BACKEND=OFF`.
+- Vulkan remains available for Windows debug/fallback builds when `PICCOLO_ENABLE_VULKAN_BACKEND=ON`.
+- Linux/macOS continue to use Vulkan.
 - The bundled Windows PiccoloEditor deployment config explicitly selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
 - Non-Windows deployment output uses `RenderBackend=Auto`, which resolves to Vulkan on Linux/macOS.
-- D3D12 startup requires generated DXIL shader bytecode. Configure the build with `dxc.exe` available to build those shaders.
+- D3D12 builds require `dxc.exe`.
+- Vulkan builds require Vulkan SDK/glslang.
 - If no hardware D3D12 adapter is available, the D3D12 backend can initialize through WARP for smoke validation.
-- `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan.
+- `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan only when the build includes Vulkan.
 - On non-Windows platforms, the D3D12 path is disabled.
 - Build-time backend switches are available with `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`.
-- Windows builds may disable Vulkan with `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` for a D3D12-only runtime/imgui link graph, or enable both backend options for explicit Vulkan validation.
 - Linux/macOS builds require `PICCOLO_ENABLE_VULKAN_BACKEND=ON`; `PICCOLO_ENABLE_D3D12_BACKEND` is forced off outside Windows.
 
 For Windows D3D12-primary validation, set `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
@@ -152,11 +154,12 @@ Windows backend build validation modes:
 ```powershell
 cmake -S . -B build_d3d12_only -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
 cmake --build build_d3d12_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+cmake --build build_d3d12_only --config Release --target PiccoloEditor -- /verbosity:minimal
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Release -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 
 cmake -S . -B build_dual_backend -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON
 cmake --build build_dual_backend --config Debug --target PiccoloEditor -- /verbosity:minimal
-.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
 ```
 

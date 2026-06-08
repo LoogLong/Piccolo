@@ -1,4 +1,4 @@
-# 渲染后端迁移说明（进行中）
+# 渲染后端迁移说明
 
 ## D3D12 后端选择与回退（2026-06）
 
@@ -6,7 +6,7 @@
 - 新增运行时渲染后端配置项：`RenderBackend`、`RenderBackendAllowFallback`
 - 启动流程支持后端工厂选择：`Auto / Vulkan / D3D12`
 - Windows 平台 `Auto` 默认请求 `D3D12`
-- D3D12 初始化失败时可按配置自动回退到 Vulkan
+- D3D12 初始化失败时仅在配置允许且构建包含 Vulkan 时才会回退到 Vulkan
 - `RenderSystem` 的 viewport 读写已通过 RHI 抽象接口统一
 - D3D12 主渲染路径已接入 shader bytecode、descriptor/root signature、render pass/framebuffer、graphics/compute pipeline、命令录制、粒子、拾取、debug draw 与 DX12 ImGui 分支
 - 公共 RHI 与渲染资源接口已从 Vulkan/VMA allocation 类型中解耦，VMA 仅保留在 Vulkan 后端内部
@@ -20,17 +20,19 @@
 - Windows deployment config now treats D3D12 as the primary backend and forbids silent Vulkan fallback; developer configs may opt into fallback for diagnosis.
 - Non-Windows deployment output now receives a Vulkan-compatible `RenderBackend=Auto` config instead of the Windows D3D12-primary config.
 - CMake now exposes `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`; Windows can build D3D12-only without linking PiccoloRuntime/imgui against Vulkan, while non-Windows builds continue to require Vulkan.
+- D3D12 builds require `dxc.exe`; Vulkan builds require Vulkan SDK/glslang.
 
 ### 当前状态
-- Windows 随附 Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退；Linux/macOS deployment 输出使用 `RenderBackend=Auto` 并解析到 Vulkan
+- Windows primary mode is D3D12; Windows 随附 Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退，不会静默回退 Vulkan
 - Windows 可通过 smoke 脚本分别验证 `RenderBackend=D3D12`、`RenderBackend=Auto` 和 `RenderBackend=Vulkan` 初始化路径
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 D3D12-only 构建，验证运行时和 ImGui 目标不再链接 Vulkan。
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 dual-backend 构建，验证 D3D12 主路径与显式 Vulkan 路径可共存。
+- Linux/macOS deployment 输出使用 `RenderBackend=Auto` 并解析到 Vulkan；非 Windows Vulkan 仍受支持。
 - D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
-- 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
-- 2026-06-08 手动验证更新：Windows D3D12-only Debug/Release PiccoloEditor 构建通过，Debug/Release D3D12 smoke 均在禁止 Vulkan fallback 时通过；自动化生命周期覆盖了 Debug editor 启动、默认 world/level 加载、重复 resize、minimize/restore 和 restore 后 60 秒存活检查，日志扫描未发现 D3D12 debug-layer/device/fallback/error 匹配。
-- 2026-06-08 验证 caveat：自动截图未能证明渲染画面，且一次 Debug 截图运行显示 Visual C++ Debug Assertion (`debug_heap.cpp:908`)；交互和目视项仍未完整覆盖，相机移动、mesh picking 稳定 ID、UI panel toggle、axis/debug draw 触发、level reload、正常关闭以及主相机/post-process/ImGui/debug draw/particles 的视觉确认仍需补验证。
-- 当前后续目标是把 Windows D3D12 从“默认可回退 Vulkan”推进到“D3D12-primary 且可选 Vulkan”，并补齐 D3D12 长跑、resize、粒子、拾取、UI 与无 Vulkan 链接依赖验证。
+- 当前不新增测试源码；验证以构建、smoke 脚本、日志扫描和文档审查为主。
+- 2026-06-08 手动验证更新：Windows D3D12-only Debug/Release PiccoloEditor 构建通过，Debug/Release D3D12 smoke 均在禁止 Vulkan fallback 时通过；Windows dual-backend Debug 构建通过，显式 Vulkan smoke 通过；自动化生命周期覆盖了 Debug editor 启动、默认 world/level 加载、重复 resize、minimize/restore 和 restore 后 60 秒存活检查，日志扫描未发现 D3D12 debug-layer/device/fallback/error 匹配。
+- 2026-06-08 验证 caveat：未声明完整手动/目视 D3D12 runtime 验收完成；自动截图未能证明渲染画面，一次 Debug 截图运行显示 Visual C++ Debug Assertion (`debug_heap.cpp:908`, `is_block_type_valid(header->_block_use)`)，正常关闭未验证；交互和目视项仍需覆盖相机移动、mesh picking 稳定 ID、UI panel toggle、axis/debug draw 触发、level reload、主相机/post-process/ImGui/debug draw/particles 的视觉确认。
+- 后续风险属于正常 engine runtime validation，而不是 backend wiring 未完成。
 
 ### 验证命令
 
@@ -47,7 +49,9 @@ Windows D3D12-only 验证：
 ```powershell
 cmake -S . -B build_d3d12_only -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
 cmake --build build_d3d12_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+cmake --build build_d3d12_only --config Release --target PiccoloEditor -- /verbosity:minimal
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Release -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 ```
 
 Windows dual-backend 验证：
@@ -55,7 +59,6 @@ Windows dual-backend 验证：
 ```powershell
 cmake -S . -B build_dual_backend -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON
 cmake --build build_dual_backend --config Debug --target PiccoloEditor -- /verbosity:minimal
-.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 .\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
 ```
 
