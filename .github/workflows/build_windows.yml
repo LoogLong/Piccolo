@@ -13,13 +13,19 @@ jobs:
     strategy:
       matrix:
         configuration: [Debug, Release]
+        backend_mode: [d3d12_only, dual_backend]
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: 'true'
 
-      - name: Configure
-        run: cmake -S . -B build
+      - name: Configure D3D12-only backend
+        if: matrix.backend_mode == 'd3d12_only'
+        run: cmake -S . -B build -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+
+      - name: Configure dual backend
+        if: matrix.backend_mode == 'dual_backend'
+        run: cmake -S . -B build -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON
 
       - name: Build PiccoloEditor
         run: cmake --build build --config ${{ matrix.configuration }} --target PiccoloEditor --parallel
@@ -27,4 +33,9 @@ jobs:
       - name: D3D12 backend smoke
         if: matrix.configuration == 'Debug'
         shell: pwsh
-        run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug
+        run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+
+      - name: Vulkan backend smoke
+        if: matrix.configuration == 'Debug' && matrix.backend_mode == 'dual_backend'
+        shell: pwsh
+        run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
