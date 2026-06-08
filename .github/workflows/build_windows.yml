@@ -8,9 +8,11 @@ on:
 
 jobs:
   build:
+    name: Windows ${{ matrix.configuration }} ${{ matrix.backend_mode }}
     # windows 10 with latest image
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         configuration: [Debug, Release]
         backend_mode: [d3d12_only, dual_backend]
@@ -34,6 +36,30 @@ jobs:
         if: matrix.configuration == 'Debug'
         shell: pwsh
         run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+
+      - name: Install Vulkan runtime for Vulkan smoke
+        if: matrix.configuration == 'Debug' && matrix.backend_mode == 'dual_backend'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: true
+          install_swiftshader: true
+          swiftshader_destination: C:\swiftshader
+          cache: true
+          stripdown: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Vulkan software ICD
+        if: matrix.configuration == 'Debug' && matrix.backend_mode == 'dual_backend'
+        shell: pwsh
+        run: |
+          $swiftShaderDir = 'C:\swiftshader'
+          $icdPath = Join-Path $swiftShaderDir 'vk_swiftshader_icd.json'
+          $loaderPath = Join-Path $swiftShaderDir 'vulkan-1.dll'
+          if (-not (Test-Path -LiteralPath $icdPath -PathType Leaf)) { throw "SwiftShader ICD not found: $icdPath" }
+          if (-not (Test-Path -LiteralPath $loaderPath -PathType Leaf)) { throw "SwiftShader Vulkan loader not found: $loaderPath" }
+          Add-Content -Path $env:GITHUB_PATH -Value $swiftShaderDir
+          Add-Content -Path $env:GITHUB_ENV -Value "VK_ICD_FILENAMES=$icdPath"
+          Write-Host "Using Vulkan software ICD: $icdPath"
 
       - name: Vulkan backend smoke
         if: matrix.configuration == 'Debug' && matrix.backend_mode == 'dual_backend'

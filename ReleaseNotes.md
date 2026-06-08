@@ -14,6 +14,7 @@
 - D3D12 设备创建在无可用硬件 adapter 时可回退到 WARP software adapter，便于 Windows CI 执行启动烟测
 - Windows CI 已直接通过 CMake 构建 Debug/Release PiccoloEditor，Debug 构建会运行 D3D12 启动烟测
 - Windows CI now validates both D3D12-only and dual-backend build modes; Debug dual-backend also runs an explicit Vulkan startup smoke.
+- Hosted Windows Vulkan smoke now provisions the Vulkan runtime with SwiftShader and pins `VK_ICD_FILENAMES` to that software ICD before launch.
 - D3D12 源文件已在非 Windows 构建中通过 CMake 和 RHI factory guard 排除，Linux/macOS 路径继续使用 Vulkan
 - D3D12 ImGui 初始化使用实际 swapchain format 创建 DX12 renderer backend，避免 UI PSO render target format 与 back buffer 不一致
 - Windows deployment config now treats D3D12 as the primary backend and forbids silent Vulkan fallback; developer configs may opt into fallback for diagnosis.

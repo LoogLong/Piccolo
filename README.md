@@ -161,3 +161,4 @@ cmake --build build_dual_backend --config Debug --target PiccoloEditor -- /verbo
 ```
 
 The smoke script temporarily overrides the built editor config and restores it after the run. On Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and the deployment config selects a Vulkan-compatible backend.
+Windows CI installs the Vulkan runtime with SwiftShader and sets `VK_ICD_FILENAMES` to the SwiftShader ICD before running the hosted Vulkan smoke.
