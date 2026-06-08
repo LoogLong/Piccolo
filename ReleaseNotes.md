@@ -28,6 +28,8 @@
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 dual-backend 构建，验证 D3D12 主路径与显式 Vulkan 路径可共存。
 - D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
 - 当前验证以 Debug 构建、PiccoloEditor D3D12 启动烟测和 Windows CI 覆盖为主，尚未补充额外 CTest/单元测试目标
+- 2026-06-08 手动验证更新：Windows D3D12-only Debug/Release PiccoloEditor 构建通过，Debug/Release D3D12 smoke 均在禁止 Vulkan fallback 时通过；自动化生命周期覆盖了 Debug editor 启动、默认 world/level 加载、重复 resize、minimize/restore 和 restore 后 60 秒存活检查，日志扫描未发现 D3D12 debug-layer/device/fallback/error 匹配。
+- 2026-06-08 验证 caveat：自动截图未能证明渲染画面，且一次 Debug 截图运行显示 Visual C++ Debug Assertion (`debug_heap.cpp:908`)；交互和目视项仍未完整覆盖，相机移动、mesh picking 稳定 ID、UI panel toggle、axis/debug draw 触发、level reload、正常关闭以及主相机/post-process/ImGui/debug draw/particles 的视觉确认仍需补验证。
 - 当前后续目标是把 Windows D3D12 从“默认可回退 Vulkan”推进到“D3D12-primary 且可选 Vulkan”，并补齐 D3D12 长跑、resize、粒子、拾取、UI 与无 Vulkan 链接依赖验证。
 
 ### 验证命令
