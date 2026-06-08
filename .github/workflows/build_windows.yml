@@ -32,18 +32,13 @@ jobs:
       - name: Build PiccoloEditor
         run: cmake --build build --config ${{ matrix.configuration }} --target PiccoloEditor --parallel
 
-      - name: D3D12 backend smoke
-        if: matrix.configuration == 'Debug'
-        shell: pwsh
-        run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
-
       - name: Install Vulkan runtime for Vulkan smoke
         if: matrix.configuration == 'Debug' && matrix.backend_mode == 'dual_backend'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           install_runtime: true
           install_swiftshader: true
-          swiftshader_destination: C:\swiftshader
+          swiftshader_destination: 'C:\swiftshader'
           cache: true
           stripdown: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -60,6 +55,11 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $swiftShaderDir
           Add-Content -Path $env:GITHUB_ENV -Value "VK_ICD_FILENAMES=$icdPath"
           Write-Host "Using Vulkan software ICD: $icdPath"
+
+      - name: D3D12 backend smoke
+        if: matrix.configuration == 'Debug'
+        shell: pwsh
+        run: ./scripts/tests/render_backend/smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
 
       - name: Vulkan backend smoke
         if: matrix.configuration == 'Debug' && matrix.backend_mode == 'dual_backend'
