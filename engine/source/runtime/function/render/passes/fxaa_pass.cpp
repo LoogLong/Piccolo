@@ -116,7 +116,7 @@ namespace Piccolo
         rasterization_state_create_info.rasterizerDiscardEnable = RHI_FALSE;
         rasterization_state_create_info.polygonMode             = RHI_POLYGON_MODE_FILL;
         rasterization_state_create_info.lineWidth               = 1.0f;
-        rasterization_state_create_info.cullMode                = RHI_CULL_MODE_BACK_BIT;
+        rasterization_state_create_info.cullMode                = RHI_CULL_MODE_NONE;
         rasterization_state_create_info.frontFace               = RHI_FRONT_FACE_CLOCKWISE;
         rasterization_state_create_info.depthBiasEnable         = RHI_FALSE;
         rasterization_state_create_info.depthBiasConstantFactor = 0.0f;
