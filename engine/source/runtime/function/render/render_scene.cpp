@@ -10,11 +10,12 @@ namespace Piccolo
     }
 
     void RenderScene::updateVisibleObjects(std::shared_ptr<RenderResource> render_resource,
-                                           std::shared_ptr<RenderCamera>   camera)
+                                           std::shared_ptr<RenderCamera>   camera,
+                                           bool                            apply_vulkan_y_flip)
     {
         updateVisibleObjectsDirectionalLight(render_resource, camera);
         updateVisibleObjectsPointLight(render_resource);
-        updateVisibleObjectsMainCamera(render_resource, camera);
+        updateVisibleObjectsMainCamera(render_resource, camera, apply_vulkan_y_flip);
         updateVisibleObjectsAxis(render_resource);
         updateVisibleObjectsParticle(render_resource);
     }
@@ -184,12 +185,13 @@ namespace Piccolo
     }
 
     void RenderScene::updateVisibleObjectsMainCamera(std::shared_ptr<RenderResource> render_resource,
-                                                     std::shared_ptr<RenderCamera>   camera)
+                                                     std::shared_ptr<RenderCamera>   camera,
+                                                     bool                            apply_vulkan_y_flip)
     {
         m_main_camera_visible_mesh_nodes.clear();
 
         Matrix4x4 view_matrix      = camera->getViewMatrix();
-        Matrix4x4 proj_matrix      = camera->getPersProjMatrix();
+        Matrix4x4 proj_matrix      = camera->getPersProjMatrix(apply_vulkan_y_flip);
         Matrix4x4 proj_view_matrix = proj_matrix * view_matrix;
 
         ClusterFrustum f = CreateClusterFrustumFromMatrix(proj_view_matrix, -1.0, 1.0, -1.0, 1.0, 0.0, 1.0);

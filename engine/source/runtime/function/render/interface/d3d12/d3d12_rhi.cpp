@@ -409,6 +409,7 @@ namespace Piccolo
                 std::vector<RHIImageLayout> color_attachment_layouts;
                 std::vector<uint32_t> resolve_attachment_indices;
                 std::vector<RHIImageLayout> resolve_attachment_layouts;
+                std::vector<uint32_t> preserve_attachment_indices;
                 uint32_t depth_attachment_index {(std::numeric_limits<uint32_t>::max)()};
                 RHIImageLayout depth_attachment_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
             };
@@ -417,6 +418,7 @@ namespace Piccolo
             std::vector<uint32_t> color_attachment_indices;
             uint32_t depth_attachment_index {(std::numeric_limits<uint32_t>::max)()};
             std::vector<SubpassInfo> subpasses;
+            std::vector<RHISubpassDependency> dependencies;
         };
 
         struct D3D12RHIFramebuffer final : RHIFramebuffer
@@ -1168,6 +1170,246 @@ namespace Piccolo
                     return 16;
                 default:
                     return sourceBytesPerPixel(format);
+            }
+        }
+
+        uint32_t mipDimension(uint32_t base, uint32_t mip_level)
+        {
+            if (mip_level >= 31U)
+            {
+                return 1U;
+            }
+            return (std::max)(1U, base >> mip_level);
+        }
+
+        size_t textureMipByteSize(uint32_t width,
+                                  uint32_t height,
+                                  uint32_t bytes_per_pixel)
+        {
+            return static_cast<size_t>(width) *
+                   static_cast<size_t>(height) *
+                   static_cast<size_t>(bytes_per_pixel);
+        }
+
+        bool isFloat32TextureFormat(RHIFormat format)
+        {
+            return format == RHI_FORMAT_R32_SFLOAT ||
+                   format == RHI_FORMAT_R32G32_SFLOAT ||
+                   format == RHI_FORMAT_R32G32B32_SFLOAT ||
+                   format == RHI_FORMAT_R32G32B32A32_SFLOAT;
+        }
+
+        float readTextureComponent(const uint8_t* source_pixels,
+                                   uint32_t source_width,
+                                   uint32_t bytes_per_pixel,
+                                   uint32_t x,
+                                   uint32_t y,
+                                   uint32_t component,
+                                   bool use_float_components)
+        {
+            const uint8_t* source_component =
+                source_pixels +
+                (static_cast<size_t>(y) * source_width + x) * bytes_per_pixel +
+                static_cast<size_t>(component) * (use_float_components ? sizeof(float) : sizeof(uint8_t));
+            if (use_float_components)
+            {
+                float value = 0.0f;
+                std::memcpy(&value, source_component, sizeof(value));
+                return value;
+            }
+            return static_cast<float>(*source_component);
+        }
+
+        float sampleTextureBilinear(const uint8_t* source_pixels,
+                                    uint32_t source_width,
+                                    uint32_t source_height,
+                                    uint32_t bytes_per_pixel,
+                                    uint32_t component,
+                                    float source_x,
+                                    float source_y,
+                                    bool use_float_components)
+        {
+            const float clamped_x = std::clamp(source_x, 0.0f, static_cast<float>(source_width - 1U));
+            const float clamped_y = std::clamp(source_y, 0.0f, static_cast<float>(source_height - 1U));
+            const uint32_t x0 = static_cast<uint32_t>(std::floor(clamped_x));
+            const uint32_t y0 = static_cast<uint32_t>(std::floor(clamped_y));
+            const uint32_t x1 = (std::min)(source_width - 1U, x0 + 1U);
+            const uint32_t y1 = (std::min)(source_height - 1U, y0 + 1U);
+            const float tx = clamped_x - static_cast<float>(x0);
+            const float ty = clamped_y - static_cast<float>(y0);
+
+            const float c00 = readTextureComponent(source_pixels,
+                                                   source_width,
+                                                   bytes_per_pixel,
+                                                   x0,
+                                                   y0,
+                                                   component,
+                                                   use_float_components);
+            const float c10 = readTextureComponent(source_pixels,
+                                                   source_width,
+                                                   bytes_per_pixel,
+                                                   x1,
+                                                   y0,
+                                                   component,
+                                                   use_float_components);
+            const float c01 = readTextureComponent(source_pixels,
+                                                   source_width,
+                                                   bytes_per_pixel,
+                                                   x0,
+                                                   y1,
+                                                   component,
+                                                   use_float_components);
+            const float c11 = readTextureComponent(source_pixels,
+                                                   source_width,
+                                                   bytes_per_pixel,
+                                                   x1,
+                                                   y1,
+                                                   component,
+                                                   use_float_components);
+            const float row0 = c00 + (c10 - c00) * tx;
+            const float row1 = c01 + (c11 - c01) * tx;
+            return row0 + (row1 - row0) * ty;
+        }
+
+        void writeTextureComponent(uint8_t* destination_pixel,
+                                   uint32_t component,
+                                   float value,
+                                   bool use_float_components)
+        {
+            if (use_float_components)
+            {
+                std::memcpy(destination_pixel + static_cast<size_t>(component) * sizeof(float),
+                            &value,
+                            sizeof(value));
+                return;
+            }
+
+            const float rounded = std::round(std::clamp(value, 0.0f, 255.0f));
+            destination_pixel[component] = static_cast<uint8_t>(rounded);
+        }
+
+        std::vector<uint8_t> generateTextureMipLevel(const uint8_t* source_pixels,
+                                                     uint32_t source_width,
+                                                     uint32_t source_height,
+                                                     uint32_t destination_width,
+                                                     uint32_t destination_height,
+                                                     uint32_t bytes_per_pixel,
+                                                     RHIFormat format)
+        {
+            std::vector<uint8_t> destination(textureMipByteSize(destination_width,
+                                                               destination_height,
+                                                               bytes_per_pixel),
+                                             0);
+            if (source_pixels == nullptr ||
+                source_width == 0 ||
+                source_height == 0 ||
+                destination_width == 0 ||
+                destination_height == 0 ||
+                bytes_per_pixel == 0)
+            {
+                return destination;
+            }
+
+            const bool use_float_average = isFloat32TextureFormat(format) &&
+                                           bytes_per_pixel % sizeof(float) == 0;
+            const uint32_t component_count =
+                use_float_average ? bytes_per_pixel / static_cast<uint32_t>(sizeof(float)) :
+                                    bytes_per_pixel;
+            const float scale_x = static_cast<float>(source_width) / static_cast<float>(destination_width);
+            const float scale_y = static_cast<float>(source_height) / static_cast<float>(destination_height);
+
+            for (uint32_t y = 0; y < destination_height; ++y)
+            {
+                for (uint32_t x = 0; x < destination_width; ++x)
+                {
+                    uint8_t* dst_pixel =
+                        destination.data() +
+                        (static_cast<size_t>(y) * destination_width + x) * bytes_per_pixel;
+
+                    const float source_x0 = static_cast<float>(x) * scale_x;
+                    const float source_y0 = static_cast<float>(y) * scale_y;
+                    const float source_x1 = static_cast<float>(x + 1U) * scale_x;
+                    const float source_y1 = static_cast<float>(y + 1U) * scale_y;
+                    const uint32_t sample_x_count =
+                        (std::max)(1U, static_cast<uint32_t>(std::ceil(source_x1) - std::floor(source_x0)));
+                    const uint32_t sample_y_count =
+                        (std::max)(1U, static_cast<uint32_t>(std::ceil(source_y1) - std::floor(source_y0)));
+                    const uint32_t sample_count = sample_x_count * sample_y_count;
+
+                    for (uint32_t component = 0; component < component_count; ++component)
+                    {
+                        float sum = 0.0f;
+                        for (uint32_t sample_y = 0; sample_y < sample_y_count; ++sample_y)
+                        {
+                            const float fy = (static_cast<float>(sample_y) + 0.5f) /
+                                             static_cast<float>(sample_y_count);
+                            for (uint32_t sample_x = 0; sample_x < sample_x_count; ++sample_x)
+                            {
+                                const float fx = (static_cast<float>(sample_x) + 0.5f) /
+                                                 static_cast<float>(sample_x_count);
+                                const float source_x = source_x0 + (source_x1 - source_x0) * fx - 0.5f;
+                                const float source_y = source_y0 + (source_y1 - source_y0) * fy - 0.5f;
+                                sum += sampleTextureBilinear(source_pixels,
+                                                             source_width,
+                                                             source_height,
+                                                             bytes_per_pixel,
+                                                             component,
+                                                             source_x,
+                                                             source_y,
+                                                             use_float_average);
+                            }
+                        }
+                        writeTextureComponent(dst_pixel,
+                                              component,
+                                              sum / static_cast<float>(sample_count),
+                                              use_float_average);
+                    }
+                }
+            }
+
+            return destination;
+        }
+
+        void copyTextureRowToD3D12Upload(uint8_t* dst_row,
+                                         const uint8_t* src_row,
+                                         uint32_t width,
+                                         size_t source_row_size,
+                                         size_t destination_row_size,
+                                         uint32_t source_bytes_per_pixel,
+                                         uint32_t resource_bytes_per_pixel)
+        {
+            if (dst_row == nullptr || src_row == nullptr)
+            {
+                return;
+            }
+
+            if (source_bytes_per_pixel == resource_bytes_per_pixel)
+            {
+                std::memcpy(dst_row, src_row, (std::min)(source_row_size, destination_row_size));
+            }
+            else if (source_bytes_per_pixel == 3 && resource_bytes_per_pixel == 4)
+            {
+                for (uint32_t x = 0; x < width; ++x)
+                {
+                    dst_row[x * 4 + 0] = src_row[x * 3 + 0];
+                    dst_row[x * 4 + 1] = src_row[x * 3 + 1];
+                    dst_row[x * 4 + 2] = src_row[x * 3 + 2];
+                    dst_row[x * 4 + 3] = 255;
+                }
+            }
+            else if (source_bytes_per_pixel == 12 && resource_bytes_per_pixel == 16)
+            {
+                for (uint32_t x = 0; x < width; ++x)
+                {
+                    std::memcpy(dst_row + x * 16, src_row + x * 12, 12);
+                    float alpha = 1.0f;
+                    std::memcpy(dst_row + x * 16 + 12, &alpha, sizeof(alpha));
+                }
+            }
+            else
+            {
+                const size_t row_copy_size = (std::min)(source_row_size, destination_row_size);
+                std::memcpy(dst_row, src_row, row_copy_size);
             }
         }
 
@@ -2220,6 +2462,14 @@ namespace Piccolo
             return framebuffer->attachments[attachment_index];
         }
 
+        bool subpassPreservesAttachment(const D3D12RHIRenderPass::SubpassInfo& subpass,
+                                        uint32_t attachment_index)
+        {
+            return std::find(subpass.preserve_attachment_indices.begin(),
+                             subpass.preserve_attachment_indices.end(),
+                             attachment_index) != subpass.preserve_attachment_indices.end();
+        }
+
         bool subpassAttachmentStateForUse(D3D12RHIRenderPass* render_pass,
                                           D3D12RHIFramebuffer* framebuffer,
                                           uint32_t attachment_index,
@@ -2280,6 +2530,41 @@ namespace Piccolo
             return false;
         }
 
+        void addUniqueAttachmentIndex(std::vector<uint32_t>& attachment_indices,
+                                      uint32_t attachment_index)
+        {
+            if (!isValidAttachmentIndex(attachment_index) ||
+                std::find(attachment_indices.begin(),
+                          attachment_indices.end(),
+                          attachment_index) != attachment_indices.end())
+            {
+                return;
+            }
+            attachment_indices.push_back(attachment_index);
+        }
+
+        void collectSubpassAttachmentIndices(const D3D12RHIRenderPass::SubpassInfo& subpass,
+                                             std::vector<uint32_t>& attachment_indices)
+        {
+            for (uint32_t attachment_index : subpass.input_attachment_indices)
+            {
+                addUniqueAttachmentIndex(attachment_indices, attachment_index);
+            }
+            for (uint32_t attachment_index : subpass.color_attachment_indices)
+            {
+                addUniqueAttachmentIndex(attachment_indices, attachment_index);
+            }
+            for (uint32_t attachment_index : subpass.resolve_attachment_indices)
+            {
+                addUniqueAttachmentIndex(attachment_indices, attachment_index);
+            }
+            addUniqueAttachmentIndex(attachment_indices, subpass.depth_attachment_index);
+            for (uint32_t attachment_index : subpass.preserve_attachment_indices)
+            {
+                addUniqueAttachmentIndex(attachment_indices, attachment_index);
+            }
+        }
+
         D3D12_RESOURCE_STATES attachmentStateAfterSubpass(D3D12RHIRenderPass* render_pass,
                                                           D3D12RHIFramebuffer* framebuffer,
                                                           uint32_t attachment_index,
@@ -2306,6 +2591,12 @@ namespace Piccolo
                 {
                     return next_state;
                 }
+
+                if (subpassPreservesAttachment(render_pass->subpasses[next_subpass],
+                                               attachment_index))
+                {
+                    continue;
+                }
             }
 
             D3D12RHIImageView* view = framebufferAttachment(framebuffer, attachment_index);
@@ -2327,6 +2618,107 @@ namespace Piccolo
                                             0,
                                             view->layer_count,
                                             target_state);
+        }
+
+        D3D12_RESOURCE_STATES attachmentStateForSubpassBoundary(D3D12RHIRenderPass* render_pass,
+                                                                D3D12RHIFramebuffer* framebuffer,
+                                                                uint32_t attachment_index,
+                                                                uint32_t previous_subpass_index,
+                                                                uint32_t next_subpass_index)
+        {
+            D3D12_RESOURCE_STATES next_state = D3D12_RESOURCE_STATE_COMMON;
+            if (subpassAttachmentStateForUse(render_pass,
+                                             framebuffer,
+                                             attachment_index,
+                                             next_subpass_index,
+                                             next_state))
+            {
+                return next_state;
+            }
+
+            if (render_pass != nullptr &&
+                next_subpass_index < render_pass->subpasses.size() &&
+                subpassPreservesAttachment(render_pass->subpasses[next_subpass_index],
+                                           attachment_index))
+            {
+                return attachmentStateAfterSubpass(render_pass,
+                                                   framebuffer,
+                                                   attachment_index,
+                                                   previous_subpass_index);
+            }
+
+            return attachmentStateAfterSubpass(render_pass,
+                                               framebuffer,
+                                               attachment_index,
+                                               previous_subpass_index);
+        }
+
+        bool hasSubpassDependency(const D3D12RHIRenderPass* render_pass,
+                                  uint32_t previous_subpass_index,
+                                  uint32_t next_subpass_index)
+        {
+            if (render_pass == nullptr)
+            {
+                return false;
+            }
+
+            return std::any_of(render_pass->dependencies.begin(),
+                               render_pass->dependencies.end(),
+                               [previous_subpass_index, next_subpass_index](const RHISubpassDependency& dependency) {
+                                   return dependency.srcSubpass == previous_subpass_index &&
+                                          dependency.dstSubpass == next_subpass_index;
+                               });
+        }
+
+        void transitionD3D12SubpassBoundary(ID3D12GraphicsCommandList* command_list,
+                                            D3D12RHIRenderPass* render_pass,
+                                            D3D12RHIFramebuffer* framebuffer,
+                                            uint32_t previous_subpass_index,
+                                            uint32_t next_subpass_index)
+        {
+            if (command_list == nullptr ||
+                render_pass == nullptr ||
+                framebuffer == nullptr ||
+                previous_subpass_index >= render_pass->subpasses.size() ||
+                next_subpass_index >= render_pass->subpasses.size())
+            {
+                return;
+            }
+
+            if (!hasSubpassDependency(render_pass, previous_subpass_index, next_subpass_index) &&
+                next_subpass_index != previous_subpass_index + 1)
+            {
+                return;
+            }
+
+            std::vector<uint32_t> attachment_indices;
+            collectSubpassAttachmentIndices(render_pass->subpasses[previous_subpass_index],
+                                            attachment_indices);
+            collectSubpassAttachmentIndices(render_pass->subpasses[next_subpass_index],
+                                            attachment_indices);
+
+            for (uint32_t attachment_index : attachment_indices)
+            {
+                if (attachment_index >= render_pass->attachments.size() ||
+                    attachment_index >= framebuffer->attachments.size())
+                {
+                    continue;
+                }
+
+                D3D12RHIImageView* view = framebufferAttachment(framebuffer, attachment_index);
+                if (view == nullptr || view->image == nullptr || view->image->resource == nullptr)
+                {
+                    continue;
+                }
+
+                const D3D12_RESOURCE_STATES target_state =
+                    attachmentStateForSubpassBoundary(render_pass,
+                                                      framebuffer,
+                                                      attachment_index,
+                                                      previous_subpass_index,
+                                                      next_subpass_index);
+                transitionImageView(command_list, view, target_state);
+            }
         }
 
         void finishD3D12Subpass(ID3D12GraphicsCommandList* command_list,
@@ -2886,11 +3278,13 @@ namespace Piccolo
 
         m_swapchain_scissor.offset = {0, 0};
         m_swapchain_scissor.extent = {m_window_width, m_window_height};
+        m_viewport                 = m_swapchain_viewport;
+        m_scissor                  = m_swapchain_scissor;
 
         m_swapchain_desc.extent       = {m_window_width, m_window_height};
         m_swapchain_desc.image_format = RHI_FORMAT_R8G8B8A8_UNORM;
-        m_swapchain_desc.viewport     = &m_swapchain_viewport;
-        m_swapchain_desc.scissor      = &m_swapchain_scissor;
+        m_swapchain_desc.viewport     = &m_viewport;
+        m_swapchain_desc.scissor      = &m_scissor;
         createSwapchainImageViews();
         createFramebufferImageAndView();
 
@@ -2900,8 +3294,9 @@ namespace Piccolo
             throw std::runtime_error("Failed to create D3D12 texture copy semaphore");
         }
 
-        m_current_command_buffer = m_frame_command_buffers[0];
-        m_current_frame_index    = 0;
+        m_current_command_buffer          = m_frame_command_buffers[0];
+        m_current_frame_index             = 0;
+        m_current_swapchain_image_index   = 0;
 #endif
     }
 
@@ -2910,7 +3305,7 @@ namespace Piccolo
 #ifdef _WIN32
         if (m_d3d12_swapchain != nullptr)
         {
-            m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+            m_current_swapchain_image_index = m_d3d12_swapchain->GetCurrentBackBufferIndex();
         }
 
         m_current_command_buffer = m_frame_command_buffers[m_current_frame_index % m_frame_command_buffers.size()];
@@ -3137,8 +3532,8 @@ void D3D12RHI::createSwapchain()
 {
     m_swapchain_desc.extent       = {m_window_width, m_window_height};
     m_swapchain_desc.image_format = RHI_FORMAT_R8G8B8A8_UNORM;
-    m_swapchain_desc.viewport     = &m_swapchain_viewport;
-    m_swapchain_desc.scissor      = &m_swapchain_scissor;
+    m_swapchain_desc.viewport     = &m_viewport;
+    m_swapchain_desc.scissor      = &m_scissor;
     m_swapchain_viewport.x        = 0.0f;
     m_swapchain_viewport.y        = 0.0f;
     m_swapchain_viewport.width    = static_cast<float>(m_window_width);
@@ -3147,6 +3542,8 @@ void D3D12RHI::createSwapchain()
     m_swapchain_viewport.maxDepth = 1.0f;
     m_swapchain_scissor.offset    = {0, 0};
     m_swapchain_scissor.extent    = {m_window_width, m_window_height};
+    m_viewport                    = m_swapchain_viewport;
+    m_scissor                     = m_swapchain_scissor;
 #ifdef _WIN32
     if (m_d3d12_swapchain == nullptr)
     {
@@ -3188,7 +3585,7 @@ void D3D12RHI::createSwapchain()
             m_d3d12_rtv_descriptor_next = (std::max)(m_d3d12_rtv_descriptor_next, m_swapchain_buffer_count);
         }
 
-        m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+        m_current_swapchain_image_index = m_d3d12_swapchain->GetCurrentBackBufferIndex();
     }
 #endif
     return;
@@ -3258,7 +3655,7 @@ void D3D12RHI::recreateSwapchain()
             rtv_handle.ptr += static_cast<SIZE_T>(m_d3d12_rtv_descriptor_size);
         }
         m_d3d12_rtv_descriptor_next = (std::max)(m_d3d12_rtv_descriptor_next, m_swapchain_buffer_count);
-        m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+        m_current_swapchain_image_index = m_d3d12_swapchain->GetCurrentBackBufferIndex();
     }
 #endif
     createSwapchain();
@@ -3447,7 +3844,7 @@ RHISampler* D3D12RHI::getOrCreateMipmapSampler(uint32_t width, uint32_t height)
     sampler_info.maxAnisotropy           = 1.0f;
     sampler_info.compareOp               = RHI_COMPARE_OP_ALWAYS;
     sampler_info.minLod                  = 0.0f;
-    sampler_info.maxLod                  = static_cast<float>(mip_levels);
+    sampler_info.maxLod                  = static_cast<float>(mip_levels - 1U);
     sampler_info.borderColor             = RHI_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
     sampler_info.unnormalizedCoordinates = RHI_FALSE;
 
@@ -3909,7 +4306,11 @@ void D3D12RHI::createImageView(RHIImage* image, RHIFormat format, RHIImageAspect
 void D3D12RHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
 {
     image_allocation = nullptr;
-    const uint32_t uploaded_mip_levels = texture_image_pixels != nullptr ? 1U : miplevels;
+    const uint32_t image_mip_levels = texture_image_pixels != nullptr ?
+                                          calculateMipLevels(texture_image_width,
+                                                             texture_image_height,
+                                                             miplevels) :
+                                          miplevels;
     RHIDeviceMemory* memory = nullptr;
     createImage(texture_image_width,
                 texture_image_height,
@@ -3921,16 +4322,16 @@ void D3D12RHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RH
                 memory,
                 0,
                 1,
-                uploaded_mip_levels);
+                image_mip_levels);
 #ifdef _WIN32
-    (void)uploadTexture2D(image, texture_image_pixels, 1);
+    (void)uploadTexture2D(image, texture_image_pixels, 1, 1);
 #endif
     createImageView(image,
                     texture_image_format,
                     RHI_IMAGE_ASPECT_COLOR_BIT,
                     RHI_IMAGE_VIEW_TYPE_2D,
                     1,
-                    uploaded_mip_levels,
+                    image_mip_levels,
                     image_view);
     delete memory;
     return;
@@ -3939,7 +4340,9 @@ void D3D12RHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RH
 void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
 {
     image_allocation = nullptr;
-    const uint32_t uploaded_mip_levels = 1;
+    const uint32_t image_mip_levels = calculateMipLevels(texture_image_width,
+                                                         texture_image_height,
+                                                         miplevels);
     RHIDeviceMemory* memory = nullptr;
     createImage(texture_image_width,
                 texture_image_height,
@@ -3951,23 +4354,26 @@ void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAll
                 memory,
                 0,
                 6,
-                uploaded_mip_levels);
+                image_mip_levels);
 #ifdef _WIN32
     const uint32_t bytes_per_pixel = sourceBytesPerPixel(texture_image_format);
     if (bytes_per_pixel > 0)
     {
-        const size_t face_size = static_cast<size_t>(texture_image_width) *
-                                 static_cast<size_t>(texture_image_height) *
-                                 bytes_per_pixel;
-        std::vector<uint8_t> cube_pixels(face_size * 6, 0);
+        const uint32_t source_mip_levels = 1;
+        const size_t source_face_size = textureMipByteSize(texture_image_width,
+                                                           texture_image_height,
+                                                           bytes_per_pixel);
+        std::vector<uint8_t> cube_pixels(source_face_size * 6, 0);
         for (uint32_t face = 0; face < 6; ++face)
         {
             if (texture_image_pixels[face] != nullptr)
             {
-                std::memcpy(cube_pixels.data() + face_size * face, texture_image_pixels[face], face_size);
+                std::memcpy(cube_pixels.data() + source_face_size * face,
+                            texture_image_pixels[face],
+                            source_face_size);
             }
         }
-        (void)uploadTexture2D(image, cube_pixels.data(), 6);
+        (void)uploadTexture2D(image, cube_pixels.data(), 6, source_mip_levels);
     }
 #endif
     createImageView(image,
@@ -3975,7 +4381,7 @@ void D3D12RHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAll
                     RHI_IMAGE_ASPECT_COLOR_BIT,
                     RHI_IMAGE_VIEW_TYPE_CUBE,
                     6,
-                    uploaded_mip_levels,
+                    image_mip_levels,
                     image_view);
     delete memory;
     return;
@@ -4761,6 +5167,11 @@ bool D3D12RHI::createRenderPass(const RHIRenderPassCreateInfo* pCreateInfo, RHIR
                 subpass_info.depth_attachment_index = subpass.pDepthStencilAttachment->attachment;
                 subpass_info.depth_attachment_layout = subpass.pDepthStencilAttachment->layout;
             }
+            if (subpass.pPreserveAttachments != nullptr && subpass.preserveAttachmentCount > 0)
+            {
+                subpass_info.preserve_attachment_indices.assign(subpass.pPreserveAttachments,
+                                                                subpass.pPreserveAttachments + subpass.preserveAttachmentCount);
+            }
             render_pass->subpasses.push_back(subpass_info);
         }
 
@@ -4785,6 +5196,12 @@ bool D3D12RHI::createRenderPass(const RHIRenderPassCreateInfo* pCreateInfo, RHIR
         render_pass->subpasses.push_back(subpass_info);
         render_pass->color_attachment_indices = subpass_info.color_attachment_indices;
         render_pass->depth_attachment_index   = subpass_info.depth_attachment_index;
+    }
+
+    if (pCreateInfo->pDependencies != nullptr && pCreateInfo->dependencyCount > 0)
+    {
+        render_pass->dependencies.assign(pCreateInfo->pDependencies,
+                                         pCreateInfo->pDependencies + pCreateInfo->dependencyCount);
     }
 
     delete pRenderPass;
@@ -5150,6 +5567,7 @@ void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassCont
                        framebuffer,
                        d3d_command_buffer->active_subpass_index);
 
+    const uint32_t previous_subpass_index = d3d_command_buffer->active_subpass_index;
     ++d3d_command_buffer->active_subpass_index;
     if (render_pass == nullptr || d3d_command_buffer->active_subpass_index >= render_pass->subpasses.size())
     {
@@ -5157,6 +5575,12 @@ void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassCont
                  d3d_command_buffer->active_subpass_index);
         return;
     }
+
+    transitionD3D12SubpassBoundary(command_list,
+                                   render_pass,
+                                   framebuffer,
+                                   previous_subpass_index,
+                                   d3d_command_buffer->active_subpass_index);
 
     bindFramebufferForSubpass(commandBuffer,
                               command_list,
@@ -5209,7 +5633,8 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
                      view->has_rtv &&
                      render_pass->attachments[attachment_index].finalLayout == RHI_IMAGE_LAYOUT_PRESENT_SRC_KHR)
             {
-                const uint32_t back_buffer_index = m_current_frame_index % m_swapchain_buffer_count;
+                const uint32_t back_buffer_index =
+                    m_current_swapchain_image_index % m_swapchain_buffer_count;
                 if (back_buffer_index < m_d3d12_render_targets.size() &&
                     m_d3d12_render_targets[back_buffer_index] != nullptr)
                 {
@@ -7005,7 +7430,10 @@ RHIQueue* D3D12RHI::getComputeQueue() const
 
 RHISwapChainDesc D3D12RHI::getSwapchainInfo()
 {
-    return m_swapchain_desc;
+    RHISwapChainDesc desc = m_swapchain_desc;
+    desc.viewport         = &m_viewport;
+    desc.scissor          = &m_scissor;
+    return desc;
 }
 
 RHIDepthImageDesc D3D12RHI::getDepthImageInfo() const
@@ -7023,9 +7451,14 @@ uint8_t D3D12RHI::getCurrentFrameIndex() const
     return m_current_frame_index;
 }
 
+uint32_t D3D12RHI::getCurrentSwapchainImageIndex() const
+{
+    return m_current_swapchain_image_index;
+}
+
 void D3D12RHI::setCurrentFrameIndex(uint8_t index)
 {
-    m_current_frame_index = index;
+    m_current_frame_index = index % getMaxFramesInFlight();
 }
 
 RHICommandBuffer* D3D12RHI::beginSingleTimeCommands()
@@ -7116,7 +7549,7 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
         return true;
     }
 
-    m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+    m_current_swapchain_image_index = m_d3d12_swapchain->GetCurrentBackBufferIndex();
     m_current_command_buffer = m_frame_command_buffers[m_current_frame_index % m_frame_command_buffers.size()];
 
     auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer);
@@ -7162,8 +7595,10 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
     auto update_current_frame = [this]() {
         if (m_d3d12_swapchain != nullptr)
         {
-            m_current_frame_index = static_cast<uint8_t>(m_d3d12_swapchain->GetCurrentBackBufferIndex());
+            m_current_swapchain_image_index = m_d3d12_swapchain->GetCurrentBackBufferIndex();
         }
+        m_current_frame_index =
+            static_cast<uint8_t>((m_current_frame_index + 1U) % (std::max)(1U, m_swapchain_buffer_count));
         m_current_command_buffer = m_frame_command_buffers[m_current_frame_index % m_frame_command_buffers.size()];
     };
 
@@ -7313,6 +7748,7 @@ void D3D12RHI::clearSwapchain()
     m_owned_swapchain_images.clear();
     m_swapchain_desc.imageViews.clear();
     m_current_frame_index = 0;
+    m_current_swapchain_image_index = 0;
     return;
 }
 
@@ -8181,7 +8617,10 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         return true;
     }
 
-    bool D3D12RHI::uploadTexture2D(RHIImage* image, const void* texture_pixels, uint32_t layer_count)
+    bool D3D12RHI::uploadTexture2D(RHIImage* image,
+                                   const void* texture_pixels,
+                                   uint32_t layer_count,
+                                   uint32_t source_mip_levels)
     {
         auto* d3d_image = static_cast<D3D12RHIImage*>(image);
         if (d3d_image == nullptr ||
@@ -8198,15 +8637,18 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         }
 
         layer_count = (std::min)(layer_count, d3d_image->array_layers);
+        const uint32_t mip_count = (std::max)(1U, d3d_image->mip_levels);
+        source_mip_levels = (std::max)(1U, (std::min)(source_mip_levels, mip_count));
+        const uint32_t subresource_count = layer_count * mip_count;
 
         D3D12_RESOURCE_DESC texture_desc = d3d_image->resource->GetDesc();
-        std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(layer_count);
-        std::vector<UINT>                               row_counts(layer_count);
-        std::vector<UINT64>                             row_sizes(layer_count);
+        std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(subresource_count);
+        std::vector<UINT>                               row_counts(subresource_count);
+        std::vector<UINT64>                             row_sizes(subresource_count);
         UINT64 upload_buffer_size = 0;
         m_d3d12_device->GetCopyableFootprints(&texture_desc,
                                               0,
-                                              layer_count,
+                                              subresource_count,
                                               0,
                                               footprints.data(),
                                               row_counts.data(),
@@ -8257,45 +8699,86 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         }
 
         const auto* source_pixels = static_cast<const uint8_t*>(texture_pixels);
-        const size_t source_row_size = static_cast<size_t>(d3d_image->width) * d3d_image->source_bytes_per_pixel;
-        const size_t source_layer_size = source_row_size * static_cast<size_t>(d3d_image->height);
+        std::vector<size_t> source_mip_offsets(source_mip_levels, 0);
+        size_t source_layer_size = 0;
+        for (uint32_t mip = 0; mip < source_mip_levels; ++mip)
+        {
+            source_mip_offsets[mip] = source_layer_size;
+            source_layer_size += textureMipByteSize(mipDimension(d3d_image->width, mip),
+                                                    mipDimension(d3d_image->height, mip),
+                                                    d3d_image->source_bytes_per_pixel);
+        }
+
+        struct UploadMipData
+        {
+            const uint8_t* pixels {nullptr};
+            uint32_t width {0};
+            uint32_t height {0};
+            std::vector<uint8_t> generated_pixels;
+        };
+        std::vector<UploadMipData> layer_mips(static_cast<size_t>(layer_count) * mip_count);
+
         for (uint32_t layer = 0; layer < layer_count; ++layer)
         {
-            const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint = footprints[layer];
-            for (UINT row = 0; row < row_counts[layer]; ++row)
+            for (uint32_t mip = 0; mip < mip_count; ++mip)
             {
-                uint8_t* dst_row = mapped_data + footprint.Offset + static_cast<size_t>(row) * footprint.Footprint.RowPitch;
-                const uint8_t* src_row = source_pixels + static_cast<size_t>(layer) * source_layer_size +
-                                         static_cast<size_t>(row) * source_row_size;
-                std::memset(dst_row, 0, footprint.Footprint.RowPitch);
-                if (d3d_image->source_bytes_per_pixel == d3d_image->resource_bytes_per_pixel)
+                UploadMipData& mip_data = layer_mips[static_cast<size_t>(layer) * mip_count + mip];
+                mip_data.width  = mipDimension(d3d_image->width, mip);
+                mip_data.height = mipDimension(d3d_image->height, mip);
+                if (mip < source_mip_levels)
                 {
-                    std::memcpy(dst_row, src_row, (std::min)(source_row_size, static_cast<size_t>(row_sizes[layer])));
-                }
-                else if (d3d_image->source_bytes_per_pixel == 3 && d3d_image->resource_bytes_per_pixel == 4)
-                {
-                    for (uint32_t x = 0; x < d3d_image->width; ++x)
-                    {
-                        dst_row[x * 4 + 0] = src_row[x * 3 + 0];
-                        dst_row[x * 4 + 1] = src_row[x * 3 + 1];
-                        dst_row[x * 4 + 2] = src_row[x * 3 + 2];
-                        dst_row[x * 4 + 3] = 255;
-                    }
-                }
-                else if (d3d_image->source_bytes_per_pixel == 12 && d3d_image->resource_bytes_per_pixel == 16)
-                {
-                    for (uint32_t x = 0; x < d3d_image->width; ++x)
-                    {
-                        std::memcpy(dst_row + x * 16, src_row + x * 12, 12);
-                        float alpha = 1.0f;
-                        std::memcpy(dst_row + x * 16 + 12, &alpha, sizeof(alpha));
-                    }
+                    mip_data.pixels = source_pixels +
+                                      static_cast<size_t>(layer) * source_layer_size +
+                                      source_mip_offsets[mip];
                 }
                 else
                 {
-                    const size_t row_copy_size = (std::min)(source_row_size,
-                                                            static_cast<size_t>(footprint.Footprint.RowPitch));
-                    std::memcpy(dst_row, src_row, row_copy_size);
+                    const UploadMipData& previous_mip =
+                        layer_mips[static_cast<size_t>(layer) * mip_count + mip - 1];
+                    mip_data.generated_pixels =
+                        generateTextureMipLevel(previous_mip.pixels,
+                                                previous_mip.width,
+                                                previous_mip.height,
+                                                mip_data.width,
+                                                mip_data.height,
+                                                d3d_image->source_bytes_per_pixel,
+                                                d3d_image->format);
+                    mip_data.pixels = mip_data.generated_pixels.data();
+                }
+            }
+        }
+
+        for (uint32_t layer = 0; layer < layer_count; ++layer)
+        {
+            for (uint32_t mip = 0; mip < mip_count; ++mip)
+            {
+                const uint32_t subresource = d3d12SubresourceIndex(*d3d_image, mip, layer);
+                if (subresource >= footprints.size())
+                {
+                    continue;
+                }
+
+                const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint = footprints[subresource];
+                const UploadMipData& mip_data = layer_mips[static_cast<size_t>(layer) * mip_count + mip];
+                const size_t source_row_size =
+                    static_cast<size_t>(mip_data.width) * d3d_image->source_bytes_per_pixel;
+                for (UINT row = 0; row < row_counts[subresource]; ++row)
+                {
+                    uint8_t* dst_row =
+                        mapped_data +
+                        footprint.Offset +
+                        static_cast<size_t>(row) * footprint.Footprint.RowPitch;
+                    const uint8_t* src_row =
+                        mip_data.pixels +
+                        static_cast<size_t>(row) * source_row_size;
+                    std::memset(dst_row, 0, footprint.Footprint.RowPitch);
+                    copyTextureRowToD3D12Upload(dst_row,
+                                                src_row,
+                                                mip_data.width,
+                                                source_row_size,
+                                                static_cast<size_t>(row_sizes[subresource]),
+                                                d3d_image->source_bytes_per_pixel,
+                                                d3d_image->resource_bytes_per_pixel);
                 }
             }
         }
@@ -8308,28 +8791,35 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             {
                 for (uint32_t layer = 0; layer < layer_count; ++layer)
                 {
-                    const uint32_t subresource = d3d12SubresourceIndex(*d3d_image, 0, layer);
-                    transitionImageSubresource(command_list,
-                                               *d3d_image,
-                                               subresource,
-                                               D3D12_RESOURCE_STATE_COPY_DEST);
+                    for (uint32_t mip = 0; mip < mip_count; ++mip)
+                    {
+                        const uint32_t subresource = d3d12SubresourceIndex(*d3d_image, mip, layer);
+                        if (subresource >= footprints.size())
+                        {
+                            continue;
+                        }
+                        transitionImageSubresource(command_list,
+                                                   *d3d_image,
+                                                   subresource,
+                                                   D3D12_RESOURCE_STATE_COPY_DEST);
 
-                    D3D12_TEXTURE_COPY_LOCATION dst_location {};
-                    dst_location.pResource        = d3d_image->resource.Get();
-                    dst_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    dst_location.SubresourceIndex = subresource;
+                        D3D12_TEXTURE_COPY_LOCATION dst_location {};
+                        dst_location.pResource        = d3d_image->resource.Get();
+                        dst_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                        dst_location.SubresourceIndex = subresource;
 
-                    D3D12_TEXTURE_COPY_LOCATION src_location {};
-                    src_location.pResource       = upload_buffer.Get();
-                    src_location.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-                    src_location.PlacedFootprint = footprints[layer];
+                        D3D12_TEXTURE_COPY_LOCATION src_location {};
+                        src_location.pResource       = upload_buffer.Get();
+                        src_location.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                        src_location.PlacedFootprint = footprints[subresource];
 
-                    command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nullptr);
+                        command_list->CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, nullptr);
 
-                    transitionImageSubresource(command_list,
-                                               *d3d_image,
-                                               subresource,
-                                               final_state);
+                        transitionImageSubresource(command_list,
+                                                   *d3d_image,
+                                                   subresource,
+                                                   final_state);
+                    }
                 }
             });
     }
@@ -8404,7 +8894,8 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             }
             else
             {
-                const uint32_t back_buffer_index = m_current_frame_index % m_swapchain_buffer_count;
+                const uint32_t back_buffer_index =
+                    m_current_swapchain_image_index % m_swapchain_buffer_count;
                 if (back_buffer_index < m_d3d12_render_targets.size() &&
                     m_d3d12_render_targets[back_buffer_index] != nullptr)
                 {

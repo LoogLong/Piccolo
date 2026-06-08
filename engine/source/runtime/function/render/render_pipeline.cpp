@@ -144,7 +144,7 @@ namespace Piccolo
             ->setRenderCommandBufferHandle(
                 static_cast<MainCameraPass*>(m_main_camera_pass.get())->getRenderCommandBuffer());
 
-        const uint32_t current_swapchain_image_index = render_rhi->getCurrentFrameIndex();
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
             ->drawForward(color_grading_pass,
                           fxaa_pass,
@@ -195,7 +195,7 @@ namespace Piccolo
             ->setRenderCommandBufferHandle(
                 static_cast<MainCameraPass*>(m_main_camera_pass.get())->getRenderCommandBuffer());
 
-        const uint32_t current_swapchain_image_index = render_rhi->getCurrentFrameIndex();
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
             ->draw(color_grading_pass,
                    fxaa_pass,

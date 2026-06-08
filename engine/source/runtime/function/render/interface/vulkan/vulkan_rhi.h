@@ -135,6 +135,7 @@ namespace Piccolo
         RHIViewport getViewport() const override;
         uint8_t getMaxFramesInFlight() const override;
         uint8_t getCurrentFrameIndex() const override;
+        uint32_t getCurrentSwapchainImageIndex() const override;
         void setCurrentFrameIndex(uint8_t index) override;
 
         // command write

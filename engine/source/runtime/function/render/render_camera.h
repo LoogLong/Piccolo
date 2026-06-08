@@ -51,7 +51,7 @@ namespace Piccolo
         Vector3   right() const { return (m_invRotation * X); }
         Vector2   getFOV() const { return {m_fovx, m_fovy}; }
         Matrix4x4 getViewMatrix();
-        Matrix4x4 getPersProjMatrix() const;
+        Matrix4x4 getPersProjMatrix(bool apply_vulkan_y_flip = true) const;
         Matrix4x4 getLookAtMatrix() const { return Math::makeLookAtMatrix(position(), position() + forward(), up()); }
         float     getFovYDeprecated() const { return m_fovy; }
 

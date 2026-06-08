@@ -7,6 +7,8 @@
 
 #define SHADINGMODELID_UNLIT 0u
 #define SHADINGMODELID_DEFAULT_LIT 1u
+#define PICCOLO_PI 3.1416f
+#define MAX_REFLECTION_LOD 8.0f
 
 struct DirectionalLight
 {
@@ -36,6 +38,7 @@ struct PerFrameData
     PointLight         scene_point_lights[M_MAX_POINT_LIGHT_COUNT];
     DirectionalLight   scene_directional_light;
     row_major float4x4 directional_light_proj_view;
+    row_major float4x4 proj_view_matrix_inv;
 };
 
 struct MeshInstanceData
@@ -142,7 +145,7 @@ void EncodeGBufferData(GBufferData gbuffer, out float4 out_gbuffer_a, out float4
 GBufferData DecodeGBufferData(float4 gbuffer_a, float4 gbuffer_b, float4 gbuffer_c)
 {
     GBufferData gbuffer;
-    gbuffer.world_normal     = normalize(DecodeNormal(gbuffer_a.xyz));
+    gbuffer.world_normal     = DecodeNormal(gbuffer_a.xyz);
     gbuffer.metallic         = gbuffer_b.r;
     gbuffer.specular         = gbuffer_b.g;
     gbuffer.roughness        = gbuffer_b.b;
@@ -172,7 +175,68 @@ float3 CalculateTangentNormal(float3 vertex_normal, float3 vertex_tangent, float
     float3 n = normalize(vertex_normal);
     float3 t = normalize(vertex_tangent);
     float3 b = normalize(cross(n, t));
-    return normalize(mul(float3x3(t, b, n), tangent_normal));
+    return normalize(tangent_normal.x * t + tangent_normal.y * b + tangent_normal.z * n);
+}
+
+float D_GGX(float dotNH, float roughness)
+{
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float denom = dotNH * dotNH * (alpha2 - 1.0f) + 1.0f;
+    return alpha2 / (PICCOLO_PI * denom * denom);
+}
+
+float G_SchlicksmithGGX(float dotNL, float dotNV, float roughness)
+{
+    float r = roughness + 1.0f;
+    float k = (r * r) / 8.0f;
+    float gl = dotNL / (dotNL * (1.0f - k) + k);
+    float gv = dotNV / (dotNV * (1.0f - k) + k);
+    return gl * gv;
+}
+
+float Pow5(float x)
+{
+    return x * x * x * x * x;
+}
+
+float3 F_Schlick(float cos_theta, float3 f0)
+{
+    return f0 + (1.0f - f0) * Pow5(1.0f - cos_theta);
+}
+
+float3 F_SchlickR(float cos_theta, float3 f0, float roughness)
+{
+    return f0 + (max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), f0) - f0) *
+                    Pow5(1.0f - cos_theta);
+}
+
+float3 BRDF(float3 l, float3 v, float3 n, float3 f0, float3 base_color, float metallic, float roughness)
+{
+    float3 h = normalize(v + l);
+    float dot_nv = clamp(dot(n, v), 0.0f, 1.0f);
+    float dot_nl = clamp(dot(n, l), 0.0f, 1.0f);
+    float dot_nh = clamp(dot(n, h), 0.0f, 1.0f);
+
+    float rroughness = max(0.05f, roughness);
+    float d = D_GGX(dot_nh, rroughness);
+    float g = G_SchlicksmithGGX(dot_nl, dot_nv, rroughness);
+    float3 f = F_Schlick(dot_nv, f0);
+
+    float3 spec = d * f * g / (4.0f * dot_nl * dot_nv + 0.001f);
+    float3 kd = (1.0f - f) * (1.0f - metallic);
+
+    return kd * base_color / PICCOLO_PI + (1.0f - kd) * spec;
+}
+
+float2 NdcXYToUV(float2 ndc_xy)
+{
+    return ndc_xy * float2(0.5f, 0.5f) + float2(0.5f, 0.5f);
+}
+
+float2 UVToNdcXY(float2 uv)
+{
+    return uv * float2(2.0f, 2.0f) + float2(-1.0f, -1.0f);
 }
 
 #endif

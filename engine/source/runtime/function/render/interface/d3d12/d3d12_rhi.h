@@ -114,6 +114,7 @@ namespace Piccolo
     RHIDepthImageDesc getDepthImageInfo() const override;
     uint8_t getMaxFramesInFlight() const override;
     uint8_t getCurrentFrameIndex() const override;
+    uint32_t getCurrentSwapchainImageIndex() const override;
     void setCurrentFrameIndex(uint8_t index) override;
     RHICommandBuffer* beginSingleTimeCommands() override;
     void endSingleTimeCommands(RHICommandBuffer* command_buffer) override;
@@ -158,7 +159,7 @@ namespace Piccolo
         bool ensureCommandBufferObjects(RHICommandBuffer* commandBuffer);
         ID3D12GraphicsCommandList* d3d12CommandListFor(RHICommandBuffer* commandBuffer) const;
         bool executeImmediateCommands(const std::function<void(ID3D12GraphicsCommandList*)>& record_commands);
-        bool uploadTexture2D(RHIImage* image, const void* texture_pixels, uint32_t layer_count);
+        bool uploadTexture2D(RHIImage* image, const void* texture_pixels, uint32_t layer_count, uint32_t source_mip_levels);
         void bindFramebufferForSubpass(RHICommandBuffer* command_buffer, ID3D12GraphicsCommandList* command_list, const RHIRenderPassBeginInfo* pRenderPassBegin, uint32_t subpass_index, bool apply_load_ops);
         void resolvePendingTextureReadbacks();
         bool ensureDispatchCommandSignature();
@@ -215,7 +216,9 @@ namespace Piccolo
 
         GLFWwindow* m_window {nullptr};
         RHIViewport m_viewport {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        RHIRect2D   m_scissor {};
         uint8_t m_current_frame_index {0};
+        uint32_t m_current_swapchain_image_index {0};
         // RHI-facing wrappers owned by D3D12RHI. They back the frame loop and keep the existing RHI contract
         // without exposing ID3D12* objects outside the backend.
         std::array<RHICommandBuffer*, 3> m_frame_command_buffers {{nullptr, nullptr, nullptr}};

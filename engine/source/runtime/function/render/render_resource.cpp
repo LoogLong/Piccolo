@@ -109,11 +109,12 @@ namespace Piccolo
         getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
-    void RenderResource::updatePerFrameBuffer(std::shared_ptr<RenderScene>  render_scene,
+    void RenderResource::updatePerFrameBuffer(std::shared_ptr<RHI>          rhi,
+        std::shared_ptr<RenderScene>  render_scene,
         std::shared_ptr<RenderCamera> camera)
     {
         Matrix4x4 view_matrix = camera->getViewMatrix();
-        Matrix4x4 proj_matrix = camera->getPersProjMatrix();
+        Matrix4x4 proj_matrix = camera->getPersProjMatrix(rhi->getBackendType() == RHIBackendType::Vulkan);
         Vector3   camera_position = camera->position();
         Matrix4x4 proj_view_matrix = proj_matrix * view_matrix;
 
@@ -127,6 +128,7 @@ namespace Piccolo
         m_particle_collision_perframe_storage_buffer_object.proj_inv_matrix  = proj_matrix.inverse();
 
         m_mesh_perframe_storage_buffer_object.proj_view_matrix = proj_view_matrix;
+        m_mesh_perframe_storage_buffer_object.proj_view_matrix_inv = proj_view_matrix.inverse();
         m_mesh_perframe_storage_buffer_object.camera_position = camera_position;
         m_mesh_perframe_storage_buffer_object.ambient_light = ambient_light;
         m_mesh_perframe_storage_buffer_object.point_light_num = point_light_num;

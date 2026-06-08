@@ -23,9 +23,9 @@ struct PointShadowPSOutput
 
 PointShadowPSOutput main(PointShadowPSInput input)
 {
-    float3 position_view_space = input.inv_length_position_view_space / max(input.inv_length, 0.0001f);
-    float point_light_radius = max(g_point_lights_position_and_radius[input.light_index].w, 0.0001f);
-    float ratio = saturate(length(position_view_space) / point_light_radius);
+    float3 position_view_space = input.inv_length_position_view_space / input.inv_length;
+    float point_light_radius = g_point_lights_position_and_radius[input.light_index].w;
+    float ratio = length(position_view_space) / point_light_radius;
 
     PointShadowPSOutput output;
     output.depth_target = ratio;

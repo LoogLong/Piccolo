@@ -51,6 +51,7 @@ namespace Piccolo
         RenderScenePointLight       scene_point_lights[s_max_point_light_count];
         RenderSceneDirectionalLight scene_directional_light;
         Matrix4x4                   directional_light_proj_view;
+        Matrix4x4                   proj_view_matrix_inv;
     };
 
     struct RenderMeshInstance

@@ -120,7 +120,8 @@ namespace Piccolo
             RenderEntity         render_entity,
             RenderMaterialData   material_data) override final;
 
-        virtual void updatePerFrameBuffer(std::shared_ptr<RenderScene>  render_scene,
+        virtual void updatePerFrameBuffer(std::shared_ptr<RHI>          rhi,
+            std::shared_ptr<RenderScene>  render_scene,
             std::shared_ptr<RenderCamera> camera) override final;
 
         RenderMeshGPUResource& getEntityMesh(RenderEntity entity);

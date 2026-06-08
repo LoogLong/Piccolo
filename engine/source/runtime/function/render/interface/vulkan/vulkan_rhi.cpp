@@ -3692,6 +3692,10 @@ namespace Piccolo
     {
         return m_current_frame_index;
     }
+    uint32_t VulkanRHI::getCurrentSwapchainImageIndex() const
+    {
+        return m_current_swapchain_image_index;
+    }
     void VulkanRHI::setCurrentFrameIndex(uint8_t index)
     {
         m_current_frame_index = index;

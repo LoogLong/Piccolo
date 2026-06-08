@@ -152,6 +152,7 @@ namespace Piccolo
         virtual RHIViewport getViewport() const = 0;
         virtual uint8_t getMaxFramesInFlight() const = 0;
         virtual uint8_t getCurrentFrameIndex() const = 0;
+        virtual uint32_t getCurrentSwapchainImageIndex() const = 0;
         virtual void setCurrentFrameIndex(uint8_t index) = 0;
 
         // command write
