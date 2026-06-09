@@ -7,7 +7,7 @@
 
 #ifdef _WIN32
 #include <d3d12.h>
-#include <dxgi1_4.h>
+#include <dxgi1_6.h>
 #include <wrl.h>
 
 using Microsoft::WRL::ComPtr;
@@ -207,6 +207,8 @@ namespace Piccolo
         uint32_t m_d3d12_cbv_srv_uav_descriptor_next {0};
         uint32_t m_d3d12_transient_cbv_srv_uav_descriptor_next {0};
         uint32_t m_d3d12_sampler_descriptor_next {0};
+
+        bool m_allow_tearing {false};
 
         uint32_t m_window_width {0};
         uint32_t m_window_height {0};

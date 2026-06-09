@@ -185,6 +185,8 @@ namespace Piccolo
             std::vector<bool>                 graphics_root_descriptor_table_valid;
             std::vector<D3D12_GPU_DESCRIPTOR_HANDLE> compute_root_descriptor_tables;
             std::vector<bool>                 compute_root_descriptor_table_valid;
+            ComPtr<ID3D12Resource>            dispatch_argument_buffer;
+            D3D12_RESOURCE_STATES             dispatch_argument_buffer_state {D3D12_RESOURCE_STATE_COPY_DEST};
 #endif
             bool owns_recording {false};
         };
@@ -731,6 +733,35 @@ namespace Piccolo
             }
         }
 
+        std::string dxgiAdapterDescriptionToUtf8(const WCHAR* description)
+        {
+            if (description == nullptr || description[0] == L'\0')
+            {
+                return {};
+            }
+
+            const int required_size =
+                WideCharToMultiByte(CP_UTF8, 0, description, -1, nullptr, 0, nullptr, nullptr);
+            if (required_size <= 1)
+            {
+                return {};
+            }
+
+            std::vector<char> buffer(static_cast<size_t>(required_size), '\0');
+            if (WideCharToMultiByte(CP_UTF8,
+                                    0,
+                                    description,
+                                    -1,
+                                    buffer.data(),
+                                    required_size,
+                                    nullptr,
+                                    nullptr) == 0)
+            {
+                return {};
+            }
+            return std::string(buffer.data());
+        }
+
         bool reserveDescriptors(uint32_t count, uint32_t& next, uint32_t capacity, uint32_t& base)
         {
             if (count == 0)
@@ -857,16 +888,30 @@ namespace Piccolo
 
         D3D12_HEAP_TYPE chooseBufferHeapType(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties)
         {
+            const bool host_visible = hasFlag(properties, RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
             const bool storage_or_indirect =
                 hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
                 hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) ||
                 hasFlag(usage, RHI_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+            const bool transfer_buffer =
+                hasFlag(usage, RHI_BUFFER_USAGE_TRANSFER_SRC_BIT) ||
+                hasFlag(usage, RHI_BUFFER_USAGE_TRANSFER_DST_BIT);
+            if (host_visible &&
+                hasFlag(properties, RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT) &&
+                hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+                !hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) &&
+                !hasFlag(usage, RHI_BUFFER_USAGE_INDIRECT_BUFFER_BIT) &&
+                !transfer_buffer)
+            {
+                return D3D12_HEAP_TYPE_UPLOAD;
+            }
+
             if (storage_or_indirect)
             {
                 return D3D12_HEAP_TYPE_DEFAULT;
             }
 
-            if (!hasFlag(properties, RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+            if (!host_visible)
             {
                 return D3D12_HEAP_TYPE_DEFAULT;
             }
@@ -923,7 +968,7 @@ namespace Piccolo
 
         bool bufferHostMirrorUploadable(const D3D12RHIBuffer& buffer)
         {
-            return buffer.host_data_valid || buffer.host_data_uploadable;
+            return buffer.host_data_uploadable;
         }
 
         bool mappedHostRangeContains(const D3D12RHIDeviceMemory& memory, RHIDeviceSize offset, RHIDeviceSize size)
@@ -1507,8 +1552,7 @@ namespace Piccolo
                 state |= D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
             }
             if (hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
-                (hasFlag(access, RHI_ACCESS_SHADER_READ_BIT) || hasFlag(access, RHI_ACCESS_SHADER_WRITE_BIT)) &&
-                !hasFlag(access, RHI_ACCESS_INDIRECT_COMMAND_READ_BIT))
+                (hasFlag(access, RHI_ACCESS_SHADER_READ_BIT) || hasFlag(access, RHI_ACCESS_SHADER_WRITE_BIT)))
             {
                 return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
             }
@@ -2898,6 +2942,45 @@ namespace Piccolo
             return true;
         }
 
+        bool ensureDispatchArgumentScratchBuffer(ID3D12Device* device, D3D12RHICommandBuffer& command_buffer)
+        {
+            if (command_buffer.dispatch_argument_buffer != nullptr)
+            {
+                return true;
+            }
+            if (device == nullptr)
+            {
+                return false;
+            }
+
+            D3D12_HEAP_PROPERTIES heap_properties {};
+            heap_properties.Type                 = D3D12_HEAP_TYPE_DEFAULT;
+            heap_properties.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+            heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+            heap_properties.CreationNodeMask     = 1;
+            heap_properties.VisibleNodeMask      = 1;
+
+            D3D12_RESOURCE_DESC resource_desc {};
+            resource_desc.Dimension          = D3D12_RESOURCE_DIMENSION_BUFFER;
+            resource_desc.Width              = sizeof(D3D12_DISPATCH_ARGUMENTS);
+            resource_desc.Height             = 1;
+            resource_desc.DepthOrArraySize   = 1;
+            resource_desc.MipLevels          = 1;
+            resource_desc.Format             = DXGI_FORMAT_UNKNOWN;
+            resource_desc.SampleDesc.Count   = 1;
+            resource_desc.SampleDesc.Quality = 0;
+            resource_desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            resource_desc.Flags              = D3D12_RESOURCE_FLAG_NONE;
+
+            command_buffer.dispatch_argument_buffer_state = D3D12_RESOURCE_STATE_COPY_DEST;
+            return SUCCEEDED(device->CreateCommittedResource(&heap_properties,
+                                                             D3D12_HEAP_FLAG_NONE,
+                                                             &resource_desc,
+                                                             command_buffer.dispatch_argument_buffer_state,
+                                                             nullptr,
+                                                             IID_PPV_ARGS(&command_buffer.dispatch_argument_buffer)));
+        }
+
         void fillSamplerDesc(const RHISamplerCreateInfo& create_info, D3D12_SAMPLER_DESC& desc)
         {
             desc.Filter         = toD3D12Filter(create_info);
@@ -3635,7 +3718,7 @@ void D3D12RHI::recreateSwapchain()
                                                                        m_window_width,
                                                                        m_window_height,
                                                                        DXGI_FORMAT_R8G8B8A8_UNORM,
-                                                                       0);
+                                                                       m_allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
         if (FAILED(resize_result))
         {
             return;
@@ -5416,8 +5499,6 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
         return true;
     }
 
-    waitForGpu();
-
     if (FAILED(d3d_command_buffer->command_allocator->Reset()))
     {
         return false;
@@ -6804,7 +6885,45 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
                                   true,
                                   RHI_PIPELINE_BIND_POINT_COMPUTE);
     }
-    if (d3d_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+    ID3D12Resource* argument_resource = d3d_buffer->resource.Get();
+    UINT64          argument_offset   = offset;
+    const bool storage_indirect_buffer =
+        hasFlag(d3d_buffer->usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+        hasFlag(d3d_buffer->usage, RHI_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+    if (storage_indirect_buffer && d3d_command_buffer != nullptr)
+    {
+        if (!ensureDispatchArgumentScratchBuffer(m_d3d12_device.Get(), *d3d_command_buffer))
+        {
+            LOG_WARN("D3D12 cmdDispatchIndirect skipped because the scratch argument buffer is unavailable");
+            return;
+        }
+
+        transitionResource(command_list,
+                           d3d_buffer->resource.Get(),
+                           d3d_buffer->current_state,
+                           D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transitionResource(command_list,
+                           d3d_command_buffer->dispatch_argument_buffer.Get(),
+                           d3d_command_buffer->dispatch_argument_buffer_state,
+                           D3D12_RESOURCE_STATE_COPY_DEST);
+        command_list->CopyBufferRegion(d3d_command_buffer->dispatch_argument_buffer.Get(),
+                                       0,
+                                       d3d_buffer->resource.Get(),
+                                       offset,
+                                       sizeof(D3D12_DISPATCH_ARGUMENTS));
+        transitionResource(command_list,
+                           d3d_command_buffer->dispatch_argument_buffer.Get(),
+                           d3d_command_buffer->dispatch_argument_buffer_state,
+                           D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        transitionResource(command_list,
+                           d3d_buffer->resource.Get(),
+                           d3d_buffer->current_state,
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        argument_resource = d3d_command_buffer->dispatch_argument_buffer.Get();
+        argument_offset   = 0;
+    }
+    else if (d3d_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
     {
         transitionResource(command_list,
                            d3d_buffer->resource.Get(),
@@ -6814,8 +6933,8 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
 
     command_list->ExecuteIndirect(m_d3d12_dispatch_command_signature.Get(),
                                   1,
-                                  d3d_buffer->resource.Get(),
-                                  offset,
+                                  argument_resource,
+                                  argument_offset,
                                   nullptr,
                                   0);
 #else
@@ -7348,7 +7467,6 @@ bool D3D12RHI::queueWaitIdle(RHIQueue* queue)
 void D3D12RHI::resetCommandPool()
 {
 #ifdef _WIN32
-    waitForGpu();
     if (auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(m_current_command_buffer))
     {
         if (d3d_command_buffer->is_open)
@@ -7365,7 +7483,11 @@ void D3D12RHI::resetCommandPool()
 void D3D12RHI::waitForFences()
 {
 #ifdef _WIN32
-    waitForGpu();
+    RHIFence* current_frame_fence = m_frame_fences[m_current_frame_index % m_frame_fences.size()];
+    if (current_frame_fence != nullptr && !waitForFencesPFN(1, &current_frame_fence, RHI_TRUE, UINT64_MAX))
+    {
+        LOG_ERROR("D3D12 waitForFences failed for frame {}", static_cast<uint32_t>(m_current_frame_index));
+    }
 #endif
     return;
 }
@@ -7557,9 +7679,14 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
     {
         if (!d3d_command_buffer->is_open)
         {
-            waitForGpu();
-            (void)d3d_command_buffer->command_allocator->Reset();
-            (void)d3d_command_buffer->command_list->Reset(d3d_command_buffer->command_allocator.Get(), nullptr);
+            if (FAILED(d3d_command_buffer->command_allocator->Reset()) ||
+                FAILED(d3d_command_buffer->command_list->Reset(d3d_command_buffer->command_allocator.Get(), nullptr)))
+            {
+                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "prepareBeforePass command buffer reset failure");
+                LOG_ERROR("D3D12 prepareBeforePass failed to reset command buffer for frame {}",
+                          static_cast<uint32_t>(m_current_frame_index));
+                return true;
+            }
             d3d_command_buffer->is_open = true;
             d3d_command_buffer->has_recorded_commands = false;
             d3d_command_buffer->in_render_pass = false;
@@ -7619,9 +7746,31 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
     }
     d3d_command_buffer->has_recorded_commands = true;
 
-    ID3D12CommandList* command_lists[] = {d3d_command_buffer->command_list.Get()};
-    m_d3d12_command_queue->ExecuteCommandLists(1, command_lists);
-    const HRESULT present_result = m_d3d12_swapchain->Present(1, 0);
+    RHIFence* current_frame_fence = m_frame_fences[m_current_frame_index % m_frame_fences.size()];
+    if (current_frame_fence != nullptr && !resetFencesPFN(1, &current_frame_fence))
+    {
+        LOG_ERROR("D3D12 submitRendering failed to reset frame fence for frame {}",
+                  static_cast<uint32_t>(m_current_frame_index));
+        return;
+    }
+
+    RHICommandBuffer* submit_command_buffer = m_current_command_buffer;
+    RHISubmitInfo     submit_info {};
+    submit_info.sType              = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers    = &submit_command_buffer;
+    if (!queueSubmit(m_graphics_queue, 1, &submit_info, current_frame_fence))
+    {
+        const HRESULT removed_reason =
+            m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "submitRendering queue submit failure");
+        LOG_ERROR("D3D12 submitRendering queue submit failed (removed_reason=0x{:08X})",
+                  static_cast<unsigned int>(removed_reason));
+        return;
+    }
+
+    const UINT present_flags = m_allow_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    const HRESULT present_result = m_d3d12_swapchain->Present(0, present_flags);
     if (FAILED(present_result))
     {
         waitForGpu();
@@ -7680,7 +7829,6 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
         return;
     }
 
-    waitForGpu();
     update_current_frame();
 #else
     (void)passUpdateAfterRecreateSwapchain;
@@ -8312,11 +8460,20 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
     {
         UINT dxgi_factory_flags = 0;
 #ifdef _DEBUG
+        char  debug_layer_env[16] {};
+        DWORD debug_layer_env_length =
+            GetEnvironmentVariableA("PICCOLO_D3D12_DEBUG_LAYER", debug_layer_env, static_cast<DWORD>(sizeof(debug_layer_env)));
+        const bool enable_debug_layer = debug_layer_env_length > 0 && debug_layer_env_length < sizeof(debug_layer_env) &&
+                                        (debug_layer_env[0] == '1' || debug_layer_env[0] == 't' ||
+                                         debug_layer_env[0] == 'T' || debug_layer_env[0] == 'y' ||
+                                         debug_layer_env[0] == 'Y');
+
         ComPtr<ID3D12Debug> debug_controller;
-        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
+        if (enable_debug_layer && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
         {
             debug_controller->EnableDebugLayer();
             dxgi_factory_flags |= DXGI_CREATE_FACTORY_DEBUG;
+            LOG_INFO("D3D12 debug layer enabled by PICCOLO_D3D12_DEBUG_LAYER");
         }
 #endif
 
@@ -8325,20 +8482,92 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
             throw std::runtime_error("Failed to create DXGI factory");
         }
 
-        ComPtr<IDXGIAdapter1> hardware_adapter;
-        for (UINT adapter_index = 0; DXGI_ERROR_NOT_FOUND != m_dxgi_factory->EnumAdapters1(adapter_index, &hardware_adapter); ++adapter_index)
-        {
-            DXGI_ADAPTER_DESC1 desc {};
-            hardware_adapter->GetDesc1(&desc);
-
-            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+        auto try_create_device = [this](IDXGIAdapter1* adapter, const char* source) -> bool {
+            if (adapter == nullptr)
             {
-                continue;
+                return false;
             }
 
-            if (SUCCEEDED(D3D12CreateDevice(hardware_adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_d3d12_device))))
+            DXGI_ADAPTER_DESC1 desc {};
+            if (FAILED(adapter->GetDesc1(&desc)) || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
             {
-                break;
+                return false;
+            }
+
+            ComPtr<ID3D12Device> device;
+            if (FAILED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))))
+            {
+                return false;
+            }
+
+            m_d3d12_device = device;
+            LOG_INFO("D3D12 selected {} adapter: {} (dedicated_video_memory={} MB)",
+                     source != nullptr ? source : "hardware",
+                     dxgiAdapterDescriptionToUtf8(desc.Description),
+                     static_cast<uint64_t>(desc.DedicatedVideoMemory / (1024 * 1024)));
+            return true;
+        };
+
+        ComPtr<IDXGIFactory6> factory6;
+        if (SUCCEEDED(m_dxgi_factory.As(&factory6)) && factory6 != nullptr)
+        {
+            for (UINT adapter_index = 0; !m_d3d12_device; ++adapter_index)
+            {
+                ComPtr<IDXGIAdapter1> high_performance_adapter;
+                const HRESULT enum_result =
+                    factory6->EnumAdapterByGpuPreference(adapter_index,
+                                                         DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                                                         IID_PPV_ARGS(&high_performance_adapter));
+                if (enum_result == DXGI_ERROR_NOT_FOUND)
+                {
+                    break;
+                }
+                if (FAILED(enum_result))
+                {
+                    continue;
+                }
+
+                try_create_device(high_performance_adapter.Get(), "high-performance");
+            }
+        }
+
+        if (!m_d3d12_device)
+        {
+            ComPtr<IDXGIAdapter1> best_adapter;
+            SIZE_T                best_dedicated_video_memory = 0;
+            for (UINT adapter_index = 0;; ++adapter_index)
+            {
+                ComPtr<IDXGIAdapter1> hardware_adapter;
+                const HRESULT         enum_result = m_dxgi_factory->EnumAdapters1(adapter_index, &hardware_adapter);
+                if (enum_result == DXGI_ERROR_NOT_FOUND)
+                {
+                    break;
+                }
+                if (FAILED(enum_result) || hardware_adapter == nullptr)
+                {
+                    continue;
+                }
+
+                DXGI_ADAPTER_DESC1 desc {};
+                if (FAILED(hardware_adapter->GetDesc1(&desc)) || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
+                {
+                    continue;
+                }
+
+                if (SUCCEEDED(D3D12CreateDevice(hardware_adapter.Get(),
+                                                D3D_FEATURE_LEVEL_11_0,
+                                                __uuidof(ID3D12Device),
+                                                nullptr)) &&
+                    (best_adapter == nullptr || desc.DedicatedVideoMemory > best_dedicated_video_memory))
+                {
+                    best_adapter                 = hardware_adapter;
+                    best_dedicated_video_memory  = desc.DedicatedVideoMemory;
+                }
+            }
+
+            if (best_adapter != nullptr)
+            {
+                try_create_device(best_adapter.Get(), "ranked hardware");
             }
         }
 
@@ -8356,6 +8585,21 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         {
             throw std::runtime_error("Failed to create D3D12 device");
         }
+
+        BOOL allow_tearing = FALSE;
+        ComPtr<IDXGIFactory5> factory5;
+        if (SUCCEEDED(m_dxgi_factory.As(&factory5)) &&
+            SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                                                    &allow_tearing,
+                                                    sizeof(allow_tearing))))
+        {
+            m_allow_tearing = allow_tearing == TRUE;
+        }
+        else
+        {
+            m_allow_tearing = false;
+        }
+        LOG_INFO("D3D12 tearing present {}", m_allow_tearing ? "enabled" : "unavailable");
     }
 
     void D3D12RHI::createCommandQueue()
@@ -8403,6 +8647,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         swapchain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         swapchain_desc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         swapchain_desc.SampleDesc.Count = 1;
+        swapchain_desc.Flags       = m_allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
 
         ComPtr<IDXGISwapChain1> swapchain;
         if (FAILED(m_dxgi_factory->CreateSwapChainForHwnd(m_d3d12_command_queue.Get(), hWnd, &swapchain_desc, nullptr, nullptr, &swapchain)))

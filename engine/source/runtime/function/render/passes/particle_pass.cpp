@@ -14,6 +14,11 @@ namespace Piccolo
     {
         rhi->freeMemory(m_counter_host_memory);
         rhi->freeMemory(m_counter_readback_memory);
+        for (RHIDeviceMemory*& memory : m_counter_readback_memories)
+        {
+            rhi->freeMemory(memory);
+        }
+        m_counter_readback_memories.clear();
         rhi->freeMemory(m_position_host_memory);
         rhi->freeMemory(m_position_device_memory);
         rhi->freeMemory(m_counter_device_memory);
@@ -30,6 +35,11 @@ namespace Piccolo
         rhi->destroyBuffer(m_counter_device_buffer);
         rhi->destroyBuffer(m_counter_host_buffer);
         rhi->destroyBuffer(m_counter_readback_buffer);
+        for (RHIBuffer*& buffer : m_counter_readback_buffers)
+        {
+            rhi->destroyBuffer(buffer);
+        }
+        m_counter_readback_buffers.clear();
         rhi->destroyBuffer(m_indirect_dispatch_argument_buffer);
         rhi->destroyBuffer(m_alive_list_buffer);
         rhi->destroyBuffer(m_alive_list_next_buffer);
@@ -39,21 +49,32 @@ namespace Piccolo
 
     void ParticlePass::copyNormalAndDepthImage()
     {
-        uint8_t index =
-            (m_rhi->getCurrentFrameIndex() + m_rhi->getMaxFramesInFlight() - 1) % m_rhi->getMaxFramesInFlight();
+        const bool use_inline_copy = m_rhi->getBackendType() == RHIBackendType::D3D12;
+        uint8_t index = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
+        if (!use_inline_copy)
+        {
+            index =
+                (m_rhi->getCurrentFrameIndex() + m_rhi->getMaxFramesInFlight() - 1) % m_rhi->getMaxFramesInFlight();
+        }
+        RHICommandBuffer* copy_command_buffer =
+            use_inline_copy ? m_rhi->getCurrentCommandBuffer() : m_copy_command_buffers[index];
+        assert(copy_command_buffer != nullptr);
 
-        m_rhi->waitForFencesPFN(1, &(m_rhi->getFenceList()[index]), RHI_TRUE, UINT64_MAX);
+        if (!use_inline_copy)
+        {
+            m_rhi->waitForFencesPFN(1, &(m_rhi->getFenceList()[index]), RHI_TRUE, UINT64_MAX);
 
-        RHICommandBufferBeginInfo command_buffer_begin_info {};
-        command_buffer_begin_info.sType            = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        command_buffer_begin_info.flags            = 0;
-        command_buffer_begin_info.pInheritanceInfo = nullptr;
+            RHICommandBufferBeginInfo command_buffer_begin_info {};
+            command_buffer_begin_info.sType            = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            command_buffer_begin_info.flags            = 0;
+            command_buffer_begin_info.pInheritanceInfo = nullptr;
 
-        bool res_begin_command_buffer = m_rhi->beginCommandBufferPFN(m_copy_command_buffer, &command_buffer_begin_info);
-        assert(RHI_SUCCESS == res_begin_command_buffer);
+            bool res_begin_command_buffer = m_rhi->beginCommandBufferPFN(copy_command_buffer, &command_buffer_begin_info);
+            assert(RHI_SUCCESS == res_begin_command_buffer);
+        }
 
         float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-        m_rhi->pushEvent(m_copy_command_buffer, "Copy Depth Image for Particle", color);
+        m_rhi->pushEvent(copy_command_buffer, "Copy Depth Image for Particle", color);
 
         // depth image
         RHIImageSubresourceRange subresourceRange = {RHI_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
@@ -69,7 +90,7 @@ namespace Piccolo
             imagememorybarrier.dstAccessMask = RHI_ACCESS_TRANSFER_WRITE_BIT;
             imagememorybarrier.image         = m_dst_depth_image;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -86,7 +107,7 @@ namespace Piccolo
             imagememorybarrier.dstAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
             imagememorybarrier.image         = m_src_depth_image;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -107,7 +128,7 @@ namespace Piccolo
             copy_region.dstSubresource = {static_cast<RHIImageAspectFlags>(RHI_IMAGE_ASPECT_DEPTH_BIT), 0, 0, 1};
             copy_region.dstOffsets[0]  = {0, 0, 0};
             copy_region.dstOffsets[1]  = copy_region.srcOffsets[1];
-            m_rhi->cmdCopyImageToImage(m_copy_command_buffer,
+            m_rhi->cmdCopyImageToImage(copy_command_buffer,
                                        m_src_depth_image,
                                        m_dst_depth_image,
                                        1,
@@ -119,7 +140,7 @@ namespace Piccolo
             imagememorybarrier.dstAccessMask =
                 RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | RHI_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -136,7 +157,7 @@ namespace Piccolo
             imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_WRITE_BIT;
             imagememorybarrier.dstAccessMask = RHI_ACCESS_SHADER_READ_BIT;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -148,9 +169,9 @@ namespace Piccolo
                                       &imagememorybarrier);
         }
 
-        m_rhi->popEvent(m_copy_command_buffer); // end depth image copy label
+        m_rhi->popEvent(copy_command_buffer); // end depth image copy label
 
-        m_rhi->pushEvent(m_copy_command_buffer, "Copy Normal Image for Particle", color);
+        m_rhi->pushEvent(copy_command_buffer, "Copy Normal Image for Particle", color);
 
         // color image
         subresourceRange                    = {RHI_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -162,7 +183,7 @@ namespace Piccolo
             imagememorybarrier.dstAccessMask = RHI_ACCESS_TRANSFER_WRITE_BIT;
             imagememorybarrier.image         = m_dst_normal_image;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -179,7 +200,7 @@ namespace Piccolo
             imagememorybarrier.dstAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
             imagememorybarrier.image         = m_src_normal_image;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -200,7 +221,7 @@ namespace Piccolo
             copy_region.dstSubresource = {static_cast<RHIImageAspectFlags>(RHI_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
             copy_region.dstOffsets[0]  = {0, 0, 0};
             copy_region.dstOffsets[1]  = copy_region.srcOffsets[1];
-            m_rhi->cmdCopyImageToImage(m_copy_command_buffer,
+            m_rhi->cmdCopyImageToImage(copy_command_buffer,
                                        m_src_normal_image,
                                        m_dst_normal_image,
                                        1,
@@ -211,7 +232,7 @@ namespace Piccolo
             imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_READ_BIT;
             imagememorybarrier.dstAccessMask = RHI_ACCESS_SHADER_READ_BIT;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -228,7 +249,7 @@ namespace Piccolo
             imagememorybarrier.srcAccessMask = RHI_ACCESS_TRANSFER_WRITE_BIT;
             imagememorybarrier.dstAccessMask = RHI_ACCESS_SHADER_READ_BIT;
 
-            m_rhi->cmdPipelineBarrier(m_copy_command_buffer,
+            m_rhi->cmdPipelineBarrier(copy_command_buffer,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -240,9 +261,14 @@ namespace Piccolo
                                       &imagememorybarrier);
         }
 
-        m_rhi->popEvent(m_copy_command_buffer);
+        m_rhi->popEvent(copy_command_buffer);
 
-        bool res_end_command_buffer = m_rhi->endCommandBufferPFN(m_copy_command_buffer);
+        if (use_inline_copy)
+        {
+            return;
+        }
+
+        bool res_end_command_buffer = m_rhi->endCommandBufferPFN(copy_command_buffer);
         assert(RHI_SUCCESS == res_end_command_buffer);
 
         bool res_reset_fences = m_rhi->resetFencesPFN(1, &m_rhi->getFenceList()[index]);
@@ -255,7 +281,7 @@ namespace Piccolo
         submit_info.pWaitSemaphores         = &(m_rhi->getTextureCopySemaphore(index));
         submit_info.pWaitDstStageMask       = wait_stages;
         submit_info.commandBufferCount      = 1;
-        submit_info.pCommandBuffers         = &m_copy_command_buffer;
+        submit_info.pCommandBuffers         = &copy_command_buffer;
         submit_info.signalSemaphoreCount    = 0;
         submit_info.pSignalSemaphores       = nullptr;
         bool res_queue_submit =
@@ -607,6 +633,17 @@ namespace Piccolo
                                 m_emitter_buffer_batches[id].m_counter_readback_buffer,
                                 m_emitter_buffer_batches[id].m_counter_readback_memory);
 
+            m_emitter_buffer_batches[id].m_counter_readback_buffers.resize(m_rhi->getMaxFramesInFlight(), nullptr);
+            m_emitter_buffer_batches[id].m_counter_readback_memories.resize(m_rhi->getMaxFramesInFlight(), nullptr);
+            for (uint8_t frame_index = 0; frame_index < m_rhi->getMaxFramesInFlight(); ++frame_index)
+            {
+                m_rhi->createBuffer(counterBufferSize,
+                                    RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+                                    m_emitter_buffer_batches[id].m_counter_readback_buffers[frame_index],
+                                    m_emitter_buffer_batches[id].m_counter_readback_memories[frame_index]);
+            }
+
             // Copy to staging buffer
             RHICommandBufferAllocateInfo cmdBufAllocateInfo {};
             cmdBufAllocateInfo.sType              = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -674,7 +711,7 @@ namespace Piccolo
         // fill in data
         {
 
-            m_rhi->createBufferAndInitialize(RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            m_rhi->createBufferAndInitialize(RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
                                              RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                                  RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                              m_emitter_buffer_batches[id].m_particle_component_res_buffer,
@@ -803,14 +840,39 @@ namespace Piccolo
         cmdBufAllocateInfo.commandBufferCount = 1;
         if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, m_compute_command_buffer))
             throw std::runtime_error("alloc compute command buffer");
-        if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, m_copy_command_buffer))
-            throw std::runtime_error("alloc copy command buffer");
+
+        m_copy_command_buffers.resize(m_rhi->getMaxFramesInFlight(), nullptr);
+        for (RHICommandBuffer*& copy_command_buffer : m_copy_command_buffers)
+        {
+            if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, copy_command_buffer))
+                throw std::runtime_error("alloc copy command buffer");
+        }
 
         RHIFenceCreateInfo fenceCreateInfo {};
         fenceCreateInfo.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fenceCreateInfo.flags = 0;
         if (RHI_SUCCESS != m_rhi->createFence(&fenceCreateInfo, m_fence))
             throw std::runtime_error("create fence");
+
+        if (m_rhi->getBackendType() == RHIBackendType::D3D12)
+        {
+            m_compute_command_buffers.resize(m_rhi->getMaxFramesInFlight(), nullptr);
+            for (RHICommandBuffer*& compute_command_buffer : m_compute_command_buffers)
+            {
+                if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, compute_command_buffer))
+                    throw std::runtime_error("alloc D3D12 compute command buffer");
+            }
+
+            m_compute_fences.resize(m_rhi->getMaxFramesInFlight(), nullptr);
+            for (RHIFence*& compute_fence : m_compute_fences)
+            {
+                if (RHI_SUCCESS != m_rhi->createFence(&fenceCreateInfo, compute_fence))
+                    throw std::runtime_error("create D3D12 compute fence");
+            }
+
+            m_compute_readback_pending.assign(m_rhi->getMaxFramesInFlight(), false);
+            m_compute_readback_emitters.resize(m_rhi->getMaxFramesInFlight());
+        }
     }
 
     void ParticlePass::initialize(const RenderPassInitInfo* init_info)
@@ -1486,25 +1548,44 @@ namespace Piccolo
 
     void ParticlePass::simulate()
     {
-        for (auto i : m_emitter_tick_indices)
-        {
-            RHICommandBufferBeginInfo cmdBufInfo {};
-            cmdBufInfo.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-            // particle compute pass
-            if (RHI_SUCCESS != m_rhi->beginCommandBuffer(m_compute_command_buffer, &cmdBufInfo))
+        auto read_counter = [&](ParticleEmitterID emitter_index, RHIDeviceMemory* readback_memory) {
+            if (emitter_index >= m_emitter_buffer_batches.size() || readback_memory == nullptr)
             {
-                throw std::runtime_error("begin command buffer");
+                return;
+            }
+
+            void* mapped = nullptr;
+            m_rhi->mapMemory(readback_memory, 0, RHI_WHOLE_SIZE, 0, &mapped);
+
+            m_rhi->invalidateMappedMemoryRanges(nullptr, readback_memory, 0, RHI_WHOLE_SIZE);
+
+            ParticleCounter counterNext {};
+            memcpy(&counterNext, mapped, sizeof(ParticleCounter));
+            m_rhi->unmapMemory(readback_memory);
+
+            if constexpr (s_verbose_particle_alive_info)
+                LOG_INFO("{} {} {} {}",
+                         counterNext.dead_count,
+                         counterNext.alive_count,
+                         counterNext.alive_count_after_sim,
+                         counterNext.emit_count);
+            m_emitter_buffer_batches[emitter_index].m_num_particle = counterNext.alive_count_after_sim;
+        };
+
+        auto record_emitter_compute = [&](ParticleEmitterID i, RHICommandBuffer* command_buffer, RHIBuffer* readback_buffer) {
+            if (i >= m_emitter_buffer_batches.size() || command_buffer == nullptr || readback_buffer == nullptr)
+            {
+                return;
             }
 
             float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-            m_rhi->pushEvent(m_compute_command_buffer, "Particle compute", color);
-            m_rhi->pushEvent(m_compute_command_buffer, "Particle Kickoff", color);
+            m_rhi->pushEvent(command_buffer, "Particle compute", color);
+            m_rhi->pushEvent(command_buffer, "Particle Kickoff", color);
 
-            m_rhi->cmdBindPipelinePFN(m_compute_command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_kickoff_pipeline);
+            m_rhi->cmdBindPipelinePFN(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_kickoff_pipeline);
             RHIDescriptorSet* descriptorsets[2] = {m_descriptor_infos[i * 3].descriptor_set,
                                                    m_descriptor_infos[i * 3 + 1].descriptor_set};
-            m_rhi->cmdBindDescriptorSetsPFN(m_compute_command_buffer,
+            m_rhi->cmdBindDescriptorSetsPFN(command_buffer,
                                             RHI_PIPELINE_BIND_POINT_COMPUTE,
                                             m_render_pipelines[0].layout,
                                             0,
@@ -1514,9 +1595,9 @@ namespace Piccolo
                                             0);
 
 
-            m_rhi->cmdDispatch(m_compute_command_buffer, 1, 1, 1);
+            m_rhi->cmdDispatch(command_buffer, 1, 1, 1);
 
-            m_rhi->popEvent(m_compute_command_buffer); // end particle kickoff label
+            m_rhi->popEvent(command_buffer); // end particle kickoff label
 
             RHIBufferMemoryBarrier bufferBarrier {};
             bufferBarrier.sType               = RHI_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -1527,7 +1608,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1545,7 +1626,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1556,15 +1637,15 @@ namespace Piccolo
                                       0,
                                       nullptr);
 
-            m_rhi->pushEvent(m_compute_command_buffer, "Particle Emit", color);
+            m_rhi->pushEvent(command_buffer, "Particle Emit", color);
 
-            m_rhi->cmdBindPipelinePFN(m_compute_command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_emit_pipeline);
+            m_rhi->cmdBindPipelinePFN(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_emit_pipeline);
 
-            m_rhi->cmdDispatchIndirect(m_compute_command_buffer,
+            m_rhi->cmdDispatchIndirect(command_buffer,
                                        m_emitter_buffer_batches[i].m_indirect_dispatch_argument_buffer,
                                        s_argument_offset_emit);
 
-            m_rhi->popEvent(m_compute_command_buffer); // end particle emit label
+            m_rhi->popEvent(command_buffer); // end particle emit label
 
             bufferBarrier.buffer              = m_emitter_buffer_batches[i].m_position_device_buffer;
             bufferBarrier.size                = RHI_WHOLE_SIZE;
@@ -1573,7 +1654,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1591,7 +1672,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1609,7 +1690,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1627,7 +1708,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1645,7 +1726,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1663,7 +1744,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1681,7 +1762,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                       0,
@@ -1692,45 +1773,17 @@ namespace Piccolo
                                       0,
                                       nullptr);
 
-            m_rhi->pushEvent(m_compute_command_buffer, "Particle Simulate", color);
+            m_rhi->pushEvent(command_buffer, "Particle Simulate", color);
 
-            m_rhi->cmdBindPipelinePFN(m_compute_command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_simulate_pipeline);
-            m_rhi->cmdDispatchIndirect(m_compute_command_buffer,
+            m_rhi->cmdBindPipelinePFN(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_simulate_pipeline);
+            m_rhi->cmdDispatchIndirect(command_buffer,
                                        m_emitter_buffer_batches[i].m_indirect_dispatch_argument_buffer,
                                        s_argument_offset_simulate);
 
-            m_rhi->popEvent(m_compute_command_buffer); // end particle simulate label
+            m_rhi->popEvent(command_buffer); // end particle simulate label
 
-            if (RHI_SUCCESS != m_rhi->endCommandBuffer(m_compute_command_buffer))
-            {
-                throw std::runtime_error("end command buffer");
-            }
-            m_rhi->resetFencesPFN(1, &m_fence);
+            m_rhi->pushEvent(command_buffer, "Copy Particle Counter Buffer", color);
 
-            RHISubmitInfo computeSubmitInfo {};
-            computeSubmitInfo.sType              = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
-            computeSubmitInfo.pWaitDstStageMask  = 0;
-            computeSubmitInfo.commandBufferCount = 1;
-            computeSubmitInfo.pCommandBuffers    = &m_compute_command_buffer;
-
-            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &computeSubmitInfo, m_fence))
-            {
-                throw std::runtime_error("compute queue submit");
-            }
-
-            if (RHI_SUCCESS != m_rhi->waitForFencesPFN(1, &m_fence, RHI_TRUE, UINT64_MAX))
-            {
-                throw std::runtime_error("wait for fence");
-            }
-
-            if (RHI_SUCCESS != m_rhi->beginCommandBuffer(m_compute_command_buffer, &cmdBufInfo))
-            {
-                throw std::runtime_error("begin command buffer");
-            }
-
-            m_rhi->pushEvent(m_compute_command_buffer, "Copy Particle Counter Buffer", color);
-
-            // Barrier to ensure that shader writes are finished before buffer is read back from GPU
             bufferBarrier.srcAccessMask       = RHI_ACCESS_SHADER_WRITE_BIT;
             bufferBarrier.dstAccessMask       = RHI_ACCESS_TRANSFER_READ_BIT;
             bufferBarrier.buffer              = m_emitter_buffer_batches[i].m_counter_device_buffer;
@@ -1738,7 +1791,7 @@ namespace Piccolo
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                       RHI_PIPELINE_STAGE_TRANSFER_BIT,
                                       0,
@@ -1748,28 +1801,26 @@ namespace Piccolo
                                       &bufferBarrier,
                                       0,
                                       nullptr);
-            // Read back to host visible buffer
 
             RHIBufferCopy copyRegion {};
             copyRegion.srcOffset = 0;
             copyRegion.dstOffset = 0;
             copyRegion.size      = sizeof(ParticleCounter);
 
-            m_rhi->cmdCopyBuffer(m_compute_command_buffer,
+            m_rhi->cmdCopyBuffer(command_buffer,
                                  m_emitter_buffer_batches[i].m_counter_device_buffer,
-                                 m_emitter_buffer_batches[i].m_counter_readback_buffer,
+                                 readback_buffer,
                                  1,
                                  &copyRegion);
 
-            // Barrier to ensure that buffer copy is finished before host reading from it
             bufferBarrier.srcAccessMask       = RHI_ACCESS_TRANSFER_WRITE_BIT;
             bufferBarrier.dstAccessMask       = RHI_ACCESS_HOST_READ_BIT;
-            bufferBarrier.buffer              = m_emitter_buffer_batches[i].m_counter_readback_buffer;
+            bufferBarrier.buffer              = readback_buffer;
             bufferBarrier.size                = RHI_WHOLE_SIZE;
             bufferBarrier.srcQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
-            m_rhi->cmdPipelineBarrier(m_compute_command_buffer,
+            m_rhi->cmdPipelineBarrier(command_buffer,
                                       RHI_PIPELINE_STAGE_TRANSFER_BIT,
                                       RHI_PIPELINE_STAGE_HOST_BIT,
                                       0,
@@ -1780,9 +1831,103 @@ namespace Piccolo
                                       0,
                                       nullptr);
 
-            m_rhi->popEvent(m_compute_command_buffer); // end particle counter copy label
+            m_rhi->popEvent(command_buffer); // end particle counter copy label
 
-            m_rhi->popEvent(m_compute_command_buffer); // end particle compute label
+            m_rhi->popEvent(command_buffer); // end particle compute label
+        };
+
+        if (m_rhi->getBackendType() == RHIBackendType::D3D12)
+        {
+            const uint8_t frame_index = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
+            RHIFence*     compute_fence = m_compute_fences[frame_index];
+            if (m_compute_readback_pending[frame_index])
+            {
+                if (RHI_SUCCESS != m_rhi->waitForFencesPFN(1, &compute_fence, RHI_TRUE, UINT64_MAX))
+                {
+                    throw std::runtime_error("wait for D3D12 particle compute fence");
+                }
+
+                for (ParticleEmitterID emitter_index : m_compute_readback_emitters[frame_index])
+                {
+                    if (emitter_index < m_emitter_buffer_batches.size() &&
+                        frame_index < m_emitter_buffer_batches[emitter_index].m_counter_readback_memories.size())
+                    {
+                        read_counter(emitter_index,
+                                     m_emitter_buffer_batches[emitter_index]
+                                         .m_counter_readback_memories[frame_index]);
+                    }
+                }
+                m_compute_readback_pending[frame_index] = false;
+                m_compute_readback_emitters[frame_index].clear();
+            }
+
+            if (!m_emitter_tick_indices.empty())
+            {
+                RHICommandBuffer* command_buffer = m_compute_command_buffers[frame_index];
+                RHICommandBufferBeginInfo cmdBufInfo {};
+                cmdBufInfo.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                if (RHI_SUCCESS != m_rhi->beginCommandBuffer(command_buffer, &cmdBufInfo))
+                {
+                    throw std::runtime_error("begin D3D12 particle compute command buffer");
+                }
+
+                for (ParticleEmitterID emitter_index : m_emitter_tick_indices)
+                {
+                    if (emitter_index >= m_emitter_buffer_batches.size() ||
+                        frame_index >= m_emitter_buffer_batches[emitter_index].m_counter_readback_buffers.size())
+                    {
+                        continue;
+                    }
+
+                    record_emitter_compute(emitter_index,
+                                           command_buffer,
+                                           m_emitter_buffer_batches[emitter_index]
+                                               .m_counter_readback_buffers[frame_index]);
+                }
+
+                if (RHI_SUCCESS != m_rhi->endCommandBuffer(command_buffer))
+                {
+                    throw std::runtime_error("end D3D12 particle compute command buffer");
+                }
+
+                if (RHI_SUCCESS != m_rhi->resetFencesPFN(1, &compute_fence))
+                {
+                    throw std::runtime_error("reset D3D12 particle compute fence");
+                }
+
+                RHISubmitInfo computeSubmitInfo {};
+                const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
+                computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
+                computeSubmitInfo.commandBufferCount     = 1;
+                computeSubmitInfo.pCommandBuffers        = &command_buffer;
+
+                if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &computeSubmitInfo, compute_fence))
+                {
+                    throw std::runtime_error("D3D12 particle compute queue submit");
+                }
+
+                m_compute_readback_pending[frame_index] = true;
+                m_compute_readback_emitters[frame_index] = m_emitter_tick_indices;
+            }
+
+            m_emitter_tick_indices.clear();
+            m_emitter_transform_indices.clear();
+            return;
+        }
+
+        for (auto i : m_emitter_tick_indices)
+        {
+            RHICommandBufferBeginInfo cmdBufInfo {};
+            cmdBufInfo.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+            // particle compute pass
+            if (RHI_SUCCESS != m_rhi->beginCommandBuffer(m_compute_command_buffer, &cmdBufInfo))
+            {
+                throw std::runtime_error("begin command buffer");
+            }
+
+            record_emitter_compute(i, m_compute_command_buffer, m_emitter_buffer_batches[i].m_counter_readback_buffer);
 
             if (RHI_SUCCESS != m_rhi->endCommandBuffer(m_compute_command_buffer))
             {
@@ -1791,7 +1936,7 @@ namespace Piccolo
 
             // Submit compute work
             m_rhi->resetFencesPFN(1, &m_fence);
-            computeSubmitInfo                        = {};
+            RHISubmitInfo computeSubmitInfo {};
             const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
             computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
             computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
@@ -1808,27 +1953,7 @@ namespace Piccolo
                 throw std::runtime_error("wait for fence");
             }
 
-            m_rhi->queueWaitIdle(m_rhi->getComputeQueue());
-
-            // Make device writes visible to the host
-            void* mapped;
-            m_rhi->mapMemory(m_emitter_buffer_batches[i].m_counter_readback_memory, 0, RHI_WHOLE_SIZE, 0, &mapped);
-
-            m_rhi->invalidateMappedMemoryRanges(
-                nullptr, m_emitter_buffer_batches[i].m_counter_readback_memory, 0, RHI_WHOLE_SIZE);
-
-            // Copy to output
-            ParticleCounter counterNext {};
-            memcpy(&counterNext, mapped, sizeof(ParticleCounter));
-            m_rhi->unmapMemory(m_emitter_buffer_batches[i].m_counter_readback_memory);
-
-            if constexpr (s_verbose_particle_alive_info)
-                LOG_INFO("{} {} {} {}",
-                         counterNext.dead_count,
-                         counterNext.alive_count,
-                         counterNext.alive_count_after_sim,
-                         counterNext.emit_count);
-            m_emitter_buffer_batches[i].m_num_particle = counterNext.alive_count_after_sim;
+            read_counter(i, m_emitter_buffer_batches[i].m_counter_readback_memory);
         }
         m_emitter_tick_indices.clear();
         m_emitter_transform_indices.clear();
