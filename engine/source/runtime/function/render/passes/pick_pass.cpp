@@ -403,6 +403,7 @@ namespace Piccolo
             m_rhi->freeMemory(m_framebuffer.attachments[i].mem);
         }
         m_rhi->destroyFramebuffer(m_framebuffer.framebuffer);
+        m_framebuffer.framebuffer = nullptr;
 
         setupAttachments();
         setupFramebuffer();

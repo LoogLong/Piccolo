@@ -4843,7 +4843,6 @@ bool D3D12RHI::createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RH
 #endif
     }
 
-    delete pFramebuffer;
     pFramebuffer = framebuffer;
     return true;
 }
@@ -8125,7 +8124,7 @@ void D3D12RHI::destroyImage(RHIImage* image)
 
 void D3D12RHI::destroyFramebuffer(RHIFramebuffer* framebuffer)
 {
-    delete framebuffer;
+    delete static_cast<D3D12RHIFramebuffer*>(framebuffer);
     return;
 }
 

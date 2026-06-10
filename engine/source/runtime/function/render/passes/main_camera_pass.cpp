@@ -1894,10 +1894,12 @@ namespace Piccolo
             m_rhi->freeMemory(m_framebuffer.attachments[i].mem);
         }
 
-        for (auto framebuffer : m_swapchain_framebuffers)
+        for (auto& framebuffer : m_swapchain_framebuffers)
         {
             m_rhi->destroyFramebuffer(framebuffer);
+            framebuffer = nullptr;
         }
+        m_swapchain_framebuffers.clear();
 
         setupAttachments();
 

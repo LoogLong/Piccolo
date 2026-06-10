@@ -18,10 +18,12 @@ namespace Piccolo
     
     void DebugDrawPipeline::recreateAfterSwapchain()
     {
-        for (auto framebuffer : m_framebuffer.framebuffers)
+        for (auto& framebuffer : m_framebuffer.framebuffers)
         {
             m_rhi->destroyFramebuffer(framebuffer);
+            framebuffer = nullptr;
         }
+        m_framebuffer.framebuffers.clear();
 
         setupFramebuffer();
     }
