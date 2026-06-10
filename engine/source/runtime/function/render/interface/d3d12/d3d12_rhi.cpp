@@ -199,6 +199,7 @@ namespace Piccolo
         {
 #ifdef _WIN32
             ID3D12CommandQueue* command_queue {nullptr};
+            D3D12_COMMAND_LIST_TYPE command_list_type {D3D12_COMMAND_LIST_TYPE_DIRECT};
 #endif
         };
 
@@ -3327,8 +3328,16 @@ namespace Piccolo
         m_graphics_queue  = new D3D12RHIQueue();
         m_compute_queue   = new D3D12RHIQueue();
 #ifdef _WIN32
-        static_cast<D3D12RHIQueue*>(m_graphics_queue)->command_queue = m_d3d12_command_queue.Get();
-        static_cast<D3D12RHIQueue*>(m_compute_queue)->command_queue  = m_d3d12_command_queue.Get();
+        auto* d3d_graphics_queue = static_cast<D3D12RHIQueue*>(m_graphics_queue);
+        auto* d3d_compute_queue  = static_cast<D3D12RHIQueue*>(m_compute_queue);
+        d3d_graphics_queue->command_queue     = m_d3d12_command_queue.Get();
+        d3d_graphics_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        // D3D12 command buffers are currently backed by DIRECT command lists. Keep compute submissions on
+        // the direct queue until command pools can allocate queue-typed command lists and resource ownership
+        // transitions are modeled explicitly.
+        d3d_compute_queue->command_queue     = m_d3d12_command_queue.Get();
+        d3d_compute_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        LOG_INFO("D3D12 compute queue uses the graphics/direct command queue");
 #endif
 
         for (auto& command_buffer : m_frame_command_buffers)
