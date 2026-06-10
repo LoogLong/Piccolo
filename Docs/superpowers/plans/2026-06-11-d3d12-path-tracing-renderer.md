@@ -6,7 +6,7 @@
 
 **Architecture:** The path tracing path is a scene-color producer, not a replacement for the whole frame. D3D12 builds BLAS/TLAS data, dispatches a DXR ray generation shader into an HDR scene output, and hands that output back to the existing tone/color/FXAA/UI/combine flow. Vulkan receives the same RHI-facing API shape but returns unsupported/no-op so future Vulkan work can fill the interface without affecting current behavior.
 
-**Tech Stack:** C++17, Piccolo RHI, D3D12/DXR (`ID3D12Device5`, `ID3D12GraphicsCommandList4`, `D3D12_FEATURE_D3D12_OPTIONS5`, state objects, shader tables), HLSL/DXC DXIL libraries (`lib_6_3` minimum, `lib_6_6` when the local DXC supports it), existing Piccolo render passes and smoke scripts.
+**Tech Stack:** C++17, Piccolo RHI, D3D12/DXR (`ID3D12Device5`, per-command-buffer `ID3D12GraphicsCommandList4`, `D3D12_FEATURE_D3D12_OPTIONS5`, state objects, shader tables), HLSL/DXC DXIL libraries (`lib_6_3` minimum, `lib_6_6` when the local DXC supports it), existing Piccolo render passes and smoke scripts. Windows builds require a Windows SDK whose `d3d12.h` exposes DXR types; otherwise compile D3D12 without path tracing support rather than breaking the raster backend.
 
 ---
 
@@ -51,7 +51,7 @@ Important existing data sources:
 
 Scope for the first usable version:
 
-- Static meshes only for DXR geometry. Animated/skinned meshes are either skipped from TLAS or rendered by the existing raster path until a skinned-BLAS strategy is implemented.
+- Static opaque meshes only for DXR geometry. Animated/skinned meshes and transparent/blended materials are excluded from the path traced TLAS in the first version and are documented as unsupported in path tracing mode. Do not promise a scene-raster overlay for them unless a later explicit composite path is implemented.
 - One progressive sample per frame with accumulation reset on camera, resize, and scene changes.
 - Basic PBR inputs: base color, metallic, roughness, normal, emissive when already available; diffuse fallback when a texture/material field cannot be bound in the first pass.
 - Sky/environment fallback from existing IBL/skybox resources when accessible, otherwise the current clear/environment color.
@@ -62,22 +62,22 @@ Scope for the first usable version:
 
 ## Parallel Agent Map
 
-Wave 1 can run in parallel after each agent reads this plan:
+Wave 1 can run in parallel after each agent reads this plan, but the interface branch must integrate Tasks 1, 2, and the D3D12 stub portion of Task 3 together before anyone treats the tree as compilable:
 
-- Agent A: RHI capability and ray tracing interface contracts.
-- Agent B: D3D12 DXR core backend.
+- Agent A: RHI capability, ray tracing interface contracts, and acceleration-structure descriptor payload.
+- Agent B: D3D12 DXR core backend, beginning with pure-virtual overrides/stubs needed by Task 1.
+- Agent G: Vulkan unsupported stubs, merged in the same interface integration branch as Task 1.
 - Agent C: Shader build and HLSL path tracing library.
 - Agent D: Scene geometry/material export and BLAS/TLAS input ownership.
-- Agent E: Render pipeline path selection and UI-preserving data flow.
+- Agent E: Config/runtime path tracing mode selection only. Agent E must not rewrite `MainCameraPass::draw()`; Task 7 owns the draw-branch integration.
 
-Wave 2 starts after Wave 1 interfaces compile:
+Wave 2 starts after Wave 1 interfaces compile on the integration branch:
 
-- Agent F: Accumulation, resize/reset, and scene/camera dirtiness.
-- Agent G: Vulkan unsupported stubs and fallback behavior polish.
+- Agent F: `PathTracingPass`, accumulation, resize/reset, scene/camera dirtiness, and the `MainCameraPass` draw integration.
 - Agent H: Integration verification and diagnostics.
 - Agent I: Documentation and runtime operator notes.
 
-Every agent must work on its assigned file set, assume other agents may be editing adjacent files, and avoid reverting unrelated changes.
+Every agent must work on its assigned file set, assume other agents may be editing adjacent files, and avoid reverting unrelated changes. Agents should use isolated branches or worktrees; commits listed inside tasks are per-agent branch commits, while interface-breaking work should be committed only after the integration branch has the matching D3D12 and Vulkan overrides.
 
 ---
 
@@ -121,9 +121,15 @@ Modify:
 - `engine/source/runtime/function/render/render_pipeline.h`
 - `engine/source/runtime/function/render/render_pipeline.cpp`
 - `engine/source/runtime/function/render/render_pass.h`
+- `engine/source/runtime/resource/config_manager/config_manager.h`
+- `engine/source/runtime/resource/config_manager/config_manager.cpp`
 - `engine/source/runtime/function/render/passes/main_camera_pass.h`
 - `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
 - `engine/source/runtime/function/render/render_shader_bytecode.h`
+- `engine/configs/development/PiccoloEditor.ini`
+- `engine/configs/deployment/PiccoloEditor.ini`
+- `engine/configs/deployment/PiccoloEditorVulkan.ini`
+- `engine/configs/deployment/PiccoloEditorNonWindows.ini`
 - `cmake/ShaderCompile.cmake`
 - `engine/shader/CMakeLists.txt`
 - `engine/source/runtime/CMakeLists.txt` if new D3D12 source files are not picked up by the existing recursive glob in the local generator.
@@ -271,7 +277,40 @@ namespace Piccolo
 }
 ```
 
-- [ ] **Step 3: Add virtual methods to `RHI`**
+- [ ] **Step 3: Add acceleration-structure descriptor write payload**
+
+`RHIWriteDescriptorSet` currently carries only image, buffer, and texel-buffer payload pointers. Add an explicit acceleration-structure descriptor payload in `rhi_struct.h` so Task 7 can bind TLAS descriptors through the normal descriptor update path:
+
+```cpp
+struct RHIWriteDescriptorSetAccelerationStructure
+{
+    uint32_t accelerationStructureCount {0};
+    RHIAccelerationStructure* const* pAccelerationStructures {nullptr};
+};
+```
+
+Then extend `RHIWriteDescriptorSet`:
+
+```cpp
+struct RHIWriteDescriptorSet
+{
+    RHIStructureType sType;
+    const void* pNext;
+    RHIDescriptorSet* dstSet;
+    uint32_t dstBinding;
+    uint32_t dstArrayElement;
+    uint32_t descriptorCount;
+    RHIDescriptorType descriptorType;
+    RHIDescriptorImageInfo* pImageInfo = nullptr;
+    RHIDescriptorBufferInfo* pBufferInfo = nullptr;
+    RHIBufferView* pTexelBufferView = nullptr;
+    RHIWriteDescriptorSetAccelerationStructure* pAccelerationStructureInfo = nullptr;
+};
+```
+
+Descriptor writes with `descriptorType == RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` must use `pAccelerationStructureInfo`, not `pImageInfo` or `pBufferInfo`.
+
+- [ ] **Step 4: Add virtual methods to `RHI`**
 
 Add these methods after the existing compute pipeline and dispatch APIs in `rhi.h`:
 
@@ -294,9 +333,9 @@ virtual void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_ta
 
 Add `#include "rhi_ray_tracing.h"` from `rhi.h` after `rhi_struct.h`.
 
-- [ ] **Step 4: Verify existing ray tracing enum coverage**
+- [ ] **Step 5: Verify existing ray tracing enum coverage**
 
-Confirm `render_type.h` already contains:
+Confirm `render_type.h` already contains the enum values required by the new contracts:
 
 - `RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`
 - `RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE`
@@ -314,11 +353,11 @@ Confirm `render_type.h` already contains:
 
 If any item is missing, add it with the Vulkan numeric value already used by adjacent RHI enums.
 
-- [ ] **Step 5: Compile the interface after backend stubs exist**
+- [ ] **Step 6: Compile the interface after backend stubs exist**
 
-This task cannot compile alone because `RHI` is pure virtual. Coordinate with Task 2 and Task 5 so D3D12 and Vulkan implement the new methods.
+This task cannot compile alone because `RHI` is pure virtual. Coordinate with Task 2 and the initial D3D12 overrides from Task 3 so D3D12 and Vulkan implement the new methods in the same integration branch.
 
-Run after Task 2 and Task 5:
+Run after Task 2 and the initial override portion of Task 3:
 
 ```powershell
 cmake --build build --config Debug --target PiccoloRuntime
@@ -326,7 +365,7 @@ cmake --build build --config Debug --target PiccoloRuntime
 
 Expected: `PiccoloRuntime` builds without pure-virtual or missing-type errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```powershell
 git add engine/source/runtime/function/render/interface/rhi_ray_tracing.h `
@@ -341,9 +380,9 @@ git commit -m "feat: add rhi ray tracing contracts"
 ## Task 2: Add Vulkan Interface Stubs Only
 
 **Parallel owner:** Agent G
-**Can start after:** Task 1 method signatures are agreed
+**Can start after:** Task 1 method signatures and descriptor payload are agreed
 **Depends on:** Task 1 header names and signatures
-**Unblocks:** fallback verification
+**Unblocks:** Wave 1 interface compile and fallback verification
 
 **Files:**
 
@@ -379,6 +418,7 @@ In `vulkan_rhi.cpp`, implement exact behavior:
 - Create/build/pipeline/SBT methods return `false` and leave output pointers `nullptr`.
 - `cmdTraceRays()` does nothing.
 - Destroy methods set the passed pointer to `nullptr`.
+- Existing Vulkan descriptor update behavior stays unchanged. The new `pAccelerationStructureInfo` payload is accepted by shared structs but Vulkan does not create acceleration-structure descriptors in this first D3D12-only implementation.
 
 Do not enable Vulkan ray tracing extensions, do not add Vulkan RT function pointers, and do not add SPIR-V ray shader requirements.
 
@@ -396,6 +436,8 @@ Expected log checks:
 - no fatal message about ray tracing setup
 
 - [ ] **Step 4: Commit**
+
+Only commit this task once Task 1 is integrated or on an isolated branch that already contains Task 1:
 
 ```powershell
 git add engine/source/runtime/function/render/interface/vulkan/vulkan_rhi.h `
@@ -420,17 +462,18 @@ git commit -m "feat: add vulkan ray tracing unsupported stubs"
 - Modify: `engine/source/runtime/function/render/interface/d3d12/d3d12_rhi.cpp`
 - Modify: `engine/source/runtime/CMakeLists.txt` only if local generation does not pick up the new files
 
-- [ ] **Step 1: Add DXR COM members and support flags**
+- [ ] **Step 1: Add DXR device members and support flags**
 
 In `D3D12RHI`, add private members guarded by `_WIN32`:
 
 ```cpp
 ComPtr<ID3D12Device5> m_d3d12_device5;
-ComPtr<ID3D12GraphicsCommandList4> m_d3d12_command_list4;
 RHIRayTracingCapabilities m_ray_tracing_capabilities {};
 ```
 
 If the helper class owns these values instead, keep public behavior identical through `D3D12RHI::getRayTracingCapabilities()`.
+
+If the active Windows SDK headers do not expose `ID3D12Device5`, `D3D12_FEATURE_D3D12_OPTIONS5`, or ray tracing structs, guard the D3D12 path tracing implementation behind a compile-time feature macro such as `PICCOLO_D3D12_DXR_AVAILABLE=0`. In that case, `D3D12RHI::getRayTracingCapabilities()` returns unsupported and all path tracing creation/dispatch methods fail or no-op safely while the existing D3D12 raster backend still builds.
 
 - [ ] **Step 2: Query DXR support during device creation**
 
@@ -445,9 +488,14 @@ After `m_d3d12_device` is created:
   - `D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT`
 - Set `max_recursion_depth` to `1` for the first implementation.
 
-- [ ] **Step 3: Query command list DXR interface**
+- [ ] **Step 3: Use the actual command-buffer command list for DXR**
 
-Where `m_d3d12_command_list` is created/reset, query `ID3D12GraphicsCommandList4` into `m_d3d12_command_list4`. If unavailable, keep capability unsupported and raster rendering functional.
+Do not add a single centralized `m_d3d12_command_list4` member to `D3D12RHI`. The current backend records through the `D3D12RHICommandBuffer::command_list` owned by the `RHICommandBuffer` passed to each command. `cmdTraceRays()` must:
+
+- get the real `ID3D12GraphicsCommandList*` from `d3d12CommandListFor(commandBuffer)`
+- query `ID3D12GraphicsCommandList4` from that command list immediately, or store a `ComPtr<ID3D12GraphicsCommandList4>` alongside each `D3D12RHICommandBuffer`
+- call `DispatchRays()` only on that per-command-buffer interface
+- log and no-op safely if the query fails, the command buffer is null, or `getRayTracingCapabilities()` is unsupported
 
 - [ ] **Step 4: Add D3D12 acceleration-structure wrapper**
 
@@ -460,13 +508,14 @@ Create a backend wrapper that derives from `RHIAccelerationStructure` and owns:
 - `RHIAccelerationStructureType type`
 - build sizes from `GetRaytracingAccelerationStructurePrebuildInfo`
 
-- [ ] **Step 5: Add buffer usage and resource-state mapping**
+- [ ] **Step 5: Add buffer, descriptor, and resource-state mapping**
 
 In `d3d12_rhi.cpp`, update these helpers:
 
 - `bufferResourceFlags`
 - `toD3D12BufferState`
-- descriptor update helpers for acceleration-structure SRVs
+- descriptor layout/count helpers for `RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`
+- descriptor update and copy helpers for acceleration-structure SRVs
 
 Required mapping:
 
@@ -474,6 +523,10 @@ Required mapping:
 - AS build input buffers can transition to `D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE`.
 - AS result buffers transition to `D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE`.
 - SBT buffers transition to `D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE`.
+- Acceleration-structure descriptors use the CBV/SRV/UAV descriptor heap and are tracked by the same descriptor-set cache as sampled images/storage images/buffers.
+- `RHIWriteDescriptorSet::pAccelerationStructureInfo` supplies the TLAS handle for `RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR`.
+- D3D12 descriptor writes create an SRV with `D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE`, `Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING`, and `RaytracingAccelerationStructure.Location = top_level_as->gpu_address`.
+- Descriptor writes reject null acceleration-structure payloads with a log message and skip the invalid descriptor.
 
 - [ ] **Step 6: Implement D3D12 AS create/build methods**
 
@@ -481,7 +534,10 @@ Implement Task 1 methods with D3D12 behavior:
 
 - BLAS uses `D3D12_RAYTRACING_GEOMETRY_DESC` with triangle geometry.
 - Vertex format is `DXGI_FORMAT_R32G32B32_FLOAT`.
-- Index format is `DXGI_FORMAT_R16_UINT`.
+- Index format maps from `RHIAccelerationStructureGeometryDesc::index_type`:
+  - `RHI_INDEX_TYPE_UINT16` => `DXGI_FORMAT_R16_UINT`
+  - `RHI_INDEX_TYPE_UINT32` => `DXGI_FORMAT_R32_UINT`
+  - any unsupported value returns `false` and logs the mesh/geometry index instead of hardcoding `DXGI_FORMAT_R16_UINT`
 - TLAS uses `D3D12_RAYTRACING_INSTANCE_DESC`.
 - Static mesh BLAS uses `D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE`.
 - Add UAV barriers after AS builds.
@@ -505,6 +561,8 @@ Minimum state object subobjects:
 - local root signature if needed
 - global root signature from `RHIPipelineLayout`
 - pipeline config with recursion depth 1
+
+`cmdTraceRays()` records on the per-command-buffer `ID3D12GraphicsCommandList4` described in Step 3. It must not create, reset, close, or execute a command list by itself.
 
 SBT layout:
 
@@ -532,6 +590,8 @@ Expected:
 - Logs identify unsupported DXR as a fallback condition, not an engine failure.
 
 - [ ] **Step 10: Commit**
+
+Only commit after the Task 1 RHI declarations are present in the branch. If Task 3 is split, commit the pure-virtual override stubs with Task 1/2 first, then commit the full D3D12 implementation:
 
 ```powershell
 git add engine/source/runtime/function/render/interface/d3d12/d3d12_ray_tracing.h `
@@ -590,9 +650,12 @@ The CMake path should still call `GenerateShaderCPPFile.cmake`.
 In `render_shader_bytecode.h`, add D3D12 include and macro handling for:
 
 ```cpp
+#include <dxil_cpp/path_tracing_lib.h>
 PICCOLO_D3D12_PATH_TRACING_LIB
 PICCOLO_RENDER_D3D12_SHADER_BYTECODE(PATH_TRACING_LIB)
 ```
+
+The runtime CMake already exposes `${ENGINE_ROOT_DIR}/shader/generated`, so `<dxil_cpp/path_tracing_lib.h>` is the expected include form. Keep that include root; do not add a second special-case include directory for DXR headers.
 
 For Vulkan, add `PICCOLO_VULKAN_PATH_TRACING_LIB` as empty bytecode only. Do not require a Vulkan ray shader to exist.
 
@@ -633,6 +696,9 @@ Expected generated files:
 
 - `engine/shader/generated/dxil/path_tracing.lib.dxil`
 - `engine/shader/generated/dxil_cpp/path_tracing_lib.h`
+- `render_shader_bytecode.h` can include `<dxil_cpp/path_tracing_lib.h>`
+- `PICCOLO_D3D12_PATH_TRACING_LIB` resolves to `D3D12_PATH_TRACING_LIB`
+- `PICCOLO_RENDER_D3D12_SHADER_BYTECODE(PATH_TRACING_LIB)` compiles from runtime targets using the existing `${ENGINE_ROOT_DIR}/shader/generated` include root
 
 - [ ] **Step 8: Commit**
 
@@ -703,6 +769,7 @@ Rules:
 - skip `m_enable_vertex_blending == true` in the first implementation
 - skip transparent/blended materials in the first implementation
 - keep `instance_id` equal to `RenderEntity::m_instance_id`
+- record skipped skinned/transparent instance counts in debug logs when path tracing mode is requested, so users do not mistake missing unsupported geometry for a TLAS failure
 
 - [ ] **Step 4: Add scene dirty flags**
 
@@ -749,6 +816,7 @@ Behavior:
 - return immediately if `rhi->getRayTracingCapabilities().support_level == Unsupported`
 - return immediately for meshes with `path_tracing_supported_static_geometry == false`
 - build BLAS once for static geometry
+- fill `RHIAccelerationStructureGeometryDesc::index_type` from the mesh's actual index buffer type. The current static mesh upload path commonly uses `uint16_t`, but the RHI contract supports both `RHI_INDEX_TYPE_UINT16` and `RHI_INDEX_TYPE_UINT32`; do not hardcode one format in the scene/resource layer.
 - set `path_tracing_geometry_dirty = false` after a successful build
 - destroy stale `bottom_level_as` before rebuilding
 
@@ -797,13 +865,16 @@ git commit -m "feat: prepare scene geometry for path tracing"
 - Modify: `engine/source/runtime/function/render/render_pipeline_base.h`
 - Modify: `engine/source/runtime/function/render/render_pipeline.h`
 - Modify: `engine/source/runtime/function/render/render_pipeline.cpp`
-- Modify: `engine/source/runtime/function/render/render_pass.h`
-- Modify: `engine/source/runtime/function/render/passes/main_camera_pass.h`
-- Modify: `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
+- Modify: `engine/source/runtime/resource/config_manager/config_manager.h`
+- Modify: `engine/source/runtime/resource/config_manager/config_manager.cpp`
+- Modify: `engine/configs/development/PiccoloEditor.ini`
+- Modify: `engine/configs/deployment/PiccoloEditor.ini`
+- Modify: `engine/configs/deployment/PiccoloEditorVulkan.ini`
+- Modify: `engine/configs/deployment/PiccoloEditorNonWindows.ini`
 
 - [ ] **Step 1: Add render mode state**
 
-Add a render mode enum in a render-owned header:
+Add a render mode enum in `render_pipeline_base.h` or another render-owned header that does not require `MainCameraPass` changes:
 
 ```cpp
 enum class RenderSceneRenderMode : uint8_t
@@ -813,24 +884,51 @@ enum class RenderSceneRenderMode : uint8_t
 };
 ```
 
-Add selected and effective mode state to `RenderPipeline` or `MainCameraPass`:
+Add selected and effective mode state to `RenderPipeline`:
 
 ```cpp
 RenderSceneRenderMode m_requested_scene_render_mode {RenderSceneRenderMode::Raster};
 RenderSceneRenderMode m_effective_scene_render_mode {RenderSceneRenderMode::Raster};
 ```
 
-- [ ] **Step 2: Select path tracing only when supported**
+- [ ] **Step 2: Add `RenderSceneMode` config parsing**
+
+Follow the existing `RenderBackend` parsing style in `ConfigManager`. Add:
+
+```cpp
+const std::string& getRenderSceneMode() const;
+```
+
+with default storage:
+
+```cpp
+std::string m_render_scene_mode {"Raster"};
+```
+
+Parse this ini key:
+
+```ini
+RenderSceneMode=Raster
+```
+
+Accepted values:
+
+- `Raster`
+- `PathTracing`
+
+Unknown values must behave as `Raster` and log a warning from the render pipeline selection code. Add `RenderSceneMode=Raster` to development and deployment editor ini files so the default remains unchanged.
+
+- [ ] **Step 3: Select path tracing only when supported**
 
 At render-time:
 
-- requested `PathTracing` + D3D12 + `getRayTracingCapabilities().Supported` => effective `PathTracing`
+- requested `PathTracing` + D3D12 + `getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Supported` => effective `PathTracing`
 - requested `PathTracing` + unsupported backend/GPU => effective `Raster`
 - requested `Raster` => effective `Raster`
 
-No UI toggle is required for the first implementation. Use a config value or a hardcoded developer setting following the existing render settings pattern.
+No UI toggle is required for the first implementation. `RenderSceneMode` is the only runtime control in this plan.
 
-- [ ] **Step 3: Preserve UI and combine pass contracts**
+- [ ] **Step 4: Preserve UI and combine pass contracts**
 
 Do not change:
 
@@ -842,25 +940,25 @@ Do not change:
 
 Keep scene input image view as `_main_camera_pass_backup_buffer_odd` and UI input image view as `_main_camera_pass_backup_buffer_even`.
 
-- [ ] **Step 4: Add a path tracing draw branch**
+- [ ] **Step 5: Expose mode state for Task 7**
 
-In `MainCameraPass`, add a draw branch that:
+Expose read-only accessors so Task 7 can branch in `MainCameraPass` without re-parsing config:
 
-- begins the existing main render pass if the integration remains subpass-based, or records path tracing before the UI/combine render pass if Task 7 chooses an out-of-render-pass dispatch
-- produces final scene color in `_main_camera_pass_backup_buffer_odd`
-- skips gbuffer/deferred lighting/forward scene lighting when effective mode is `PathTracing`
-- still executes UI and combine subpasses
-- still draws editor axis/debug with the existing raster path if axis visibility is enabled
+```cpp
+RenderSceneRenderMode getRequestedSceneRenderMode() const;
+RenderSceneRenderMode getEffectiveSceneRenderMode() const;
+bool isPathTracingSceneModeActive() const;
+```
 
-- [ ] **Step 5: Keep raster paths byte-for-byte close**
+Task 6 must not rewrite `MainCameraPass::draw()` or `MainCameraPass::drawForward()`. The path tracing draw branch belongs to Task 7 so only one agent owns that code.
 
-Do not refactor the raster draw sequence except for a clear branch point. Existing `draw()` and `drawForward()` behavior must remain the fallback path.
+- [ ] **Step 6: Keep raster paths byte-for-byte close**
 
-- [ ] **Step 6: Add resize hook**
-
-Update `RenderPipeline::passUpdateAfterRecreateSwapchain()` so the future `PathTracingPass` receives the recreated scene output image view or image handle. Keep existing calls for tone mapping, color grading, FXAA, combine UI, pick, particle, and debug draw.
+Do not refactor the raster draw sequence. Existing `draw()` and `drawForward()` behavior must remain the fallback path.
 
 - [ ] **Step 7: Verify UI still appears on raster D3D12**
+
+Keep `RenderSceneMode=Raster` for this verification:
 
 ```powershell
 cmake --build build --config Debug --target PiccoloEditor
@@ -879,9 +977,12 @@ Expected:
 git add engine/source/runtime/function/render/render_pipeline_base.h `
         engine/source/runtime/function/render/render_pipeline.h `
         engine/source/runtime/function/render/render_pipeline.cpp `
-        engine/source/runtime/function/render/render_pass.h `
-        engine/source/runtime/function/render/passes/main_camera_pass.h `
-        engine/source/runtime/function/render/passes/main_camera_pass.cpp
+        engine/source/runtime/resource/config_manager/config_manager.h `
+        engine/source/runtime/resource/config_manager/config_manager.cpp `
+        engine/configs/development/PiccoloEditor.ini `
+        engine/configs/deployment/PiccoloEditor.ini `
+        engine/configs/deployment/PiccoloEditorVulkan.ini `
+        engine/configs/deployment/PiccoloEditorNonWindows.ini
 git commit -m "feat: select optional path tracing scene mode"
 ```
 
@@ -900,6 +1001,7 @@ git commit -m "feat: select optional path tracing scene mode"
 - Create: `engine/source/runtime/function/render/passes/path_tracing_pass.cpp`
 - Modify: `engine/source/runtime/function/render/render_pipeline_base.h`
 - Modify: `engine/source/runtime/function/render/render_pipeline.cpp`
+- Modify: `engine/source/runtime/function/render/render_pass.h`
 - Modify: `engine/source/runtime/function/render/passes/main_camera_pass.h`
 - Modify: `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
 - Modify: `engine/source/runtime/function/render/render_shader_bytecode.h`
@@ -937,19 +1039,31 @@ struct PathTracingPassInitInfo : RenderPassInitInfo
 - queries `m_rhi->getRayTracingCapabilities()`
 - returns with `m_supported = false` when unsupported
 - creates descriptor set layout
+- includes a `RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` TLAS binding whose descriptor write uses `RHIWriteDescriptorSet::pAccelerationStructureInfo`
 - creates ray tracing pipeline from `PICCOLO_RENDER_D3D12_SHADER_BYTECODE(PATH_TRACING_LIB)`
 - creates SBT
 - creates accumulation resource matching swapchain extent
 
-- [ ] **Step 4: Build/update AS before dispatch**
+- [ ] **Step 4: Ensure scene output supports UAV writes**
+
+Before creating any UAV descriptor for `_main_camera_pass_backup_buffer_odd`, update the image creation path in `MainCameraPass` so that image includes:
+
+```cpp
+RHI_IMAGE_USAGE_STORAGE_BIT
+```
+
+Keep the existing color attachment, sampled/input attachment, and transfer usage bits required by raster/post/combine. This is a prerequisite for D3D12 UAV creation and cannot be deferred to Task 8.
+
+- [ ] **Step 5: Build/update AS before dispatch**
 
 Before tracing each frame:
 
 - call `RenderResource::ensurePathTracingBLAS()` for each static path tracing mesh
 - rebuild or refit TLAS when scene TLAS dirty flag is true
 - skip dispatch if TLAS has zero instances and clear scene output to black/environment
+- do not add skinned or transparent objects to the TLAS in the first version
 
-- [ ] **Step 5: Reset accumulation correctly**
+- [ ] **Step 6: Reset accumulation correctly**
 
 Reset `sample_index` to `0` when:
 
@@ -962,28 +1076,35 @@ Reset `sample_index` to `0` when:
 
 Increment `sample_index` after a successful dispatch.
 
-- [ ] **Step 6: Record trace commands**
+- [ ] **Step 7: Record trace commands**
 
 `PathTracingPass::draw()`:
 
 - transitions scene color image to UAV/general state
+- updates the TLAS descriptor with `RHIWriteDescriptorSetAccelerationStructure`
 - binds ray tracing pipeline descriptors
 - calls `cmdTraceRays()` with width/height/depth
 - transitions scene color image to the layout expected by the next post/UI stage
 - keeps all UI rendering out of the pass
+- runs outside render-pass scope on D3D12 if `cmdTraceRays()` cannot legally be recorded inside the emulated render-pass/subpass flow
 
-- [ ] **Step 7: Integrate with `MainCameraPass`**
+- [ ] **Step 8: Integrate with `MainCameraPass`**
 
 When effective mode is `PathTracing`:
 
 - path trace scene color into `_main_camera_pass_backup_buffer_odd`
 - execute tone mapping/color grading/FXAA if the path traced output is HDR and the existing chain is enabled for the selected route
+- begin the existing render pass at the UI-compatible section if DXR dispatch happened outside render-pass scope
+- clear the UI attachment exactly as the current UI subpass does
+- draw editor axis/debug as a raster overlay in the existing UI subpass after the UI attachment clear and before ImGui, matching the current `drawAxis(); ui_pass.draw();` order
 - execute `_main_camera_subpass_ui`
 - execute `_main_camera_subpass_combine_ui`
 
 If the final design dispatches DXR outside the existing render pass, split the command recording so D3D12 dispatch occurs outside render-pass scope, then begin the existing render pass at the UI/combine section with scene input already readable.
 
-- [ ] **Step 8: Handle resize**
+- [ ] **Step 9: Add resize hook and handle resize**
+
+Update `RenderPipeline::passUpdateAfterRecreateSwapchain()` so `PathTracingPass` receives the recreated scene output image view or image handle. Keep existing calls for tone mapping, color grading, FXAA, combine UI, pick, particle, and debug draw.
 
 On `passUpdateAfterRecreateSwapchain()`:
 
@@ -992,7 +1113,7 @@ On `passUpdateAfterRecreateSwapchain()`:
 - update any image view references to `_main_camera_pass_backup_buffer_odd`
 - reset sample index
 
-- [ ] **Step 9: Verify path tracing on supported D3D12 hardware**
+- [ ] **Step 10: Verify path tracing on supported D3D12 hardware**
 
 ```powershell
 cmake --build build --config Debug --target PiccoloEditor
@@ -1005,17 +1126,19 @@ Manual checks on a DXR-capable GPU:
 - path tracing mode logs as active
 - editor scene renders with non-black scene color
 - UI is visible and unchanged
+- axis/debug overlay remains visible and appears above the scene but below ImGui, matching raster mode ordering
 - moving the camera resets accumulation
 - standing still accumulates progressively
 - resizing and maximizing the editor does not crash
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```powershell
 git add engine/source/runtime/function/render/passes/path_tracing_pass.h `
         engine/source/runtime/function/render/passes/path_tracing_pass.cpp `
         engine/source/runtime/function/render/render_pipeline_base.h `
         engine/source/runtime/function/render/render_pipeline.cpp `
+        engine/source/runtime/function/render/render_pass.h `
         engine/source/runtime/function/render/passes/main_camera_pass.h `
         engine/source/runtime/function/render/passes/main_camera_pass.cpp `
         engine/source/runtime/function/render/render_shader_bytecode.h
@@ -1064,15 +1187,15 @@ barrier.UAV.pResource = acceleration_structure_result_resource;
 
 After path tracing dispatch, add a UAV barrier for scene output/accumulation before post/UI reads.
 
-- [ ] **Step 4: Validate image usage flags**
+- [ ] **Step 4: Re-validate image usage flags**
 
-Ensure `_main_camera_pass_backup_buffer_odd` and any path tracing output image are created with usage that maps to UAV/storage:
+Verify Task 7 already changed `_main_camera_pass_backup_buffer_odd` and any path tracing output image so their creation usage maps to UAV/storage:
 
 ```cpp
 RHI_IMAGE_USAGE_STORAGE_BIT
 ```
 
-Keep existing color/input/sampled usage bits needed by raster/post/combine.
+Keep existing color/input/sampled usage bits needed by raster/post/combine. If this flag is missing, fix it in Task 7-owned `MainCameraPass` integration before continuing with Task 8; do not treat the missing flag as a late hardening-only change.
 
 - [ ] **Step 5: Verify fullscreen/maximize**
 
@@ -1088,7 +1211,8 @@ Manual checks:
 - maximize editor window
 - restore editor window
 - resize rapidly for 10 seconds
-- switch path tracing off/on through the selected config path
+- switch path tracing off/on by changing `RenderSceneMode=Raster` and `RenderSceneMode=PathTracing`
+- test both `RenderSceneMode=Raster` and `RenderSceneMode=PathTracing`
 
 Expected:
 
@@ -1168,7 +1292,7 @@ Compare raster D3D12 and path tracing D3D12 on the same scene:
 
 On a GPU or adapter without DXR:
 
-- request path tracing mode
+- set `RenderSceneMode=PathTracing`
 - start D3D12
 - confirm log says path tracing unsupported and raster path selected
 - confirm no crash and no black scene
@@ -1222,7 +1346,7 @@ Record:
 
 - static opaque meshes supported
 - skinned/animated meshes excluded from path traced TLAS in the first version
-- transparent materials excluded or raster-only
+- transparent/blended materials excluded from the path traced TLAS in the first version; no raster overlay is promised unless a later explicit composite path is implemented
 - one progressive sample per frame
 - accumulation reset conditions
 
@@ -1230,8 +1354,9 @@ Record:
 
 Document the selected control path:
 
-- config key name and accepted values, or
-- developer runtime flag if no user-facing config is added
+- config key: `RenderSceneMode`
+- accepted values: `Raster`, `PathTracing`
+- default value: `Raster`
 
 Use exact names from Task 6 implementation.
 
@@ -1246,17 +1371,19 @@ git commit -m "docs: describe d3d12 path tracing mode"
 
 ## Integration Order
 
-1. Merge Task 1 first or keep it in a shared integration branch.
-2. Merge Tasks 2, 3, 4, 5, and 6 after they compile against Task 1.
-3. Resolve any interface naming conflicts once at the integration branch, not separately in every agent branch.
-4. Implement Task 7 after Wave 1 is merged.
-5. Run Task 8 hardening before judging visual correctness.
-6. Run Task 9 verification.
-7. Finish with Task 10 documentation.
+1. Create or choose an integration branch before merging pure-virtual RHI changes.
+2. Merge Task 1, Task 2, and the initial D3D12 overrides from Task 3 together so the interface compiles for both Vulkan and D3D12.
+3. Merge the remainder of Task 3 plus Tasks 4, 5, and 6 after they compile against the shared contracts. Task 6 must not edit `MainCameraPass::draw()`.
+4. Resolve interface naming conflicts once on the integration branch, not separately in every agent branch.
+5. Implement Task 7 after Wave 1 is merged; Task 7 owns `PathTracingPass` and the `MainCameraPass` draw branch.
+6. Run Task 8 hardening before judging visual correctness.
+7. Run Task 9 verification.
+8. Finish with Task 10 documentation.
 
 Recommended branch/commit cadence:
 
 - one commit per task
+- use per-agent branches/worktrees or the shared integration branch; do not commit pure-virtual interface changes directly to `main` before backend overrides are present
 - no generated shader binary/header commits unless this repo already tracks generated shader outputs for the changed shader
 - keep generated build output out of git
 
@@ -1271,6 +1398,8 @@ The work is complete when all of these are true:
 - Vulkan builds and runs with path tracing unsupported.
 - Path tracing renders static opaque scene geometry through D3D12.
 - UI rendering and `CombineUIPass` behavior remain unchanged.
+- Editor axis/debug draw remains a raster overlay after UI attachment clear and before ImGui in path tracing mode.
+- `RenderSceneMode=Raster` remains the default in all editor ini files.
 - Resize, maximize, restore, and swapchain recreation do not crash.
 - Accumulation resets on camera/scene/resize changes and accumulates when the camera is still.
 - Existing D3D12/Vulkan boot smoke scripts pass.
@@ -1283,11 +1412,16 @@ The work is complete when all of these are true:
 
 - D3D12 DXR dispatch generally must happen outside the current render-pass abstraction. If the first integration keeps it inside `MainCameraPass`, explicitly verify the backend command-list state allows it.
 - Current D3D12 descriptor cache was built for graphics/compute descriptor sets. Ray tracing descriptors and ImGui descriptor heap switches can invalidate cached tables.
+- `RHIWriteDescriptorSet` did not previously carry an acceleration-structure payload. Missing `pAccelerationStructureInfo` support will prevent TLAS binding even if BLAS/TLAS build succeeds.
+- `cmdTraceRays()` must record on the current `D3D12RHICommandBuffer::command_list`; a stale global command-list4 member would dispatch on the wrong frame or wrong command buffer.
+- `_main_camera_pass_backup_buffer_odd` currently needs storage/UAV usage before D3D12 can create the scene output UAV for path tracing.
 - Existing mesh vertex/index buffers are created without AS input/device-address usage bits. Task 5 must update creation flags before BLAS builds can be correct.
 - Skinned meshes are shader-deformed today. Path tracing bind-pose BLAS would be visually wrong, so the first implementation must skip them or keep them raster-only.
+- Transparent/blended materials are excluded from the first path traced TLAS. Rendering them as blended raster overlays is a future composite feature, not part of this plan.
 - TLAS must be based on `RenderScene::m_render_entities`, not only camera-visible draw lists, because reflections and indirect rays can hit off-camera geometry.
 - The current HLSL build flow uses `-E main`; DXR libraries require no entry point and a `lib_6_x` profile.
 - The path traced output must match the existing HDR/postprocess expectations. If it writes LDR after tone mapping, the current post chain will double-process color.
+- DXR headers are Windows SDK dependent. Guard D3D12 path tracing compilation when `ID3D12Device5`/ray tracing structs are unavailable so non-DXR SDK builds keep D3D12 raster support.
 
 ---
 
@@ -1298,14 +1432,17 @@ Use these prompts when dispatching agents.
 ### Agent A Prompt
 
 Implement Task 1 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md`. Own only RHI shared contract files. Do not implement D3D12/Vulkan internals beyond signatures needed for compilation. Return changed files, exact signatures added, and any compile blockers caused by backend pure virtual methods.
+Include the acceleration-structure descriptor payload in `RHIWriteDescriptorSet` exactly as the task specifies.
 
 ### Agent B Prompt
 
 Implement Task 3 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md`. Own D3D12 DXR backend files. You are not alone in the codebase; do not revert edits from other agents. Keep DXR helper code in new `d3d12_ray_tracing.*` files where possible and minimize growth in `d3d12_rhi.cpp`. Return changed files, DXR support query behavior, AS/SBT/state-object implementation notes, and verification output.
+Use the per-command-buffer command list for `cmdTraceRays()` and implement `RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` descriptor writes through `pAccelerationStructureInfo`.
 
 ### Agent C Prompt
 
 Implement Task 4 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md`. Own shader build and HLSL files. Do not implement runtime rendering. Ensure `.lib.hlsl` compiles without `-E main` and generated bytecode is selectable as `PATH_TRACING_LIB`. Return changed files, generated header names, and shader compile command output.
+Verify `engine/shader/generated/dxil_cpp/path_tracing_lib.h`, `<dxil_cpp/path_tracing_lib.h>`, and `PICCOLO_D3D12_PATH_TRACING_LIB` line up with the existing runtime include root.
 
 ### Agent D Prompt
 
@@ -1313,11 +1450,11 @@ Implement Task 5 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-rend
 
 ### Agent E Prompt
 
-Implement Task 6 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md`. Own render pipeline selection and main camera branch points. Do not edit UI pass or combine UI pass. Preserve raster fallback behavior. Return changed files, effective mode selection rules, and D3D12 visible smoke output.
+Implement Task 6 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md`. Own `RenderSceneMode` config parsing and `RenderPipeline` requested/effective mode selection only. Do not edit `MainCameraPass`, UI pass, or combine UI pass. Preserve raster fallback behavior. Return changed files, effective mode selection rules, and D3D12 visible smoke output.
 
 ### Agent F Prompt
 
-Implement Task 7 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md` after Wave 1 is merged. Own `PathTracingPass` and its integration. You are not alone in the codebase; accommodate existing edits. Keep UI raster/combine unchanged, produce scene color into the existing scene input, and reset accumulation on camera/scene/resize changes. Return changed files, manual DXR hardware results, and unsupported fallback behavior.
+Implement Task 7 from `Docs/superpowers/plans/2026-06-11-d3d12-path-tracing-renderer.md` after Wave 1 is merged. Own `PathTracingPass` and its `MainCameraPass` integration. You are not alone in the codebase; accommodate existing edits. Add storage/UAV usage to `_main_camera_pass_backup_buffer_odd` before UAV descriptors, keep UI raster/combine unchanged, preserve axis/debug as a raster overlay after UI attachment clear and before ImGui, produce scene color into the existing scene input, and reset accumulation on camera/scene/resize changes. Return changed files, manual DXR hardware results, and unsupported fallback behavior.
 
 ### Agent H Prompt
 
