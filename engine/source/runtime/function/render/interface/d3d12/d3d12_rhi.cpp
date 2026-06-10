@@ -7319,20 +7319,42 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
         return false;
     }
 
-    std::vector<ID3D12CommandList*> command_lists;
     if (pSubmits != nullptr)
     {
-        for (uint32_t i = 0; i < submitCount; ++i)
+        for (uint32_t submit_index = 0; submit_index < submitCount; ++submit_index)
         {
-            if (pSubmits[i].commandBufferCount == 0 || pSubmits[i].pCommandBuffers == nullptr)
+            const RHISubmitInfo& submit = pSubmits[submit_index];
+
+            for (uint32_t semaphore_index = 0; semaphore_index < submit.waitSemaphoreCount; ++semaphore_index)
             {
-                continue;
+                if (submit.pWaitSemaphores == nullptr)
+                {
+                    return false;
+                }
+
+                auto* semaphore = static_cast<D3D12RHISemaphore*>(submit.pWaitSemaphores[semaphore_index]);
+                if (semaphore != nullptr &&
+                    semaphore->fence != nullptr &&
+                    semaphore->has_pending_signal)
+                {
+                    if (FAILED(command_queue->Wait(semaphore->fence.Get(), semaphore->wait_value)))
+                    {
+                        return false;
+                    }
+                    semaphore->has_pending_signal = false;
+                }
             }
 
-            for (uint32_t command_buffer_index = 0; command_buffer_index < pSubmits[i].commandBufferCount; ++command_buffer_index)
+            std::vector<ID3D12CommandList*> submit_command_lists;
+            for (uint32_t command_buffer_index = 0; command_buffer_index < submit.commandBufferCount; ++command_buffer_index)
             {
+                if (submit.pCommandBuffers == nullptr)
+                {
+                    return false;
+                }
+
                 auto* d3d_command_buffer =
-                    static_cast<D3D12RHICommandBuffer*>(pSubmits[i].pCommandBuffers[command_buffer_index]);
+                    static_cast<D3D12RHICommandBuffer*>(submit.pCommandBuffers[command_buffer_index]);
                 if (d3d_command_buffer == nullptr || d3d_command_buffer->command_list == nullptr)
                 {
                     continue;
@@ -7351,50 +7373,24 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
 
                 if (d3d_command_buffer->has_recorded_commands)
                 {
-                    command_lists.push_back(d3d_command_buffer->command_list.Get());
+                    submit_command_lists.push_back(d3d_command_buffer->command_list.Get());
                 }
             }
 
-            for (uint32_t semaphore_index = 0; semaphore_index < pSubmits[i].waitSemaphoreCount; ++semaphore_index)
+            if (!submit_command_lists.empty())
             {
-                if (pSubmits[i].pWaitSemaphores == nullptr)
-                {
-                    return false;
-                }
-
-                auto* semaphore = static_cast<D3D12RHISemaphore*>(pSubmits[i].pWaitSemaphores[semaphore_index]);
-                if (semaphore != nullptr &&
-                    semaphore->fence != nullptr &&
-                    semaphore->has_pending_signal)
-                {
-                    if (FAILED(command_queue->Wait(semaphore->fence.Get(), semaphore->wait_value)))
-                    {
-                        return false;
-                    }
-                    semaphore->has_pending_signal = false;
-                }
+                command_queue->ExecuteCommandLists(static_cast<UINT>(submit_command_lists.size()), submit_command_lists.data());
             }
-        }
-    }
 
-    if (!command_lists.empty())
-    {
-        command_queue->ExecuteCommandLists(static_cast<UINT>(command_lists.size()), command_lists.data());
-    }
-
-    if (pSubmits != nullptr)
-    {
-        for (uint32_t i = 0; i < submitCount; ++i)
-        {
-            for (uint32_t semaphore_index = 0; semaphore_index < pSubmits[i].signalSemaphoreCount; ++semaphore_index)
+            for (uint32_t semaphore_index = 0; semaphore_index < submit.signalSemaphoreCount; ++semaphore_index)
             {
-                if (pSubmits[i].pSignalSemaphores == nullptr)
+                if (submit.pSignalSemaphores == nullptr)
                 {
                     return false;
                 }
 
                 auto* semaphore =
-                    static_cast<D3D12RHISemaphore*>(const_cast<RHISemaphore*>(pSubmits[i].pSignalSemaphores[semaphore_index]));
+                    static_cast<D3D12RHISemaphore*>(const_cast<RHISemaphore*>(submit.pSignalSemaphores[semaphore_index]));
                 if (semaphore == nullptr || semaphore->fence == nullptr)
                 {
                     return false;
