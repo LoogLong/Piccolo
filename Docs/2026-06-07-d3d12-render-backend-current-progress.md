@@ -107,6 +107,7 @@
 ### 2026-06-10 dual-backend completion evidence
 
 - Branch/code HEAD before documentation update: `fb5d83c perf: reduce d3d12 descriptor churn`.
+- Merged to mainline with merge commit `52c53b2 merge: complete d3d12 render backend`; a follow-up documentation update records the mainline verification below.
 - Dual-backend configure passed: `cmake -S . -B build -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON`; CMake found `dxc.exe` at `C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/dxc.exe`.
 - Debug editor build passed: `cmake --build build --config Debug --target PiccoloEditor -- /clp:ErrorsOnly /v:minimal`.
 - D3D12 boot smoke passed with fallback forbidden: `.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build -Configuration Debug -TimeoutSeconds 20 -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback`; log: `build\test_d3d12_boot.log`.
@@ -117,6 +118,8 @@
 - Log scan command `rg -n "D3D12 ERROR|DEVICE_REMOVED|DXGI_ERROR|resource state|descriptor heap|root signature|command list|Falling back to Vulkan|RHI backend initialization failed|\[error\]" build` found no matches in latest build/smoke logs.
 - Temporary descriptor trace scan `rg -n "PICCOLO_TRACE|trace_mark|descriptor counter|temporary descriptor marker" engine/source/runtime/function/render/interface/d3d12` found no matches.
 - Final FPS gate passed on the default scene: D3D12 collected 40 samples with tail average `545.90 FPS`; Vulkan collected 40 samples with tail average `568.85 FPS`; D3D12 was about `4.03%` below Vulkan and did not regress near `1 FPS`.
+- After merging to `main`, the same mainline checkout was freshly configured and built, then ran D3D12 boot, Auto->D3D12 boot, Vulkan boot, and D3D12 visible smoke successfully. The mainline visible smoke capture was `build\test_d3d12_editor_visible.png` with sampled non-black ratio `100.0000%`.
+- Mainline latest-smoke log scan over `build\test_d3d12_boot.log`, `build\test_auto_d3d12_boot.log`, `build\test_vulkan_boot.log`, `build\test_d3d12_editor_visible.log`, `build\test_d3d12_editor_visible.stdout.log`, and `build\test_d3d12_editor_visible.stderr.log` found no matches. A whole-`build` scan still matched historical `build\isolate_skip_simulate.txt` from 2026-06-09, which records the old skip-simulate 1 FPS/device-loss reproduction and is not part of the latest smoke run.
 
 ### 2026-06-08 D3D12-only evidence
 
