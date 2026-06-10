@@ -24,6 +24,7 @@ namespace Piccolo
     {
 #ifdef _WIN32
         struct D3D12RHIPipelineLayout;
+        struct D3D12RHIDescriptorSet;
 
         struct D3D12RHIBuffer final : RHIBuffer
         {
@@ -159,6 +160,15 @@ namespace Piccolo
         struct D3D12RHICommandBuffer final : RHICommandBuffer
         {
 #ifdef _WIN32
+            struct DynamicDescriptorTableCacheEntry
+            {
+                const D3D12RHIDescriptorSet* descriptor_set {nullptr};
+                uint64_t                     descriptor_set_version {0};
+                uint32_t                     set_index {0};
+                std::vector<uint32_t>        dynamic_offsets;
+                D3D12_GPU_DESCRIPTOR_HANDLE  cbv_srv_uav_gpu_base {0};
+            };
+
             ComPtr<ID3D12CommandAllocator>    command_allocator;
             ComPtr<ID3D12GraphicsCommandList> command_list;
             bool                              is_open {false};
@@ -185,6 +195,7 @@ namespace Piccolo
             std::vector<bool>                 graphics_root_descriptor_table_valid;
             std::vector<D3D12_GPU_DESCRIPTOR_HANDLE> compute_root_descriptor_tables;
             std::vector<bool>                 compute_root_descriptor_table_valid;
+            std::vector<DynamicDescriptorTableCacheEntry> dynamic_descriptor_table_cache;
             ComPtr<ID3D12Resource>            dispatch_argument_buffer;
             D3D12_RESOURCE_STATES             dispatch_argument_buffer_state {D3D12_RESOURCE_STATE_COPY_DEST};
 #endif
@@ -199,6 +210,7 @@ namespace Piccolo
         {
 #ifdef _WIN32
             ID3D12CommandQueue* command_queue {nullptr};
+            D3D12_COMMAND_LIST_TYPE command_list_type {D3D12_COMMAND_LIST_TYPE_DIRECT};
 #endif
         };
 
@@ -362,6 +374,7 @@ namespace Piccolo
             D3D12_GPU_DESCRIPTOR_HANDLE sampler_gpu_base {0};
             D3D12_CPU_DESCRIPTOR_HANDLE sampler_staging_cpu_base {0};
 #endif
+            uint64_t version {1};
             std::vector<D3D12RHIBuffer*> storage_buffers;
             std::vector<D3D12RHIBuffer*> host_visible_default_buffers;
             std::vector<BufferDescriptor> buffer_descriptors;
@@ -776,6 +789,41 @@ namespace Piccolo
             base = next;
             next += count;
             return true;
+        }
+
+        D3D12_GPU_DESCRIPTOR_HANDLE* findCachedDynamicDescriptorTable(
+            D3D12RHICommandBuffer& command_buffer,
+            const D3D12RHIDescriptorSet& descriptor_set,
+            uint32_t set_index,
+            const std::vector<uint32_t>& dynamic_offsets)
+        {
+            for (auto& cache_entry : command_buffer.dynamic_descriptor_table_cache)
+            {
+                if (cache_entry.descriptor_set == &descriptor_set &&
+                    cache_entry.descriptor_set_version == descriptor_set.version &&
+                    cache_entry.set_index == set_index &&
+                    cache_entry.dynamic_offsets == dynamic_offsets)
+                {
+                    return &cache_entry.cbv_srv_uav_gpu_base;
+                }
+            }
+            return nullptr;
+        }
+
+        void rememberCachedDynamicDescriptorTable(
+            D3D12RHICommandBuffer& command_buffer,
+            const D3D12RHIDescriptorSet& descriptor_set,
+            uint32_t set_index,
+            const std::vector<uint32_t>& dynamic_offsets,
+            D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav_gpu_base)
+        {
+            D3D12RHICommandBuffer::DynamicDescriptorTableCacheEntry cache_entry {};
+            cache_entry.descriptor_set = &descriptor_set;
+            cache_entry.descriptor_set_version = descriptor_set.version;
+            cache_entry.set_index = set_index;
+            cache_entry.dynamic_offsets = dynamic_offsets;
+            cache_entry.cbv_srv_uav_gpu_base = cbv_srv_uav_gpu_base;
+            command_buffer.dynamic_descriptor_table_cache.push_back(cache_entry);
         }
 
         bool descriptorRangeFits(uint32_t first, uint32_t count, uint32_t descriptor_count)
@@ -3327,8 +3375,16 @@ namespace Piccolo
         m_graphics_queue  = new D3D12RHIQueue();
         m_compute_queue   = new D3D12RHIQueue();
 #ifdef _WIN32
-        static_cast<D3D12RHIQueue*>(m_graphics_queue)->command_queue = m_d3d12_command_queue.Get();
-        static_cast<D3D12RHIQueue*>(m_compute_queue)->command_queue  = m_d3d12_command_queue.Get();
+        auto* d3d_graphics_queue = static_cast<D3D12RHIQueue*>(m_graphics_queue);
+        auto* d3d_compute_queue  = static_cast<D3D12RHIQueue*>(m_compute_queue);
+        d3d_graphics_queue->command_queue     = m_d3d12_command_queue.Get();
+        d3d_graphics_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        // D3D12 command buffers are currently backed by DIRECT command lists. Keep compute submissions on
+        // the direct queue until command pools can allocate queue-typed command lists and resource ownership
+        // transitions are modeled explicitly.
+        d3d_compute_queue->command_queue     = m_d3d12_command_queue.Get();
+        d3d_compute_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        LOG_INFO("D3D12 compute queue uses the graphics/direct command queue");
 #endif
 
         for (auto& command_buffer : m_frame_command_buffers)
@@ -5524,6 +5580,7 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
     d3d_command_buffer->attachment_load_ops_applied.clear();
     d3d_command_buffer->active_subpass_index = 0;
     d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
+    d3d_command_buffer->dynamic_descriptor_table_cache.clear();
     resetCommandBufferDescriptorHeapState(*d3d_command_buffer);
     return true;
 #else
@@ -6014,16 +6071,25 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             return;
         }
 
-        uint32_t unused_transient_base = 0;
-        if (!reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
-                                preflight_transient_next,
-                                 m_d3d12_cbv_srv_uav_descriptor_capacity,
-                                 unused_transient_base))
+        std::vector<uint32_t> dynamic_offsets(pDynamicOffsets + preflight_dynamic_offset_index,
+                                              pDynamicOffsets + preflight_dynamic_offset_index +
+                                                  required_dynamic_descriptor_count);
+        if (findCachedDynamicDescriptorTable(*d3d_command_buffer,
+                                             *descriptor_set,
+                                             set_index,
+                                             dynamic_offsets) == nullptr)
         {
-            LOG_WARN("D3D12 cmdBindDescriptorSets could not reserve {} transient descriptors for set {}",
-                     set_layout->cbv_srv_uav_descriptor_count,
-                     set_index);
-            return;
+            uint32_t unused_transient_base = 0;
+            if (!reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
+                                    preflight_transient_next,
+                                    m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                    unused_transient_base))
+            {
+                LOG_WARN("D3D12 cmdBindDescriptorSets could not reserve {} transient descriptors for set {}",
+                         set_layout->cbv_srv_uav_descriptor_count,
+                         set_index);
+                return;
+            }
         }
 
         preflight_dynamic_offset_index += required_dynamic_descriptor_count;
@@ -6094,70 +6160,90 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             descriptor_set->has_cbv_srv_uav_descriptors &&
             set_layout->cbv_srv_uav_descriptor_count > 0)
         {
-            uint32_t transient_base = 0;
-            if (reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
-                                   d3d_command_buffer->transient_cbv_srv_uav_descriptor_next,
-                                   m_d3d12_cbv_srv_uav_descriptor_capacity,
-                                   transient_base))
+            std::vector<uint32_t> dynamic_offsets(pDynamicOffsets + dynamic_offset_index,
+                                                  pDynamicOffsets + dynamic_offset_index +
+                                                      required_dynamic_descriptor_count);
+            if (auto* cached_gpu_base =
+                    findCachedDynamicDescriptorTable(*d3d_command_buffer,
+                                                     *descriptor_set,
+                                                     set_index,
+                                                     dynamic_offsets))
             {
-                m_d3d12_transient_cbv_srv_uav_descriptor_next =
-                    (std::max)(m_d3d12_transient_cbv_srv_uav_descriptor_next,
-                               d3d_command_buffer->transient_cbv_srv_uav_descriptor_next);
-
-                D3D12_CPU_DESCRIPTOR_HANDLE transient_cpu_base = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
-                                                                              m_d3d12_cbv_srv_uav_descriptor_size,
-                                                                              transient_base);
-                m_d3d12_device->CopyDescriptorsSimple(set_layout->cbv_srv_uav_descriptor_count,
-                                                      transient_cpu_base,
-                                                      descriptor_set->cbv_srv_uav_staging_cpu_base,
-                                                      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-                for (const auto& range : set_layout->ranges)
+                cbv_srv_uav_gpu_base = *cached_gpu_base;
+                dynamic_offset_index += required_dynamic_descriptor_count;
+            }
+            else
+            {
+                uint32_t transient_base = 0;
+                if (reserveDescriptors(set_layout->cbv_srv_uav_descriptor_count,
+                                       d3d_command_buffer->transient_cbv_srv_uav_descriptor_next,
+                                       m_d3d12_cbv_srv_uav_descriptor_capacity,
+                                       transient_base))
                 {
-                    if (!descriptorUsesResourceHeap(range.binding.descriptorType) ||
-                        !isDynamicBufferDescriptor(range.binding.descriptorType))
-                    {
-                        continue;
-                    }
+                    m_d3d12_transient_cbv_srv_uav_descriptor_next =
+                        (std::max)(m_d3d12_transient_cbv_srv_uav_descriptor_next,
+                                   d3d_command_buffer->transient_cbv_srv_uav_descriptor_next);
 
-                    for (uint32_t array_index = 0; array_index < range.binding.descriptorCount; ++array_index)
-                    {
-                        const RHIDeviceSize dynamic_offset =
-                            (pDynamicOffsets != nullptr && dynamic_offset_index < dynamicOffsetCount) ?
-                                pDynamicOffsets[dynamic_offset_index] :
-                                0;
-                        ++dynamic_offset_index;
+                    D3D12_CPU_DESCRIPTOR_HANDLE transient_cpu_base = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
+                                                                                  m_d3d12_cbv_srv_uav_descriptor_size,
+                                                                                  transient_base);
+                    m_d3d12_device->CopyDescriptorsSimple(set_layout->cbv_srv_uav_descriptor_count,
+                                                          transient_cpu_base,
+                                                          descriptor_set->cbv_srv_uav_staging_cpu_base,
+                                                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-                        const auto* buffer_descriptor =
-                            descriptor_set->findBufferDescriptor(range.binding.binding, array_index);
-                        if (buffer_descriptor == nullptr)
+                    for (const auto& range : set_layout->ranges)
+                    {
+                        if (!descriptorUsesResourceHeap(range.binding.descriptorType) ||
+                            !isDynamicBufferDescriptor(range.binding.descriptorType))
                         {
                             continue;
                         }
 
-                        const uint32_t descriptor_index =
-                            transient_base + range.cbv_srv_uav_offset + array_index;
-                        D3D12_CPU_DESCRIPTOR_HANDLE dynamic_dst = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
-                                                                               m_d3d12_cbv_srv_uav_descriptor_size,
-                                                                               descriptor_index);
-                        writeBufferDescriptor(m_d3d12_device.Get(),
-                                              dynamic_dst,
-                                              range,
-                                              *buffer_descriptor,
-                                              dynamic_offset);
-                    }
-                }
+                        for (uint32_t array_index = 0; array_index < range.binding.descriptorCount; ++array_index)
+                        {
+                            const RHIDeviceSize dynamic_offset =
+                                (pDynamicOffsets != nullptr && dynamic_offset_index < dynamicOffsetCount) ?
+                                    pDynamicOffsets[dynamic_offset_index] :
+                                    0;
+                            ++dynamic_offset_index;
 
-                cbv_srv_uav_gpu_base = gpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
-                                                     m_d3d12_cbv_srv_uav_descriptor_size,
-                                                     transient_base);
-            }
-            else
-            {
-                LOG_WARN("D3D12 cmdBindDescriptorSets could not reserve {} transient descriptors for set {}",
-                         set_layout->cbv_srv_uav_descriptor_count,
-                         set_index);
-                return;
+                            const auto* buffer_descriptor =
+                                descriptor_set->findBufferDescriptor(range.binding.binding, array_index);
+                            if (buffer_descriptor == nullptr)
+                            {
+                                continue;
+                            }
+
+                            const uint32_t descriptor_index =
+                                transient_base + range.cbv_srv_uav_offset + array_index;
+                            D3D12_CPU_DESCRIPTOR_HANDLE dynamic_dst = cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
+                                                                                   m_d3d12_cbv_srv_uav_descriptor_size,
+                                                                                   descriptor_index);
+                            writeBufferDescriptor(m_d3d12_device.Get(),
+                                                  dynamic_dst,
+                                                  range,
+                                                  *buffer_descriptor,
+                                                  dynamic_offset);
+                        }
+                    }
+
+                    cbv_srv_uav_gpu_base = gpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(),
+                                                         m_d3d12_cbv_srv_uav_descriptor_size,
+                                                         transient_base);
+                    rememberCachedDynamicDescriptorTable(*d3d_command_buffer,
+                                                         *descriptor_set,
+                                                         set_index,
+                                                         dynamic_offsets,
+                                                         cbv_srv_uav_gpu_base);
+                }
+                else
+                {
+                    LOG_WARN("D3D12 cmdBindDescriptorSets could not reserve {} transient descriptors for set {}",
+                             set_layout->cbv_srv_uav_descriptor_count,
+                             set_index);
+                    return;
+                }
             }
         }
         if (descriptor_set->has_cbv_srv_uav_descriptors &&
@@ -7116,6 +7202,7 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
             continue;
         }
 
+        bool descriptor_set_modified = false;
         for (uint32_t descriptor_index = 0; descriptor_index < write.descriptorCount; ++descriptor_index)
         {
             const uint32_t array_index = write.dstArrayElement + descriptor_index;
@@ -7179,6 +7266,7 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                                                       shader_handle,
                                                       staging_handle,
                                                       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                descriptor_set_modified = true;
             }
 
             if (descriptorUsesSamplerHeap(write.descriptorType))
@@ -7209,8 +7297,14 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                                                           shader_handle,
                                                           staging_handle,
                                                           D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+                    descriptor_set_modified = true;
                 }
             }
+        }
+
+        if (descriptor_set_modified)
+        {
+            ++descriptor_set->version;
         }
     }
 
@@ -7235,6 +7329,7 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
             continue;
         }
 
+        bool dst_set_modified = false;
         if (descriptorUsesResourceHeap(src_binding->binding.descriptorType) &&
             descriptorUsesResourceHeap(dst_binding->binding.descriptorType))
         {
@@ -7254,6 +7349,7 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                                                   cpuDescriptor(m_d3d12_cbv_srv_uav_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, dst_index),
                                                   cpuDescriptor(m_d3d12_cbv_srv_uav_cpu_heap.Get(), m_d3d12_cbv_srv_uav_descriptor_size, dst_index),
                                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            dst_set_modified = true;
 
             if (descriptorUsesBufferInfo(src_binding->binding.descriptorType) &&
                 descriptorUsesBufferInfo(dst_binding->binding.descriptorType))
@@ -7296,6 +7392,12 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                                                   cpuDescriptor(m_d3d12_sampler_heap.Get(), m_d3d12_sampler_descriptor_size, dst_index),
                                                   cpuDescriptor(m_d3d12_sampler_cpu_heap.Get(), m_d3d12_sampler_descriptor_size, dst_index),
                                                   D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+            dst_set_modified = true;
+        }
+
+        if (dst_set_modified)
+        {
+            ++dst_set->version;
         }
     }
 #else
@@ -7319,20 +7421,42 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
         return false;
     }
 
-    std::vector<ID3D12CommandList*> command_lists;
     if (pSubmits != nullptr)
     {
-        for (uint32_t i = 0; i < submitCount; ++i)
+        for (uint32_t submit_index = 0; submit_index < submitCount; ++submit_index)
         {
-            if (pSubmits[i].commandBufferCount == 0 || pSubmits[i].pCommandBuffers == nullptr)
+            const RHISubmitInfo& submit = pSubmits[submit_index];
+
+            for (uint32_t semaphore_index = 0; semaphore_index < submit.waitSemaphoreCount; ++semaphore_index)
             {
-                continue;
+                if (submit.pWaitSemaphores == nullptr)
+                {
+                    return false;
+                }
+
+                auto* semaphore = static_cast<D3D12RHISemaphore*>(submit.pWaitSemaphores[semaphore_index]);
+                if (semaphore != nullptr &&
+                    semaphore->fence != nullptr &&
+                    semaphore->has_pending_signal)
+                {
+                    if (FAILED(command_queue->Wait(semaphore->fence.Get(), semaphore->wait_value)))
+                    {
+                        return false;
+                    }
+                    semaphore->has_pending_signal = false;
+                }
             }
 
-            for (uint32_t command_buffer_index = 0; command_buffer_index < pSubmits[i].commandBufferCount; ++command_buffer_index)
+            std::vector<ID3D12CommandList*> submit_command_lists;
+            for (uint32_t command_buffer_index = 0; command_buffer_index < submit.commandBufferCount; ++command_buffer_index)
             {
+                if (submit.pCommandBuffers == nullptr)
+                {
+                    return false;
+                }
+
                 auto* d3d_command_buffer =
-                    static_cast<D3D12RHICommandBuffer*>(pSubmits[i].pCommandBuffers[command_buffer_index]);
+                    static_cast<D3D12RHICommandBuffer*>(submit.pCommandBuffers[command_buffer_index]);
                 if (d3d_command_buffer == nullptr || d3d_command_buffer->command_list == nullptr)
                 {
                     continue;
@@ -7351,50 +7475,24 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
 
                 if (d3d_command_buffer->has_recorded_commands)
                 {
-                    command_lists.push_back(d3d_command_buffer->command_list.Get());
+                    submit_command_lists.push_back(d3d_command_buffer->command_list.Get());
                 }
             }
 
-            for (uint32_t semaphore_index = 0; semaphore_index < pSubmits[i].waitSemaphoreCount; ++semaphore_index)
+            if (!submit_command_lists.empty())
             {
-                if (pSubmits[i].pWaitSemaphores == nullptr)
-                {
-                    return false;
-                }
-
-                auto* semaphore = static_cast<D3D12RHISemaphore*>(pSubmits[i].pWaitSemaphores[semaphore_index]);
-                if (semaphore != nullptr &&
-                    semaphore->fence != nullptr &&
-                    semaphore->has_pending_signal)
-                {
-                    if (FAILED(command_queue->Wait(semaphore->fence.Get(), semaphore->wait_value)))
-                    {
-                        return false;
-                    }
-                    semaphore->has_pending_signal = false;
-                }
+                command_queue->ExecuteCommandLists(static_cast<UINT>(submit_command_lists.size()), submit_command_lists.data());
             }
-        }
-    }
 
-    if (!command_lists.empty())
-    {
-        command_queue->ExecuteCommandLists(static_cast<UINT>(command_lists.size()), command_lists.data());
-    }
-
-    if (pSubmits != nullptr)
-    {
-        for (uint32_t i = 0; i < submitCount; ++i)
-        {
-            for (uint32_t semaphore_index = 0; semaphore_index < pSubmits[i].signalSemaphoreCount; ++semaphore_index)
+            for (uint32_t semaphore_index = 0; semaphore_index < submit.signalSemaphoreCount; ++semaphore_index)
             {
-                if (pSubmits[i].pSignalSemaphores == nullptr)
+                if (submit.pSignalSemaphores == nullptr)
                 {
                     return false;
                 }
 
                 auto* semaphore =
-                    static_cast<D3D12RHISemaphore*>(const_cast<RHISemaphore*>(pSubmits[i].pSignalSemaphores[semaphore_index]));
+                    static_cast<D3D12RHISemaphore*>(const_cast<RHISemaphore*>(submit.pSignalSemaphores[semaphore_index]));
                 if (semaphore == nullptr || semaphore->fence == nullptr)
                 {
                     return false;
@@ -7474,6 +7572,7 @@ void D3D12RHI::resetCommandPool()
             return;
         }
         d3d_command_buffer->has_recorded_commands = false;
+        d3d_command_buffer->dynamic_descriptor_table_cache.clear();
     }
     m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
 #endif
@@ -7699,6 +7798,7 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
             d3d_command_buffer->active_framebuffer = nullptr;
             d3d_command_buffer->active_subpass_index = 0;
             d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
+            d3d_command_buffer->dynamic_descriptor_table_cache.clear();
             resetCommandBufferDescriptorHeapState(*d3d_command_buffer);
         }
     }

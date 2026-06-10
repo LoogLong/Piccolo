@@ -21,6 +21,7 @@
 - Non-Windows deployment output now receives a Vulkan-compatible `RenderBackend=Auto` config instead of the Windows D3D12-primary config.
 - CMake now exposes `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`; Windows can build D3D12-only without linking PiccoloRuntime/imgui against Vulkan, while non-Windows builds continue to require Vulkan.
 - D3D12 builds require `dxc.exe`; Vulkan builds require Vulkan SDK/glslang.
+- 2026-06 D3D12 completion pass aligned submit ordering, point shadows, FXAA shader behavior, and dynamic descriptor reuse so Windows D3D12 can serve as the primary Vulkan-compatible render backend for the default editor scene.
 
 ### 当前状态
 - Windows primary mode is D3D12; Windows D3D12-capable Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退，不会静默回退 Vulkan
@@ -34,6 +35,7 @@
 - 2026-06-08 手动验证更新：Windows D3D12-only Debug/Release PiccoloEditor 构建通过，Debug/Release D3D12 smoke 均在禁止 Vulkan fallback 时通过；Windows dual-backend Debug 构建通过，显式 Vulkan smoke 通过；自动化生命周期覆盖了 Debug editor 启动、默认 world/level 加载、重复 resize、minimize/restore 和 restore 后 60 秒存活检查，日志扫描未发现 D3D12 debug-layer/device/fallback/error 匹配。
 - 2026-06-08 验证 caveat：未声明完整手动/目视 D3D12 runtime 验收完成；自动截图未能证明渲染画面，一次 Debug 截图运行显示 Visual C++ Debug Assertion (`debug_heap.cpp:908`, `is_block_type_valid(header->_block_use)`)，正常关闭未验证；交互和目视项仍需覆盖相机移动、mesh picking 稳定 ID、UI panel toggle、axis/debug draw 触发、level reload、主相机/post-process/ImGui/debug draw/particles 的视觉确认。
 - 后续风险属于正常 engine runtime validation，而不是 backend wiring 未完成。
+- 2026-06-10 验证更新：Windows dual-backend Debug 构建通过，D3D12/Auto->D3D12/Vulkan smoke 均通过；D3D12 visible capture 非黑比例 100%，默认场景截图与 Vulkan 对照无明显 pass 缺失；FPS gate 中 D3D12 545.90 FPS、Vulkan 568.85 FPS，D3D12 未出现 1 FPS 回退。
 
 ### 验证命令
 
