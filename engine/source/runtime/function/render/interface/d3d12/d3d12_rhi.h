@@ -94,6 +94,19 @@ namespace Piccolo
     void cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) override;
     void cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
     void cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset) override;
+    RHIRayTracingCapabilities getRayTracingCapabilities() const override;
+    bool createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
+                                     RHIAccelerationStructure*& acceleration_structure) override;
+    bool buildAccelerationStructure(RHICommandBuffer* command_buffer,
+                                    const RHIAccelerationStructureBuildDesc* build_desc,
+                                    RHIAccelerationStructure* acceleration_structure) override;
+    bool createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
+                                  RHIPipeline*& pipeline) override;
+    bool createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
+                                  RHIShaderBindingTable*& shader_binding_table) override;
+    void cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracingDispatchDesc* dispatch_desc) override;
+    void destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure) override;
+    void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table) override;
     void cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers) override;
     bool endCommandBuffer(RHICommandBuffer* commandBuffer) override;
     void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) override;

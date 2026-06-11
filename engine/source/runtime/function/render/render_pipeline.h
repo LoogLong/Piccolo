@@ -22,5 +22,8 @@ namespace Piccolo
         void setAxisVisibleState(bool state);
 
         void setSelectedAxis(size_t selected_axis);
+
+    private:
+        void updateSceneRenderMode(RHI& rhi);
     };
 } // namespace Piccolo

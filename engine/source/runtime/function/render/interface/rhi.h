@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "rhi_allocation.h"
+#include "rhi_ray_tracing.h"
 #include "rhi_struct.h"
 
 namespace Piccolo
@@ -127,6 +128,20 @@ namespace Piccolo
         virtual void cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset) = 0;
+        virtual RHIRayTracingCapabilities getRayTracingCapabilities() const = 0;
+        virtual bool createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
+                                                 RHIAccelerationStructure*& acceleration_structure) = 0;
+        virtual bool buildAccelerationStructure(RHICommandBuffer* command_buffer,
+                                                const RHIAccelerationStructureBuildDesc* build_desc,
+                                                RHIAccelerationStructure* acceleration_structure) = 0;
+        virtual bool createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
+                                              RHIPipeline*& pipeline) = 0;
+        virtual bool createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
+                                              RHIShaderBindingTable*& shader_binding_table) = 0;
+        virtual void cmdTraceRays(RHICommandBuffer* command_buffer,
+                                  const RHIRayTracingDispatchDesc* dispatch_desc) = 0;
+        virtual void destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure) = 0;
+        virtual void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table) = 0;
         virtual void cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers) = 0;
         virtual bool endCommandBuffer(RHICommandBuffer* commandBuffer) = 0;
         virtual void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) = 0;

@@ -2514,6 +2514,61 @@ namespace Piccolo
         vkCmdDispatchIndirect(((VulkanCommandBuffer*)commandBuffer)->getResource(), ((VulkanBuffer*)buffer)->getResource(), offset);
     }
 
+    RHIRayTracingCapabilities VulkanRHI::getRayTracingCapabilities() const
+    {
+        return {};
+    }
+
+    bool VulkanRHI::createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
+                                                RHIAccelerationStructure*& acceleration_structure)
+    {
+        (void)build_desc;
+        acceleration_structure = nullptr;
+        return false;
+    }
+
+    bool VulkanRHI::buildAccelerationStructure(RHICommandBuffer* command_buffer,
+                                               const RHIAccelerationStructureBuildDesc* build_desc,
+                                               RHIAccelerationStructure* acceleration_structure)
+    {
+        (void)command_buffer;
+        (void)build_desc;
+        (void)acceleration_structure;
+        return false;
+    }
+
+    bool VulkanRHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
+                                             RHIPipeline*& pipeline)
+    {
+        (void)create_info;
+        pipeline = nullptr;
+        return false;
+    }
+
+    bool VulkanRHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
+                                             RHIShaderBindingTable*& shader_binding_table)
+    {
+        (void)create_info;
+        shader_binding_table = nullptr;
+        return false;
+    }
+
+    void VulkanRHI::cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracingDispatchDesc* dispatch_desc)
+    {
+        (void)command_buffer;
+        (void)dispatch_desc;
+    }
+
+    void VulkanRHI::destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure)
+    {
+        acceleration_structure = nullptr;
+    }
+
+    void VulkanRHI::destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table)
+    {
+        shader_binding_table = nullptr;
+    }
+
     void VulkanRHI::cmdCopyImageToBuffer(
         RHICommandBuffer* commandBuffer,
         RHIImage* srcImage,

@@ -18,6 +18,17 @@ namespace Piccolo
     class RHI;
     class RenderPassBase;
     class RenderCamera;
+    class RenderScene;
+
+    struct RenderPathTracingCollectedInstance
+    {
+        RHIAccelerationStructure*       bottom_level_as {nullptr};
+        std::array<float, 12>           row_major_3x4_transform {};
+        uint32_t                        instance_id {0};
+        uint32_t                        material_index {0};
+        RenderMeshGPUResource*          mesh {nullptr};
+        RenderPBRMaterialGPUResource*   material {nullptr};
+    };
 
     struct IBLResource
     {
@@ -128,6 +139,14 @@ namespace Piccolo
 
         RenderPBRMaterialGPUResource& getEntityMaterial(RenderEntity entity);
 
+        void ensurePathTracingBLAS(std::shared_ptr<RHI> rhi,
+                                   RHICommandBuffer*    command_buffer,
+                                   RenderMeshGPUResource& mesh);
+
+        std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
+
+        std::shared_ptr<RenderScene> getCurrentRenderScene() const;
+
         void resetRingBufferOffset(uint8_t current_frame_index);
 
         // global rendering resource, include IBL data, global storage buffer
@@ -152,6 +171,8 @@ namespace Piccolo
         RHIDescriptorSetLayout* const* m_material_descriptor_set_layout {nullptr};
 
     private:
+        std::weak_ptr<RenderScene> m_current_render_scene;
+
         void createAndMapStorageBuffer(std::shared_ptr<RHI> rhi);
         void createIBLSamplers(std::shared_ptr<RHI> rhi);
         void createIBLTextures(std::shared_ptr<RHI>                        rhi,

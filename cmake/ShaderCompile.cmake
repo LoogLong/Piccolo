@@ -59,6 +59,8 @@ function(get_hlsl_shader_profile SHADER OUT_PROFILE)
         set(SHADER_PROFILE "cs_6_0")
     elseif(SHADER_NAME MATCHES "\\.geom\\.hlsl$")
         set(SHADER_PROFILE "gs_6_0")
+    elseif(SHADER_NAME MATCHES "\\.lib\\.hlsl$")
+        set(SHADER_PROFILE "lib_6_3")
     else()
         message(FATAL_ERROR "Unknown HLSL shader stage for ${SHADER_NAME}")
     endif()
@@ -102,6 +104,10 @@ function(compile_hlsl_shader SHADERS TARGET_NAME SHADER_INCLUDE_FOLDER GENERATED
         set(GLOBAL_SHADER_VAR "D3D12_${GLOBAL_SHADER_VAR}")
 
         get_hlsl_shader_profile("${SHADER}" SHADER_PROFILE)
+        set(DXC_ENTRY_ARGS -E main)
+        if(SHADER_PROFILE MATCHES "^lib_")
+            set(DXC_ENTRY_ARGS "")
+        endif()
 
         set(DXIL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/dxil/${SHADER_BASE_NAME}.dxil")
         set(CPP_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/dxil_cpp/${HEADER_NAME}.h")
@@ -109,7 +115,7 @@ function(compile_hlsl_shader SHADERS TARGET_NAME SHADER_INCLUDE_FOLDER GENERATED
         add_custom_command(
             OUTPUT "${DXIL_FILE}"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/dxil"
-            COMMAND "${DXC_BIN}" -nologo -E main -T "${SHADER_PROFILE}" -I "${SHADER_INCLUDE_FOLDER}" -Fo "${DXIL_FILE}" "${SHADER}"
+            COMMAND "${DXC_BIN}" -nologo ${DXC_ENTRY_ARGS} -T "${SHADER_PROFILE}" -I "${SHADER_INCLUDE_FOLDER}" -Fo "${DXIL_FILE}" "${SHADER}"
             DEPENDS "${SHADER}" ${HLSL_INCLUDE_FILES}
             WORKING_DIRECTORY "${working_dir}"
             VERBATIM)
