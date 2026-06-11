@@ -4,6 +4,7 @@
 #include "runtime/function/render/render_helper.h"
 
 #include "runtime/function/render/render_mesh.h"
+#include "runtime/function/render/render_scene.h"
 
 #include "runtime/function/render/passes/main_camera_pass.h"
 
@@ -13,6 +14,29 @@
 
 namespace Piccolo
 {
+    namespace
+    {
+        bool supportsD3D12PathTracingMeshInputs(const std::shared_ptr<RHI>& rhi, bool static_geometry)
+        {
+            return static_geometry &&
+                   rhi != nullptr &&
+                   rhi->getBackendType() == RHIBackendType::D3D12 &&
+                   rhi->getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Supported;
+        }
+
+        RHIBufferUsageFlags withPathTracingBuildInputUsage(RHIBufferUsageFlags usage,
+                                                           const std::shared_ptr<RHI>& rhi,
+                                                           bool static_geometry)
+        {
+            if (supportsD3D12PathTracingMeshInputs(rhi, static_geometry))
+            {
+                usage |= RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                         RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            }
+            return usage;
+        }
+    } // namespace
+
     void RenderResource::clear()
     {
     }
@@ -113,6 +137,8 @@ namespace Piccolo
         std::shared_ptr<RenderScene>  render_scene,
         std::shared_ptr<RenderCamera> camera)
     {
+        m_current_render_scene = render_scene;
+
         Matrix4x4 view_matrix = camera->getViewMatrix();
         Matrix4x4 proj_matrix = camera->getPersProjMatrix(rhi->getBackendType() == RHIBackendType::Vulkan);
         Vector3   camera_position = camera->position();
@@ -164,6 +190,130 @@ namespace Piccolo
         m_particlebillboard_perframe_storage_buffer_object.right_direction  = camera->right();
         m_particlebillboard_perframe_storage_buffer_object.foward_direction = camera->forward();
         m_particlebillboard_perframe_storage_buffer_object.up_direction     = camera->up();
+    }
+
+    void RenderResource::ensurePathTracingBLAS(std::shared_ptr<RHI> rhi,
+                                               RHICommandBuffer* command_buffer,
+                                               RenderMeshGPUResource& mesh)
+    {
+        if (rhi == nullptr ||
+            rhi->getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Unsupported)
+        {
+            return;
+        }
+
+        if (command_buffer == nullptr)
+        {
+            LOG_WARN("Path tracing BLAS build skipped because command buffer is null");
+            return;
+        }
+
+        if (!mesh.path_tracing_static_opaque_supported)
+        {
+            return;
+        }
+
+        if (!mesh.path_tracing_blas_dirty && mesh.path_tracing_bottom_level_as != nullptr)
+        {
+            return;
+        }
+
+        if (mesh.mesh_vertex_position_buffer == nullptr ||
+            mesh.mesh_vertex_count == 0 ||
+            mesh.mesh_index_buffer == nullptr ||
+            mesh.mesh_index_count == 0)
+        {
+            LOG_WARN("Path tracing BLAS build skipped because mesh buffers are incomplete");
+            return;
+        }
+
+        if (mesh.path_tracing_bottom_level_as != nullptr)
+        {
+            rhi->destroyAccelerationStructure(mesh.path_tracing_bottom_level_as);
+            mesh.path_tracing_bottom_level_as = nullptr;
+        }
+
+        RHIAccelerationStructureGeometryDesc geometry;
+        geometry.vertex_position_buffer = mesh.mesh_vertex_position_buffer;
+        geometry.vertex_position_offset = 0;
+        geometry.vertex_count           = mesh.mesh_vertex_count;
+        geometry.vertex_stride          = sizeof(MeshVertex::VertexPosition);
+        geometry.index_buffer           = mesh.mesh_index_buffer;
+        geometry.index_offset           = 0;
+        geometry.index_count            = mesh.mesh_index_count;
+        geometry.index_type             = mesh.mesh_index_type;
+        geometry.opaque                 = true;
+
+        RHIAccelerationStructureBuildDesc build_desc;
+        build_desc.type              = RHIAccelerationStructureType::BottomLevel;
+        build_desc.geometries        = &geometry;
+        build_desc.geometry_count    = 1;
+        build_desc.prefer_fast_trace = true;
+        build_desc.allow_update      = false;
+        build_desc.perform_update    = false;
+        build_desc.source            = nullptr;
+
+        RHIAccelerationStructure* new_bottom_level_as = nullptr;
+        if (!rhi->createAccelerationStructure(&build_desc, new_bottom_level_as) ||
+            new_bottom_level_as == nullptr)
+        {
+            LOG_WARN("Path tracing BLAS creation failed");
+            return;
+        }
+
+        if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, new_bottom_level_as))
+        {
+            LOG_WARN("Path tracing BLAS build failed");
+            rhi->destroyAccelerationStructure(new_bottom_level_as);
+            return;
+        }
+
+        mesh.path_tracing_bottom_level_as = new_bottom_level_as;
+        mesh.path_tracing_blas_dirty      = false;
+    }
+
+    std::vector<RenderPathTracingCollectedInstance> RenderResource::collectPathTracingInstances(RenderScene& scene)
+    {
+        scene.rebuildPathTracingInstances(*this, true);
+
+        std::vector<RenderPathTracingCollectedInstance> collected_instances;
+        collected_instances.reserve(scene.m_path_tracing_instances.size());
+
+        for (RenderPathTracingInstance& source_instance : scene.m_path_tracing_instances)
+        {
+            if (!source_instance.enabled ||
+                source_instance.entity == nullptr ||
+                source_instance.mesh == nullptr ||
+                source_instance.material == nullptr)
+            {
+                continue;
+            }
+
+            RenderPathTracingCollectedInstance collected_instance;
+            collected_instance.bottom_level_as = source_instance.mesh->path_tracing_bottom_level_as;
+            collected_instance.instance_id     = source_instance.instance_id;
+            collected_instance.material_index  = source_instance.material_index;
+            collected_instance.mesh            = source_instance.mesh;
+            collected_instance.material        = source_instance.material;
+
+            const Matrix4x4& transform = source_instance.entity->m_model_matrix;
+            for (uint32_t row = 0; row < 3; ++row)
+            {
+                for (uint32_t column = 0; column < 4; ++column)
+                {
+                    collected_instance.row_major_3x4_transform[row * 4 + column] = transform[row][column];
+                }
+            }
+
+            collected_instances.push_back(collected_instance);
+        }
+
+        return collected_instances;
+    }
+
+    std::shared_ptr<RenderScene> RenderResource::getCurrentRenderScene() const
+    {
+        return m_current_render_scene.lock();
     }
 
     void RenderResource::createIBLSamplers(std::shared_ptr<RHI> rhi)
@@ -591,6 +741,8 @@ namespace Piccolo
         now_mesh.enable_vertex_blending = enable_vertex_blending;
         assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
         now_mesh.mesh_vertex_count = vertex_buffer_size / sizeof(MeshVertexDataDefinition);
+        now_mesh.path_tracing_static_opaque_supported = !enable_vertex_blending;
+        now_mesh.path_tracing_blas_dirty              = true;
         updateVertexBuffer(rhi,
                            enable_vertex_blending,
                            vertex_buffer_size,
@@ -602,6 +754,7 @@ namespace Piccolo
                            now_mesh);
         assert(0 == (index_buffer_size % sizeof(uint16_t)));
         now_mesh.mesh_index_count = index_buffer_size / sizeof(uint16_t);
+        now_mesh.mesh_index_type  = RHI_INDEX_TYPE_UINT16;
         updateIndexBuffer(rhi, index_buffer_size, index_buffer_data, now_mesh);
     }
 
@@ -719,7 +872,11 @@ namespace Piccolo
             // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 
-            bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+            const RHIBufferUsageFlags vertex_buffer_usage = withPathTracingBuildInputUsage(
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                rhi,
+                !enable_vertex_blending);
+            bufferInfo.usage = vertex_buffer_usage;
             bufferInfo.size = vertex_position_buffer_size;
             rhi->createBufferWithAllocation(&bufferInfo,
                                             RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -884,7 +1041,11 @@ namespace Piccolo
 
             // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-            bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+            const RHIBufferUsageFlags vertex_buffer_usage = withPathTracingBuildInputUsage(
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                rhi,
+                !enable_vertex_blending);
+            bufferInfo.usage = vertex_buffer_usage;
 
             bufferInfo.size = vertex_position_buffer_size;
             rhi->createBufferWithAllocation(&bufferInfo,
@@ -996,7 +1157,10 @@ namespace Piccolo
         // allocate asset index buffer in device local memory
         RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = buffer_size;
-        bufferInfo.usage = RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bufferInfo.usage = withPathTracingBuildInputUsage(
+            RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+            rhi,
+            now_mesh.path_tracing_static_opaque_supported);
 
         rhi->createBufferWithAllocation(&bufferInfo,
                                         RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,

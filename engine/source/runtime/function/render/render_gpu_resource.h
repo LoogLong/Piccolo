@@ -4,6 +4,7 @@
 #include "runtime/function/render/interface/rhi_allocation.h"
 
 #include <cstdint>
+#include <memory>
 
 namespace Piccolo
 {
@@ -28,9 +29,14 @@ namespace Piccolo
         RHIAllocation* mesh_vertex_varying_buffer_allocation {nullptr};
 
         uint32_t mesh_index_count {0};
+        RHIIndexType mesh_index_type {RHI_INDEX_TYPE_UINT16};
 
         RHIBuffer*     mesh_index_buffer {nullptr};
         RHIAllocation* mesh_index_buffer_allocation {nullptr};
+
+        RHIAccelerationStructure* path_tracing_bottom_level_as {nullptr};
+        bool                      path_tracing_blas_dirty {true};
+        bool                      path_tracing_static_opaque_supported {false};
     };
 
     struct RenderPBRMaterialGPUResource

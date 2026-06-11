@@ -33,6 +33,8 @@ namespace Piccolo
     class RHISampler { };
     class RHISemaphore { };
     class RHIShader { };
+    class RHIAccelerationStructure { };
+    class RHIShaderBindingTable { };
 
 
     ////////////////////struct//////////////////////////
@@ -105,6 +107,7 @@ namespace Piccolo
     struct RHISubpassDependency;
     struct RHISubpassDescription;
     struct RHIWriteDescriptorSet;
+    struct RHIWriteDescriptorSetAccelerationStructure;
     struct RHIOffset3D;
     struct RHIAttachmentReference;
     struct RHIComponentMapping;
@@ -1004,6 +1007,13 @@ namespace Piccolo
         RHIDescriptorImageInfo* pImageInfo = nullptr;
         RHIDescriptorBufferInfo* pBufferInfo = nullptr;
         RHIBufferView* pTexelBufferView = nullptr;
+        RHIWriteDescriptorSetAccelerationStructure* pAccelerationStructureInfo = nullptr;
+    };
+
+    struct RHIWriteDescriptorSetAccelerationStructure
+    {
+        uint32_t accelerationStructureCount {0};
+        RHIAccelerationStructure* const* pAccelerationStructures {nullptr};
     };
 
     struct RHIAttachmentReference
