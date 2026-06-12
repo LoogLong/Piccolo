@@ -37,6 +37,12 @@ namespace Piccolo
             uint32_t  extent[2] {0, 0};
             uint32_t  instance_count {0};
             uint32_t  _padding {0};
+            Vector4   ambient_light {0.02f, 0.02f, 0.02f, 0.0f};
+            RenderScenePointLight scene_point_lights[s_max_point_light_count] {};
+            RenderSceneDirectionalLight scene_directional_light {};
+            Matrix4x4 directional_light_proj_view {Matrix4x4::IDENTITY};
+            uint32_t point_light_count {0};
+            uint32_t _padding_light[3] {0, 0, 0};
         };
 
         void setupDescriptorSetLayout();

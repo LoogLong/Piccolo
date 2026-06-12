@@ -13,6 +13,8 @@ namespace Piccolo
 {
     namespace
     {
+        static constexpr uint32_t kPathTracingMaxMaterialTextureCount = 1024;
+
         bool matrixEquals(const Matrix4x4& lhs, const Matrix4x4& rhs)
         {
             return std::memcmp(lhs.m_mat, rhs.m_mat, sizeof(lhs.m_mat)) == 0;
@@ -193,7 +195,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[9] {};
+        RHIDescriptorSetLayoutBinding bindings[13] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -238,6 +240,26 @@ namespace Piccolo
         bindings[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[8].descriptorCount = 1;
         bindings[8].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[9].binding         = 9;
+        bindings[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[9].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        bindings[9].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[10].binding         = 1033;
+        bindings[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[10].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        bindings[10].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[11].binding         = 2057;
+        bindings[11].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[11].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        bindings[11].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[12].binding         = 3081;
+        bindings[12].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[12].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        bindings[12].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -437,12 +459,22 @@ namespace Piccolo
         }
 
         FrameData frame_data {};
+        const MeshPerframeStorageBufferObject& raster_frame =
+            m_render_resource_impl->m_mesh_perframe_storage_buffer_object;
         frame_data.proj_view_matrix_inv = current_proj_view_inv;
         frame_data.camera_position      = current_camera_position;
         frame_data.sample_index         = m_sample_index;
         frame_data.extent[0]            = extent.width;
         frame_data.extent[1]            = extent.height;
         frame_data.instance_count       = instance_count;
+        frame_data.ambient_light        = Vector4(raster_frame.ambient_light, 0.0f);
+        frame_data.scene_directional_light = raster_frame.scene_directional_light;
+        frame_data.directional_light_proj_view = raster_frame.directional_light_proj_view;
+        frame_data.point_light_count = std::min(raster_frame.point_light_num, s_max_point_light_count);
+        for (uint32_t light_index = 0; light_index < frame_data.point_light_count; ++light_index)
+        {
+            frame_data.scene_point_lights[light_index] = raster_frame.scene_point_lights[light_index];
+        }
 
         void* mapped_data = nullptr;
         if (!m_rhi->mapMemory(m_frame_data_memory, 0, sizeof(FrameData), 0, &mapped_data) ||
@@ -511,12 +543,97 @@ namespace Piccolo
         instance_buffer_info.offset = 0;
         instance_buffer_info.range  = RHI_WHOLE_SIZE;
 
+        const auto& material_texture_views = m_render_resource_impl->getPathTracingMaterialTextureViews();
+        RHIImageView* fallback_base_color = nullptr;
+        RHIImageView* fallback_metallic_roughness = nullptr;
+        RHIImageView* fallback_normal = nullptr;
+        RHIImageView* fallback_emissive = nullptr;
+        for (const auto& views : material_texture_views)
+        {
+            if (fallback_base_color == nullptr && views.base_color_image_view != nullptr)
+            {
+                fallback_base_color = views.base_color_image_view;
+            }
+            if (fallback_metallic_roughness == nullptr && views.metallic_roughness_image_view != nullptr)
+            {
+                fallback_metallic_roughness = views.metallic_roughness_image_view;
+            }
+            if (fallback_normal == nullptr && views.normal_image_view != nullptr)
+            {
+                fallback_normal = views.normal_image_view;
+            }
+            if (fallback_emissive == nullptr && views.emissive_image_view != nullptr)
+            {
+                fallback_emissive = views.emissive_image_view;
+            }
+        }
+        if (fallback_base_color == nullptr ||
+            fallback_metallic_roughness == nullptr ||
+            fallback_normal == nullptr ||
+            fallback_emissive == nullptr)
+        {
+            return false;
+        }
+
+        RHISampler* default_sampler = m_rhi->getOrCreateDefaultSampler(Default_Sampler_Linear);
+        if (default_sampler == nullptr)
+        {
+            return false;
+        }
+
+        std::vector<RHIDescriptorImageInfo> base_color_infos(kPathTracingMaxMaterialTextureCount);
+        std::vector<RHIDescriptorImageInfo> metallic_roughness_infos(kPathTracingMaxMaterialTextureCount);
+        std::vector<RHIDescriptorImageInfo> normal_infos(kPathTracingMaxMaterialTextureCount);
+        std::vector<RHIDescriptorImageInfo> emissive_infos(kPathTracingMaxMaterialTextureCount);
+
+        for (uint32_t texture_index = 0; texture_index < kPathTracingMaxMaterialTextureCount; ++texture_index)
+        {
+            base_color_infos[texture_index].imageView = fallback_base_color;
+            base_color_infos[texture_index].sampler = default_sampler;
+            base_color_infos[texture_index].imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            metallic_roughness_infos[texture_index].imageView = fallback_metallic_roughness;
+            metallic_roughness_infos[texture_index].sampler = default_sampler;
+            metallic_roughness_infos[texture_index].imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            normal_infos[texture_index].imageView = fallback_normal;
+            normal_infos[texture_index].sampler = default_sampler;
+            normal_infos[texture_index].imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            emissive_infos[texture_index].imageView = fallback_emissive;
+            emissive_infos[texture_index].sampler = default_sampler;
+            emissive_infos[texture_index].imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        const uint32_t material_count =
+            std::min(static_cast<uint32_t>(material_texture_views.size()), kPathTracingMaxMaterialTextureCount);
+        for (uint32_t material_index = 0; material_index < material_count; ++material_index)
+        {
+            const RenderPathTracingMaterialTextureViews& views = material_texture_views[material_index];
+            if (views.base_color_image_view != nullptr)
+            {
+                base_color_infos[material_index].imageView = views.base_color_image_view;
+            }
+            if (views.metallic_roughness_image_view != nullptr)
+            {
+                metallic_roughness_infos[material_index].imageView = views.metallic_roughness_image_view;
+            }
+            if (views.normal_image_view != nullptr)
+            {
+                normal_infos[material_index].imageView = views.normal_image_view;
+            }
+            if (views.emissive_image_view != nullptr)
+            {
+                emissive_infos[material_index].imageView = views.emissive_image_view;
+            }
+        }
+
         RHIAccelerationStructure* top_level_as = m_top_level_as;
         RHIWriteDescriptorSetAccelerationStructure acceleration_structure_info {};
         acceleration_structure_info.accelerationStructureCount = 1;
         acceleration_structure_info.pAccelerationStructures    = &top_level_as;
 
-        RHIWriteDescriptorSet writes[9] {};
+        RHIWriteDescriptorSet writes[13] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = m_descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -579,6 +696,34 @@ namespace Piccolo
         writes[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[8].descriptorCount = 1;
         writes[8].pBufferInfo     = &instance_buffer_info;
+
+        writes[9].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[9].dstSet          = m_descriptor_set;
+        writes[9].dstBinding      = 9;
+        writes[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[9].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        writes[9].pImageInfo      = base_color_infos.data();
+
+        writes[10].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[10].dstSet          = m_descriptor_set;
+        writes[10].dstBinding      = 1033;
+        writes[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[10].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        writes[10].pImageInfo      = metallic_roughness_infos.data();
+
+        writes[11].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet          = m_descriptor_set;
+        writes[11].dstBinding      = 2057;
+        writes[11].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[11].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        writes[11].pImageInfo      = normal_infos.data();
+
+        writes[12].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[12].dstSet          = m_descriptor_set;
+        writes[12].dstBinding      = 3081;
+        writes[12].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[12].descriptorCount = kPathTracingMaxMaterialTextureCount;
+        writes[12].pImageInfo      = emissive_infos.data();
 
         m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
         m_descriptor_set_dirty = false;

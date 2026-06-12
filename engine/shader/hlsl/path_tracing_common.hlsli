@@ -3,6 +3,7 @@
 
 #define PICCOLO_PATH_TRACING_INVALID_INDEX 0xffffffffu
 #define PICCOLO_PATH_TRACING_MATERIAL_FLAG_DOUBLE_SIDED 1u
+#define PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES 1024
 
 struct PathTracingFrameData
 {
@@ -12,6 +13,12 @@ struct PathTracingFrameData
     uint2 extent;
     uint instance_count;
     uint _padding;
+    float4 ambient_light;
+    PointLight scene_point_lights[M_MAX_POINT_LIGHT_COUNT];
+    DirectionalLight scene_directional_light;
+    row_major float4x4 directional_light_proj_view;
+    uint point_light_count;
+    uint3 _padding_light;
 };
 
 struct PathTracingVertexData
