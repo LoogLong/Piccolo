@@ -10,14 +10,6 @@ StructuredBuffer<uint> g_indices : register(t5, space0);
 StructuredBuffer<PathTracingMaterialData> g_materials : register(t6, space0);
 StructuredBuffer<PathTracingGeometryData> g_geometries : register(t7, space0);
 StructuredBuffer<PathTracingInstanceData> g_instances : register(t8, space0);
-Texture2D<float4> g_base_color_textures[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t9, space0);
-Texture2D<float4> g_metallic_roughness_textures[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t1033, space0);
-Texture2D<float4> g_normal_textures[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t2057, space0);
-Texture2D<float4> g_emissive_textures[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t3081, space0);
-SamplerState g_base_color_sampler : register(s9, space0);
-SamplerState g_metallic_roughness_sampler : register(s1033, space0);
-SamplerState g_normal_sampler : register(s2057, space0);
-SamplerState g_emissive_sampler : register(s3081, space0);
 
 struct PathTracingRayPayload
 {
@@ -110,43 +102,17 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
         normal_ws = -normal_ws;
     }
 
-    float4 base_color_sample = float4(1.0f, 1.0f, 1.0f, 1.0f);
-    if (material_data.base_color_texture_index != PICCOLO_PATH_TRACING_INVALID_INDEX)
+    const float3 base_color = material_data.base_color_factor.rgb;
+    const float metallic = saturate(material_data.metallic_roughness_normal_occlusion.x);
+    const float roughness = max(0.04f, saturate(material_data.metallic_roughness_normal_occlusion.y));
+    const float3 emissive = material_data.emissive_factor.rgb;
+
+    float3 n = normal_ws;
+    if (dot(n, n) < 1e-6f)
     {
-        base_color_sample =
-            g_base_color_textures[material_data.base_color_texture_index].SampleLevel(g_base_color_sampler, texcoord, 0.0f);
+        n = float3(0.0f, 1.0f, 0.0f);
     }
-
-    float4 mr_sample = float4(1.0f, 1.0f, 1.0f, 1.0f);
-    if (material_data.metallic_roughness_texture_index != PICCOLO_PATH_TRACING_INVALID_INDEX)
-    {
-        mr_sample = g_metallic_roughness_textures[material_data.metallic_roughness_texture_index].SampleLevel(
-            g_metallic_roughness_sampler,
-            texcoord,
-            0.0f);
-    }
-
-    float3 tangent_normal = float3(0.0f, 0.0f, 1.0f);
-    if (material_data.normal_texture_index != PICCOLO_PATH_TRACING_INVALID_INDEX)
-    {
-        tangent_normal =
-            g_normal_textures[material_data.normal_texture_index].SampleLevel(g_normal_sampler, texcoord, 0.0f).xyz * 2.0f -
-            1.0f;
-    }
-
-    float3 emissive_sample = float3(1.0f, 1.0f, 1.0f);
-    if (material_data.emissive_texture_index != PICCOLO_PATH_TRACING_INVALID_INDEX)
-    {
-        emissive_sample =
-            g_emissive_textures[material_data.emissive_texture_index].SampleLevel(g_emissive_sampler, texcoord, 0.0f).rgb;
-    }
-
-    const float3 base_color = base_color_sample.rgb * material_data.base_color_factor.rgb;
-    const float metallic = saturate(mr_sample.b * material_data.metallic_roughness_normal_occlusion.x);
-    const float roughness = max(0.04f, saturate(mr_sample.g * material_data.metallic_roughness_normal_occlusion.y));
-    const float3 emissive = emissive_sample * material_data.emissive_factor.rgb;
-
-    const float3 n = normalize(CalculateTangentNormal(normal_ws, tangent_ws, tangent_normal));
+    n = normalize(n);
     const float3 v = normalize(g_frame_data.camera_position - world_position);
     const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base_color, metallic);
 

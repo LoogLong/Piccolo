@@ -404,10 +404,13 @@ namespace Piccolo
             m_path_tracing_material_texture_views.push_back(texture_views);
 
             // Update material texture indices (set to material index for now)
-            m_path_tracing_material_data[shader_material_index].base_color_texture_index = shader_material_index;
-            m_path_tracing_material_data[shader_material_index].metallic_roughness_texture_index = shader_material_index;
-            m_path_tracing_material_data[shader_material_index].normal_texture_index = shader_material_index;
-            m_path_tracing_material_data[shader_material_index].emissive_texture_index = shader_material_index;
+            const uint32_t bounded_texture_index =
+                shader_material_index < 1024u ? shader_material_index : UINT32_MAX;
+            m_path_tracing_material_data[shader_material_index].base_color_texture_index = bounded_texture_index;
+            m_path_tracing_material_data[shader_material_index].metallic_roughness_texture_index =
+                bounded_texture_index;
+            m_path_tracing_material_data[shader_material_index].normal_texture_index = bounded_texture_index;
+            m_path_tracing_material_data[shader_material_index].emissive_texture_index = bounded_texture_index;
 
             // Build instance record
             RenderPathTracingInstanceGPUData instance_data{};
