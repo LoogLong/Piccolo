@@ -43,13 +43,26 @@ namespace Piccolo
             return;
         }
 
-        setupDescriptorSetLayout();
-        setupPipelineLayout();
-        setupDescriptorSet();
-        ensureFrameDataBuffer();
-        setupRayTracingPipeline();
-        setupShaderBindingTable();
-        updateDescriptorSet();
+        try
+        {
+            setupDescriptorSetLayout();
+            setupPipelineLayout();
+            setupDescriptorSet();
+            if (!ensureFrameDataBuffer())
+            {
+                return;
+            }
+            if (!setupRayTracingPipeline() || !setupShaderBindingTable())
+            {
+                return;
+            }
+            updateDescriptorSet();
+        }
+        catch (const std::exception& e)
+        {
+            LOG_WARN("Path tracing pass initialization failed and will fall back to raster: {}", e.what());
+            return;
+        }
     }
 
     void PathTracingPass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
