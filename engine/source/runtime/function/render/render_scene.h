@@ -101,6 +101,10 @@ namespace Piccolo
         std::unordered_map<uint32_t, GObjectID> m_mesh_object_id_map;
         std::vector<PathTracingEntitySignature> m_path_tracing_entity_signatures;
 
+        uint32_t m_last_path_tracing_skipped_skinned {UINT32_MAX};
+        uint32_t m_last_path_tracing_skipped_transparent {UINT32_MAX};
+        uint32_t m_last_path_tracing_skipped_missing {UINT32_MAX};
+
         void updateVisibleObjectsDirectionalLight(std::shared_ptr<RenderResource> render_resource,
                                                   std::shared_ptr<RenderCamera>   camera);
         void updateVisibleObjectsPointLight(std::shared_ptr<RenderResource> render_resource);
