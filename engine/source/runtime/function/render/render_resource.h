@@ -19,6 +19,7 @@ namespace Piccolo
     class RenderPassBase;
     class RenderCamera;
     class RenderScene;
+    class RenderEntity;
 
     struct RenderPathTracingCollectedInstance
     {
@@ -28,6 +29,55 @@ namespace Piccolo
         uint32_t                        material_index {0};
         RenderMeshGPUResource*          mesh {nullptr};
         RenderPBRMaterialGPUResource*   material {nullptr};
+        RenderEntity* entity {nullptr};
+        uint32_t shader_instance_index {0};
+    };
+
+    struct RenderPathTracingVertexGPUData
+    {
+        Vector4 position {0.0f, 0.0f, 0.0f, 1.0f};
+        Vector4 normal {0.0f, 1.0f, 0.0f, 0.0f};
+        Vector4 tangent {1.0f, 0.0f, 0.0f, 0.0f};
+        Vector4 texcoord {0.0f, 0.0f, 0.0f, 0.0f};
+    };
+
+    struct RenderPathTracingMaterialGPUData
+    {
+        Vector4 base_color_factor {1.0f, 1.0f, 1.0f, 1.0f};
+        Vector4 emissive_factor {0.0f, 0.0f, 0.0f, 0.0f};
+        Vector4 metallic_roughness_normal_occlusion {1.0f, 1.0f, 1.0f, 1.0f};
+        uint32_t base_color_texture_index {UINT32_MAX};
+        uint32_t metallic_roughness_texture_index {UINT32_MAX};
+        uint32_t normal_texture_index {UINT32_MAX};
+        uint32_t emissive_texture_index {UINT32_MAX};
+        uint32_t flags {0};
+        uint32_t _padding[3] {0, 0, 0};
+    };
+
+    struct RenderPathTracingGeometryGPUData
+    {
+        uint32_t vertex_offset {0};
+        uint32_t index_offset {0};
+        uint32_t index_count {0};
+        uint32_t _padding {0};
+    };
+
+    struct RenderPathTracingInstanceGPUData
+    {
+        uint32_t geometry_index {0};
+        uint32_t material_index {0};
+        uint32_t entity_instance_id {0};
+        uint32_t flags {0};
+    };
+
+    static constexpr uint32_t kPathTracingMaterialFlagDoubleSided = 1u << 0;
+
+    struct RenderPathTracingMaterialTextureViews
+    {
+        RHIImageView* base_color_image_view {nullptr};
+        RHIImageView* metallic_roughness_image_view {nullptr};
+        RHIImageView* normal_image_view {nullptr};
+        RHIImageView* emissive_image_view {nullptr};
     };
 
     struct IBLResource
@@ -145,6 +195,20 @@ namespace Piccolo
 
         std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
 
+        bool updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
+                                           const std::vector<RenderPathTracingCollectedInstance>& collected_instances);
+
+        RHIBuffer* getPathTracingVertexBuffer() const { return m_path_tracing_vertex_buffer; }
+        RHIBuffer* getPathTracingIndexBuffer() const { return m_path_tracing_index_buffer; }
+        RHIBuffer* getPathTracingMaterialBuffer() const { return m_path_tracing_material_buffer; }
+        RHIBuffer* getPathTracingGeometryBuffer() const { return m_path_tracing_geometry_buffer; }
+        RHIBuffer* getPathTracingInstanceBuffer() const { return m_path_tracing_instance_buffer; }
+
+        const std::vector<RenderPathTracingMaterialTextureViews>& getPathTracingMaterialTextureViews() const
+        {
+            return m_path_tracing_material_texture_views;
+        }
+
         std::shared_ptr<RenderScene> getCurrentRenderScene() const;
 
         void resetRingBufferOffset(uint8_t current_frame_index);
@@ -172,6 +236,31 @@ namespace Piccolo
 
     private:
         std::weak_ptr<RenderScene> m_current_render_scene;
+
+        // Path tracing scene data
+        std::vector<RenderPathTracingVertexGPUData> m_path_tracing_vertex_data;
+        std::vector<uint32_t> m_path_tracing_index_data;
+        std::vector<RenderPathTracingMaterialGPUData> m_path_tracing_material_data;
+        std::vector<RenderPathTracingGeometryGPUData> m_path_tracing_geometry_data;
+        std::vector<RenderPathTracingInstanceGPUData> m_path_tracing_instance_data;
+        std::vector<RenderPathTracingMaterialTextureViews> m_path_tracing_material_texture_views;
+        
+        RHIBuffer* m_path_tracing_vertex_buffer {nullptr};
+        RHIDeviceMemory* m_path_tracing_vertex_buffer_memory {nullptr};
+        RHIBuffer* m_path_tracing_index_buffer {nullptr};
+        RHIDeviceMemory* m_path_tracing_index_buffer_memory {nullptr};
+        RHIBuffer* m_path_tracing_material_buffer {nullptr};
+        RHIDeviceMemory* m_path_tracing_material_buffer_memory {nullptr};
+        RHIBuffer* m_path_tracing_geometry_buffer {nullptr};
+        RHIDeviceMemory* m_path_tracing_geometry_buffer_memory {nullptr};
+        RHIBuffer* m_path_tracing_instance_buffer {nullptr};
+        RHIDeviceMemory* m_path_tracing_instance_buffer_memory {nullptr};
+        
+        size_t m_path_tracing_vertex_buffer_capacity {0};
+        size_t m_path_tracing_index_buffer_capacity {0};
+        size_t m_path_tracing_material_buffer_capacity {0};
+        size_t m_path_tracing_geometry_buffer_capacity {0};
+        size_t m_path_tracing_instance_buffer_capacity {0};
 
         void createAndMapStorageBuffer(std::shared_ptr<RHI> rhi);
         void createIBLSamplers(std::shared_ptr<RHI> rhi);

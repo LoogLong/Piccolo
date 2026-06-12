@@ -117,7 +117,13 @@ namespace Piccolo
                model_matrix == rhs.model_matrix &&
                enable_vertex_blending == rhs.enable_vertex_blending &&
                blend == rhs.blend &&
-               base_color_factor == rhs.base_color_factor;
+               base_color_factor == rhs.base_color_factor &&
+               double_sided == rhs.double_sided &&
+               metallic_factor == rhs.metallic_factor &&
+               roughness_factor == rhs.roughness_factor &&
+               normal_scale == rhs.normal_scale &&
+               occlusion_strength == rhs.occlusion_strength &&
+               emissive_factor == rhs.emissive_factor;
     }
 
     void RenderScene::markPathTracingSceneDirty()
@@ -150,6 +156,12 @@ namespace Piccolo
             signature.enable_vertex_blending = entity.m_enable_vertex_blending;
             signature.blend                  = entity.m_blend;
             signature.base_color_factor      = entity.m_base_color_factor;
+            signature.double_sided           = entity.m_double_sided;
+            signature.metallic_factor        = entity.m_metallic_factor;
+            signature.roughness_factor       = entity.m_roughness_factor;
+            signature.normal_scale           = entity.m_normal_scale;
+            signature.occlusion_strength     = entity.m_occlusion_strength;
+            signature.emissive_factor        = entity.m_emissive_factor;
             current_signatures.push_back(signature);
         }
 

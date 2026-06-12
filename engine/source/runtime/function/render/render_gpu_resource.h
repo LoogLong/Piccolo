@@ -2,9 +2,12 @@
 
 #include "runtime/function/render/interface/rhi.h"
 #include "runtime/function/render/interface/rhi_allocation.h"
+#include "runtime/core/math/vector2.h"
+#include "runtime/core/math/vector3.h"
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace Piccolo
 {
@@ -37,6 +40,13 @@ namespace Piccolo
         RHIAccelerationStructure* path_tracing_bottom_level_as {nullptr};
         bool                      path_tracing_blas_dirty {true};
         bool                      path_tracing_static_opaque_supported {false};
+
+        std::vector<Vector3>  path_tracing_positions;
+        std::vector<Vector3>  path_tracing_normals;
+        std::vector<Vector3>  path_tracing_tangents;
+        std::vector<Vector2>  path_tracing_texcoords;
+        std::vector<uint32_t> path_tracing_indices;
+        bool                  path_tracing_geometry_dirty {true};
     };
 
     struct RenderPBRMaterialGPUResource

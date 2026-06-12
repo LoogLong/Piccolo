@@ -193,7 +193,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[4] {};
+        RHIDescriptorSetLayoutBinding bindings[9] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -207,12 +207,37 @@ namespace Piccolo
         bindings[2].binding         = 2;
         bindings[2].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[2].descriptorCount = 1;
-        bindings[2].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+        bindings[2].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[3].binding         = 3;
         bindings[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bindings[3].descriptorCount = 1;
         bindings[3].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+        bindings[4].binding         = 4;
+        bindings[4].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[4].descriptorCount = 1;
+        bindings[4].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[5].binding         = 5;
+        bindings[5].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[5].descriptorCount = 1;
+        bindings[5].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[6].binding         = 6;
+        bindings[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[6].descriptorCount = 1;
+        bindings[6].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[7].binding         = 7;
+        bindings[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[7].descriptorCount = 1;
+        bindings[7].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[8].binding         = 8;
+        bindings[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[8].descriptorCount = 1;
+        bindings[8].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -437,7 +462,13 @@ namespace Piccolo
             m_top_level_as == nullptr ||
             m_scene_output_image_view == nullptr ||
             m_accumulation_image_view == nullptr ||
-            m_frame_data_buffer == nullptr)
+            m_frame_data_buffer == nullptr ||
+            m_render_resource_impl == nullptr ||
+            m_render_resource_impl->getPathTracingVertexBuffer() == nullptr ||
+            m_render_resource_impl->getPathTracingIndexBuffer() == nullptr ||
+            m_render_resource_impl->getPathTracingMaterialBuffer() == nullptr ||
+            m_render_resource_impl->getPathTracingGeometryBuffer() == nullptr ||
+            m_render_resource_impl->getPathTracingInstanceBuffer() == nullptr)
         {
             return false;
         }
@@ -455,12 +486,37 @@ namespace Piccolo
         frame_data_info.offset = 0;
         frame_data_info.range  = sizeof(FrameData);
 
+        RHIDescriptorBufferInfo vertex_buffer_info {};
+        vertex_buffer_info.buffer = m_render_resource_impl->getPathTracingVertexBuffer();
+        vertex_buffer_info.offset = 0;
+        vertex_buffer_info.range  = RHI_WHOLE_SIZE;
+
+        RHIDescriptorBufferInfo index_buffer_info {};
+        index_buffer_info.buffer = m_render_resource_impl->getPathTracingIndexBuffer();
+        index_buffer_info.offset = 0;
+        index_buffer_info.range  = RHI_WHOLE_SIZE;
+
+        RHIDescriptorBufferInfo material_buffer_info {};
+        material_buffer_info.buffer = m_render_resource_impl->getPathTracingMaterialBuffer();
+        material_buffer_info.offset = 0;
+        material_buffer_info.range  = RHI_WHOLE_SIZE;
+
+        RHIDescriptorBufferInfo geometry_buffer_info {};
+        geometry_buffer_info.buffer = m_render_resource_impl->getPathTracingGeometryBuffer();
+        geometry_buffer_info.offset = 0;
+        geometry_buffer_info.range  = RHI_WHOLE_SIZE;
+
+        RHIDescriptorBufferInfo instance_buffer_info {};
+        instance_buffer_info.buffer = m_render_resource_impl->getPathTracingInstanceBuffer();
+        instance_buffer_info.offset = 0;
+        instance_buffer_info.range  = RHI_WHOLE_SIZE;
+
         RHIAccelerationStructure* top_level_as = m_top_level_as;
         RHIWriteDescriptorSetAccelerationStructure acceleration_structure_info {};
         acceleration_structure_info.accelerationStructureCount = 1;
         acceleration_structure_info.pAccelerationStructures    = &top_level_as;
 
-        RHIWriteDescriptorSet writes[4] {};
+        RHIWriteDescriptorSet writes[9] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = m_descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -488,6 +544,41 @@ namespace Piccolo
         writes[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[3].descriptorCount = 1;
         writes[3].pImageInfo      = &accumulation_info;
+
+        writes[4].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet          = m_descriptor_set;
+        writes[4].dstBinding      = 4;
+        writes[4].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[4].descriptorCount = 1;
+        writes[4].pBufferInfo     = &vertex_buffer_info;
+
+        writes[5].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet          = m_descriptor_set;
+        writes[5].dstBinding      = 5;
+        writes[5].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[5].descriptorCount = 1;
+        writes[5].pBufferInfo     = &index_buffer_info;
+
+        writes[6].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[6].dstSet          = m_descriptor_set;
+        writes[6].dstBinding      = 6;
+        writes[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[6].descriptorCount = 1;
+        writes[6].pBufferInfo     = &material_buffer_info;
+
+        writes[7].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[7].dstSet          = m_descriptor_set;
+        writes[7].dstBinding      = 7;
+        writes[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[7].descriptorCount = 1;
+        writes[7].pBufferInfo     = &geometry_buffer_info;
+
+        writes[8].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[8].dstSet          = m_descriptor_set;
+        writes[8].dstBinding      = 8;
+        writes[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[8].descriptorCount = 1;
+        writes[8].pBufferInfo     = &instance_buffer_info;
 
         m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
         m_descriptor_set_dirty = false;
@@ -531,6 +622,19 @@ namespace Piccolo
             m_tlas_instance_count = 0;
             return false;
         }
+
+        // Assign shader instance indices
+        for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
+        {
+            collected_instances[instance_index].shader_instance_index = instance_index;
+        }
+
+        // Update path tracing scene buffers
+        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
+        {
+            return false;
+        }
+        m_descriptor_set_dirty = true;
 
         const bool tlas_dirty =
             scene.isPathTracingTLASDirty() ||

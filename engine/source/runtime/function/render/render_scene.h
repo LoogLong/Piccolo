@@ -90,6 +90,12 @@ namespace Piccolo
             bool      enable_vertex_blending {false};
             bool      blend {false};
             Vector4   base_color_factor {1.0f, 1.0f, 1.0f, 1.0f};
+            bool      double_sided {false};
+            float     metallic_factor {1.0f};
+            float     roughness_factor {1.0f};
+            float     normal_scale {1.0f};
+            float     occlusion_strength {1.0f};
+            Vector3   emissive_factor {0.0f, 0.0f, 0.0f};
 
             bool operator==(const PathTracingEntitySignature& rhs) const;
         };

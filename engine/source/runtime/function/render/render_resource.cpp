@@ -11,6 +11,7 @@
 #include "runtime/core/base/macro.h"
 
 #include <stdexcept>
+#include <cstring>
 
 namespace Piccolo
 {
@@ -295,6 +296,7 @@ namespace Piccolo
             collected_instance.material_index  = source_instance.material_index;
             collected_instance.mesh            = source_instance.mesh;
             collected_instance.material        = source_instance.material;
+            collected_instance.entity          = source_instance.entity;
 
             const Matrix4x4& transform = source_instance.entity->m_model_matrix;
             for (uint32_t row = 0; row < 3; ++row)
@@ -314,6 +316,211 @@ namespace Piccolo
     std::shared_ptr<RenderScene> RenderResource::getCurrentRenderScene() const
     {
         return m_current_render_scene.lock();
+    }
+
+    bool RenderResource::updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
+                                                       const std::vector<RenderPathTracingCollectedInstance>& collected_instances)
+    {
+        m_path_tracing_vertex_data.clear();
+        m_path_tracing_index_data.clear();
+        m_path_tracing_material_data.clear();
+        m_path_tracing_geometry_data.clear();
+        m_path_tracing_instance_data.clear();
+        m_path_tracing_material_texture_views.clear();
+
+        std::map<RenderMeshGPUResource*, uint32_t> geometry_indices;
+
+        for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
+        {
+            const RenderPathTracingCollectedInstance& source_instance = collected_instances[instance_index];
+
+            // Build geometry record
+            uint32_t geometry_index = 0;
+            auto geometry_it = geometry_indices.find(source_instance.mesh);
+            if (geometry_it == geometry_indices.end())
+            {
+                geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
+                geometry_indices[source_instance.mesh] = geometry_index;
+
+                // Append this mesh's vertices and indices to global arrays
+                RenderPathTracingGeometryGPUData geometry_data{};
+                geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
+                geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                geometry_data.index_count = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+
+                // Append vertices
+                for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
+                {
+                    RenderPathTracingVertexGPUData vertex{};
+                    vertex.position = Vector4(source_instance.mesh->path_tracing_positions[v], 1.0f);
+                    vertex.normal = Vector4(source_instance.mesh->path_tracing_normals[v], 0.0f);
+                    vertex.tangent = Vector4(source_instance.mesh->path_tracing_tangents[v], 0.0f);
+                    vertex.texcoord = Vector4(source_instance.mesh->path_tracing_texcoords[v].x,
+                                              source_instance.mesh->path_tracing_texcoords[v].y,
+                                              0.0f,
+                                              0.0f);
+                    m_path_tracing_vertex_data.push_back(vertex);
+                }
+
+                // Append indices
+                for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                {
+                    m_path_tracing_index_data.push_back(idx);
+                }
+
+                m_path_tracing_geometry_data.push_back(geometry_data);
+            }
+            else
+            {
+                geometry_index = geometry_it->second;
+            }
+
+            // Build material record
+            RenderPathTracingMaterialGPUData material_data{};
+            if (source_instance.entity != nullptr)
+            {
+                material_data.base_color_factor = source_instance.entity->m_base_color_factor;
+                material_data.emissive_factor = Vector4(source_instance.entity->m_emissive_factor, 0.0f);
+                material_data.metallic_roughness_normal_occlusion = Vector4(
+                    source_instance.entity->m_metallic_factor,
+                    source_instance.entity->m_roughness_factor,
+                    source_instance.entity->m_normal_scale,
+                    source_instance.entity->m_occlusion_strength
+                );
+                material_data.flags = source_instance.entity->m_double_sided ? kPathTracingMaterialFlagDoubleSided : 0u;
+            }
+            const uint32_t shader_material_index = static_cast<uint32_t>(m_path_tracing_material_data.size());
+            m_path_tracing_material_data.push_back(material_data);
+
+            // Build texture views record
+            RenderPathTracingMaterialTextureViews texture_views{};
+            if (source_instance.material != nullptr)
+            {
+                texture_views.base_color_image_view = source_instance.material->base_color_image_view;
+                texture_views.metallic_roughness_image_view = source_instance.material->metallic_roughness_image_view;
+                texture_views.normal_image_view = source_instance.material->normal_image_view;
+                texture_views.emissive_image_view = source_instance.material->emissive_image_view;
+            }
+            m_path_tracing_material_texture_views.push_back(texture_views);
+
+            // Update material texture indices (set to material index for now)
+            m_path_tracing_material_data[shader_material_index].base_color_texture_index = shader_material_index;
+            m_path_tracing_material_data[shader_material_index].metallic_roughness_texture_index = shader_material_index;
+            m_path_tracing_material_data[shader_material_index].normal_texture_index = shader_material_index;
+            m_path_tracing_material_data[shader_material_index].emissive_texture_index = shader_material_index;
+
+            // Build instance record
+            RenderPathTracingInstanceGPUData instance_data{};
+            instance_data.geometry_index = geometry_index;
+            instance_data.material_index = shader_material_index;
+            instance_data.entity_instance_id = source_instance.instance_id;
+            instance_data.flags = 0;
+            m_path_tracing_instance_data.push_back(instance_data);
+        }
+
+        // Upload buffers to GPU
+        const RHIBufferUsageFlags usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        const RHIMemoryPropertyFlags memory_properties = RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                         RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+        // Helper lambda to allocate or update a buffer
+        auto update_buffer = [rhi, usage, memory_properties](
+            RHIBuffer*& buffer,
+            RHIDeviceMemory*& buffer_memory,
+            size_t& capacity,
+            const void* data,
+            size_t data_size) -> bool
+        {
+            if (data_size == 0)
+            {
+                return true;
+            }
+
+            if (data_size > capacity)
+            {
+                // Destroy old buffer and memory
+                if (buffer != nullptr)
+                {
+                    rhi->destroyBuffer(buffer);
+                    buffer = nullptr;
+                }
+                if (buffer_memory != nullptr)
+                {
+                    rhi->freeMemory(buffer_memory);
+                    buffer_memory = nullptr;
+                }
+
+                capacity = data_size * 2; // Allocate with 2x padding for future growth
+
+                rhi->createBuffer(static_cast<RHIDeviceSize>(capacity), usage, memory_properties, buffer, buffer_memory);
+                if (buffer == nullptr || buffer_memory == nullptr)
+                {
+                    LOG_ERROR("Failed to create path tracing buffer");
+                    return false;
+                }
+            }
+
+            // Map and copy data
+            void* mapped_ptr = nullptr;
+            if (!rhi->mapMemory(buffer_memory, 0, data_size, 0, &mapped_ptr))
+            {
+                LOG_ERROR("Failed to map path tracing buffer memory");
+                return false;
+            }
+
+            std::memcpy(mapped_ptr, data, data_size);
+            rhi->unmapMemory(buffer_memory);
+
+            return true;
+        };
+
+        // Update all buffers
+        if (!update_buffer(m_path_tracing_vertex_buffer,
+                          m_path_tracing_vertex_buffer_memory,
+                          m_path_tracing_vertex_buffer_capacity,
+                          m_path_tracing_vertex_data.data(),
+                          m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData)))
+        {
+            return false;
+        }
+
+        if (!update_buffer(m_path_tracing_index_buffer,
+                          m_path_tracing_index_buffer_memory,
+                          m_path_tracing_index_buffer_capacity,
+                          m_path_tracing_index_data.data(),
+                          m_path_tracing_index_data.size() * sizeof(uint32_t)))
+        {
+            return false;
+        }
+
+        if (!update_buffer(m_path_tracing_material_buffer,
+                          m_path_tracing_material_buffer_memory,
+                          m_path_tracing_material_buffer_capacity,
+                          m_path_tracing_material_data.data(),
+                          m_path_tracing_material_data.size() * sizeof(RenderPathTracingMaterialGPUData)))
+        {
+            return false;
+        }
+
+        if (!update_buffer(m_path_tracing_geometry_buffer,
+                          m_path_tracing_geometry_buffer_memory,
+                          m_path_tracing_geometry_buffer_capacity,
+                          m_path_tracing_geometry_data.data(),
+                          m_path_tracing_geometry_data.size() * sizeof(RenderPathTracingGeometryGPUData)))
+        {
+            return false;
+        }
+
+        if (!update_buffer(m_path_tracing_instance_buffer,
+                          m_path_tracing_instance_buffer_memory,
+                          m_path_tracing_instance_buffer_capacity,
+                          m_path_tracing_instance_data.data(),
+                          m_path_tracing_instance_data.size() * sizeof(RenderPathTracingInstanceGPUData)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     void RenderResource::createIBLSamplers(std::shared_ptr<RHI> rhi)
@@ -842,6 +1049,25 @@ namespace Piccolo
                     Vector2(vertex_buffer_data[vertex_index].u, vertex_buffer_data[vertex_index].v);
             }
 
+            now_mesh.path_tracing_positions.resize(vertex_count);
+            now_mesh.path_tracing_normals.resize(vertex_count);
+            now_mesh.path_tracing_tangents.resize(vertex_count);
+            now_mesh.path_tracing_texcoords.resize(vertex_count);
+            for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+            {
+                now_mesh.path_tracing_positions[vertex_index] = mesh_vertex_positions[vertex_index].position;
+                now_mesh.path_tracing_normals[vertex_index]   = mesh_vertex_blending_varyings[vertex_index].normal;
+                now_mesh.path_tracing_tangents[vertex_index]  = mesh_vertex_blending_varyings[vertex_index].tangent;
+                now_mesh.path_tracing_texcoords[vertex_index] = mesh_vertex_varyings[vertex_index].texcoord;
+            }
+
+            now_mesh.path_tracing_indices.resize(index_count);
+            for (uint32_t index_index = 0; index_index < index_count; ++index_index)
+            {
+                now_mesh.path_tracing_indices[index_index] = static_cast<uint32_t>(index_buffer_data[index_index]);
+            }
+            now_mesh.path_tracing_geometry_dirty = true;
+
             for (uint32_t index_index = 0; index_index < index_count; ++index_index)
             {
                 uint32_t vertex_buffer_index = index_buffer_data[index_index];
@@ -1037,6 +1263,27 @@ namespace Piccolo
                     Vector2(vertex_buffer_data[vertex_index].u, vertex_buffer_data[vertex_index].v);
             }
 
+            now_mesh.path_tracing_positions.resize(vertex_count);
+            now_mesh.path_tracing_normals.resize(vertex_count);
+            now_mesh.path_tracing_tangents.resize(vertex_count);
+            now_mesh.path_tracing_texcoords.resize(vertex_count);
+            for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+            {
+                now_mesh.path_tracing_positions[vertex_index] = mesh_vertex_positions[vertex_index].position;
+                now_mesh.path_tracing_normals[vertex_index]   = mesh_vertex_blending_varyings[vertex_index].normal;
+                now_mesh.path_tracing_tangents[vertex_index]  = mesh_vertex_blending_varyings[vertex_index].tangent;
+                now_mesh.path_tracing_texcoords[vertex_index] = mesh_vertex_varyings[vertex_index].texcoord;
+            }
+
+            assert(0 == (index_buffer_size % sizeof(uint16_t)));
+            const uint32_t index_count = index_buffer_size / sizeof(uint16_t);
+            now_mesh.path_tracing_indices.resize(index_count);
+            for (uint32_t index_index = 0; index_index < index_count; ++index_index)
+            {
+                now_mesh.path_tracing_indices[index_index] = static_cast<uint32_t>(index_buffer_data[index_index]);
+            }
+            now_mesh.path_tracing_geometry_dirty = true;
+
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
             // allocate asset vertex buffers in device local memory
@@ -1173,6 +1420,16 @@ namespace Piccolo
         // release temp staging buffer
         rhi->destroyBuffer(inefficient_staging_buffer);
         rhi->freeMemory(inefficient_staging_buffer_memory);
+
+        assert(0 == (index_buffer_size % sizeof(uint16_t)));
+        const uint32_t index_count = index_buffer_size / sizeof(uint16_t);
+        now_mesh.path_tracing_indices.resize(index_count);
+        const uint16_t* source_indices = reinterpret_cast<const uint16_t*>(index_buffer_data);
+        for (uint32_t index_index = 0; index_index < index_count; ++index_index)
+        {
+            now_mesh.path_tracing_indices[index_index] = static_cast<uint32_t>(source_indices[index_index]);
+        }
+        now_mesh.path_tracing_geometry_dirty = true;
     }
 
     void RenderResource::updateTextureImageData(std::shared_ptr<RHI> rhi, const TextureDataToUpdate& texture_data)
