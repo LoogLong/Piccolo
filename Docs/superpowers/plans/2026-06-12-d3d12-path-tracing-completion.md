@@ -1301,3 +1301,48 @@ The next implementation pass is complete when all of these are true:
 9. Task 9: final verification and handoff notes.
 
 If execution uses subagents, run Tasks 1 and 5 in parallel only if each agent stays inside its file ownership. Run Tasks 2, 3, and 4 sequentially because they intentionally change the shader/RHI data contract.
+
+## Verification Notes
+
+- Build verification
+    - Command: `"C:\Program Files\CMake\bin\cmake.exe" --build d:\program\Piccolo\build --config Debug --target PiccoloEditor -- /v:minimal /clp:ErrorsOnly`
+    - Exit: 0
+    - Note: MSBuild banner printed, no errors.
+    - Command: `"C:\Program Files\CMake\bin\cmake.exe" --build d:\program\Piccolo\build --config Release --target PiccoloEditor -- /v:minimal /clp:ErrorsOnly`
+    - Exit: 0
+    - Note: MSBuild banner printed, no errors.
+
+- Backend boot smoke verification (Debug)
+    - Command: `"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File d:\program\Piccolo\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir d:\program\Piccolo\build -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback`
+    - Exit: 0
+    - Log: `build/test_d3d12_boot.log`
+    - Manual log check: contains `Initialized RHI backend: D3D12` and `engine start`.
+    - Command: `"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File d:\program\Piccolo\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir d:\program\Piccolo\build -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan`
+    - Exit: 0
+    - Log: `build/test_vulkan_boot.log`
+    - Manual log check: contains `Initialized RHI backend: Vulkan` and `engine start`.
+    - Note: Vulkan validation messages are present in log; engine still starts and smoke exits 0.
+    - Command: `"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File d:\program\Piccolo\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir d:\program\Piccolo\build -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12`
+    - Exit: 0
+    - Log: `build/test_auto_d3d12_boot.log`
+    - Manual log check: contains `Initialized RHI backend: D3D12` and `engine start`.
+
+- D3D12 visible smoke verification (Debug)
+    - Raster command: `powershell -ExecutionPolicy Bypass -File d:\program\Piccolo\scripts\tests\render_backend\smoke_d3d12_editor_visible.ps1 -BuildDir d:\program\Piccolo\build -Configuration Debug -WarmupSeconds 20`
+    - Exit: 0
+    - Capture: `build/test_d3d12_editor_visible_raster.png`
+    - Log: `build/test_d3d12_editor_visible_raster.log`
+    - Script metric: non-black sampled pixel ratio 100.0000%.
+    - Manual note: scene, UI, and overlays are visible and consistent with expected raster output.
+    - PathTracing command: `powershell -ExecutionPolicy Bypass -File d:\program\Piccolo\scripts\tests\render_backend\smoke_d3d12_editor_visible.ps1 -BuildDir d:\program\Piccolo\build -Configuration Debug -WarmupSeconds 20`
+    - Exit: 0
+    - Capture: `build/test_d3d12_editor_visible_pathtracing.png`
+    - Log: `build/test_d3d12_editor_visible_pathtracing.log`
+    - Script metric: non-black sampled pixel ratio 100.0000%.
+    - Manual note: scene content and UI are visible; no early editor exit observed during run.
+
+- Task 8 static-scene caching sanity (PathTracing)
+    - Command: `"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File d:\program\Piccolo\scripts\tests\render_backend\smoke_d3d12_editor_visible.ps1 -BuildDir d:\program\Piccolo\build -Configuration Debug -WarmupSeconds 30`
+    - Exit: 0
+    - Log source: `build/test_d3d12_editor_visible.stdout.log`
+    - Diagnostic note: periodic `Path tracing perf` lines show stable `collected_instances=29`, `blas_builds=0`, `tlas_rebuilt=0`, `accumulation_recreated=0`, and monotonic sample index growth after warmup, indicating no repeated BLAS/TLAS or accumulation image churn in static scene.
