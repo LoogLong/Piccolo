@@ -119,12 +119,13 @@ namespace Piccolo
                         RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
         transitionImage(m_accumulation_image,
-                        RHI_IMAGE_LAYOUT_UNDEFINED,
+                        m_accumulation_image_layout,
                         RHI_IMAGE_LAYOUT_GENERAL,
                         0,
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_SHADER_WRITE_BIT,
                         RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
 
         m_rhi->cmdBindPipelinePFN(command_buffer,
                                   RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -417,6 +418,7 @@ namespace Piccolo
                                1,
                                1,
                                m_accumulation_image_view);
+        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_extent = extent;
         resetAccumulation();
         m_descriptor_set_dirty = true;
@@ -852,6 +854,7 @@ namespace Piccolo
             m_accumulation_image      = nullptr;
             m_accumulation_image_view = nullptr;
             m_accumulation_memory     = nullptr;
+            m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
             return;
         }
         if (m_accumulation_image_view != nullptr)
@@ -870,6 +873,7 @@ namespace Piccolo
             m_accumulation_memory = nullptr;
         }
         m_extent = {0, 0};
+        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
     }
 
     void PathTracingPass::transitionImage(RHIImage*              image,

@@ -73,6 +73,7 @@ namespace Piccolo
         RHIImage*        m_accumulation_image {nullptr};
         RHIDeviceMemory* m_accumulation_memory {nullptr};
         RHIImageView*    m_accumulation_image_view {nullptr};
+        RHIImageLayout   m_accumulation_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
 
         RHIBuffer*       m_frame_data_buffer {nullptr};
         RHIDeviceMemory* m_frame_data_memory {nullptr};
