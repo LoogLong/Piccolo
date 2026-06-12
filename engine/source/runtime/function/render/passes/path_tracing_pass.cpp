@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace Piccolo
 {
@@ -85,6 +86,11 @@ namespace Piccolo
         {
             return false;
         }
+
+        m_last_collected_instance_count = 0;
+        m_last_blas_build_count         = 0;
+        m_last_tlas_rebuilt             = false;
+        m_accumulation_recreated_this_frame = false;
 
         if (m_descriptor_set_layout == nullptr)
         {
@@ -175,6 +181,16 @@ namespace Piccolo
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
         ++m_sample_index;
+        ++m_diagnostic_frame_counter;
+        if ((m_diagnostic_frame_counter % 120u) == 0u)
+        {
+            LOG_INFO("Path tracing perf: collected_instances={}, blas_builds={}, tlas_rebuilt={}, accumulation_recreated={}, sample_index={}",
+                     m_last_collected_instance_count,
+                     m_last_blas_build_count,
+                     m_last_tlas_rebuilt ? 1 : 0,
+                     m_accumulation_recreated_this_frame ? 1 : 0,
+                     m_sample_index);
+        }
         if (render_scene->isPathTracingAccumulationDirty())
         {
             render_scene->clearPathTracingAccumulationDirty();
@@ -410,6 +426,7 @@ namespace Piccolo
                                1,
                                m_accumulation_image_view);
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
+        m_accumulation_recreated_this_frame = true;
         m_extent = extent;
         resetAccumulation();
         m_descriptor_set_dirty = true;
@@ -625,11 +642,30 @@ namespace Piccolo
 
         std::vector<RenderPathTracingCollectedInstance> collected_instances =
             m_render_resource_impl->collectPathTracingInstances(scene);
+        std::unordered_set<RenderMeshGPUResource*> processed_meshes;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
         {
             if (instance.mesh != nullptr)
             {
+                if (!processed_meshes.insert(instance.mesh).second)
+                {
+                    continue;
+                }
+
+                const bool was_dirty = instance.mesh->path_tracing_blas_dirty;
                 m_render_resource_impl->ensurePathTracingBLAS(m_rhi, command_buffer, *instance.mesh);
+                if (was_dirty && !instance.mesh->path_tracing_blas_dirty && instance.mesh->path_tracing_bottom_level_as != nullptr)
+                {
+                    ++m_last_blas_build_count;
+                }
+                instance.bottom_level_as = instance.mesh->path_tracing_bottom_level_as;
+            }
+        }
+
+        for (RenderPathTracingCollectedInstance& instance : collected_instances)
+        {
+            if (instance.mesh != nullptr)
+            {
                 instance.bottom_level_as = instance.mesh->path_tracing_bottom_level_as;
             }
         }
@@ -645,8 +681,11 @@ namespace Piccolo
         {
             destroyTopLevelAS();
             m_tlas_instance_count = 0;
+            m_last_collected_instance_count = 0;
             return false;
         }
+
+        m_last_collected_instance_count = static_cast<uint32_t>(collected_instances.size());
 
         // Assign shader instance indices
         for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
@@ -665,6 +704,7 @@ namespace Piccolo
             scene.isPathTracingTLASDirty() ||
             m_top_level_as == nullptr ||
             m_tlas_instance_count != collected_instances.size();
+        m_last_tlas_rebuilt = tlas_dirty;
         if (!tlas_dirty)
         {
             return true;
