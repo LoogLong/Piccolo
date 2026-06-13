@@ -28,22 +28,21 @@ void PathTracingRayGen()
     payload.radiance = float3(0.02f + uv.x * 0.3f, 0.03f + uv.y * 0.3f, 0.08f);
     payload.hit = 0;
 
-    // DEBUG: 暂时禁用ray tracing，直接输出UV颜色来诊断坐标系统
-    // if (g_frame_data.instance_count > 0)
-    // {
-    //     const float2 ndc_uv = float2(uv.x, 1.0f - uv.y);
-    //     const float4 ndc = float4(UVToNdcXY(ndc_uv), 1.0f, 1.0f);
-    //     const float4 world = mul(g_frame_data.proj_view_matrix_inv, ndc);
-    //     const float3 world_position = world.xyz / max(world.w, 0.00001f);
-    //
-    //     RayDesc ray;
-    //     ray.Origin = g_frame_data.camera_position;
-    //     ray.Direction = normalize(world_position - g_frame_data.camera_position);
-    //     ray.TMin = 0.001f;
-    //     ray.TMax = 100000.0f;
-    //
-    //     TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
-    // }
+    if (g_frame_data.instance_count > 0)
+    {
+        const float2 ndc_uv = float2(uv.x, 1.0f - uv.y);
+        const float4 ndc = float4(UVToNdcXY(ndc_uv), 1.0f, 1.0f);
+        const float4 world = mul(g_frame_data.proj_view_matrix_inv, ndc);
+        const float3 world_position = world.xyz / max(world.w, 0.00001f);
+    
+        RayDesc ray;
+        ray.Origin = g_frame_data.camera_position;
+        ray.Direction = normalize(world_position - g_frame_data.camera_position);
+        ray.TMin = 0.001f;
+        ray.TMax = 100000.0f;
+    
+        TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+    }
     const float4 current_sample = float4(payload.radiance, 1.0f);
     const float4 previous_accumulation =
         g_frame_data.sample_index == 0 ? float4(0.0f, 0.0f, 0.0f, 0.0f) : g_accumulation_output[pixel];

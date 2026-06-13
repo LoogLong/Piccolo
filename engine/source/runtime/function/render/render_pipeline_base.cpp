@@ -24,6 +24,11 @@ namespace Piccolo
     void RenderPipelineBase::deferredRender(std::shared_ptr<RHI>                rhi,
                                             std::shared_ptr<RenderResourceBase> render_resource)
     {}
+
+    bool RenderPipelineBase::pathTracingRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
+    {
+        return false;
+    }
     void RenderPipelineBase::initializeUIRenderBackend(WindowUI* window_ui)
     {
         m_ui_pass->initializeUIRenderBackend(window_ui);
