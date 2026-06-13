@@ -93,7 +93,6 @@ namespace Piccolo
         Vector3   m_last_camera_position {Vector3::ZERO};
         bool      m_has_last_camera_state {false};
         bool      m_descriptor_set_dirty {true};
-        uint32_t  m_diagnostic_frame_counter {0};
         uint32_t  m_last_collected_instance_count {0};
         uint32_t  m_last_blas_build_count {0};
         bool      m_last_tlas_rebuilt {false};

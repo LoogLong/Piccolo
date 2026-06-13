@@ -181,16 +181,6 @@ namespace Piccolo
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
 
         ++m_sample_index;
-        ++m_diagnostic_frame_counter;
-        if ((m_diagnostic_frame_counter % 120u) == 0u)
-        {
-            LOG_INFO("Path tracing perf: collected_instances={}, blas_builds={}, tlas_rebuilt={}, accumulation_recreated={}, sample_index={}",
-                     m_last_collected_instance_count,
-                     m_last_blas_build_count,
-                     m_last_tlas_rebuilt ? 1 : 0,
-                     m_accumulation_recreated_this_frame ? 1 : 0,
-                     m_sample_index);
-        }
         if (render_scene->isPathTracingAccumulationDirty())
         {
             render_scene->clearPathTracingAccumulationDirty();

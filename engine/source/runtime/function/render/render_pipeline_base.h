@@ -38,6 +38,7 @@ namespace Piccolo
         virtual void preparePassData(std::shared_ptr<RenderResourceBase> render_resource);
         virtual void forwardRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource);
         virtual void deferredRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource);
+        virtual bool pathTracingRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource);
 
         void             initializeUIRenderBackend(WindowUI* window_ui);
         void             shutdownUIRenderBackend();

@@ -149,7 +149,6 @@ namespace Piccolo
         RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
 
         render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
-        updateSceneRenderMode(*render_rhi);
 
         render_rhi->waitForFences();
 
@@ -172,25 +171,8 @@ namespace Piccolo
         UIPass&           ui_pass            = *(static_cast<UIPass*>(m_ui_pass.get()));
         CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
         ParticlePass&     particle_pass      = *(static_cast<ParticlePass*>(m_particle_pass.get()));
-        PathTracingPass&  path_tracing_pass  = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
 
         const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
-        if (m_effective_scene_render_mode == RenderSceneRenderMode::PathTracing &&
-            path_tracing_pass.dispatch())
-        {
-            static_cast<MainCameraPass*>(m_main_camera_pass.get())
-                ->drawPathTracing(color_grading_pass,
-                                  fxaa_pass,
-                                  tone_mapping_pass,
-                                  ui_pass,
-                                  combine_ui_pass,
-                                  current_swapchain_image_index);
-
-            g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
-            render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-            static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
-            return;
-        }
 
         static_cast<ParticlePass*>(m_particle_pass.get())
             ->setRenderCommandBufferHandle(
@@ -227,7 +209,6 @@ namespace Piccolo
         RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
 
         render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
-        updateSceneRenderMode(*render_rhi);
 
         render_rhi->waitForFences();
 
@@ -250,25 +231,8 @@ namespace Piccolo
         UIPass&           ui_pass            = *(static_cast<UIPass*>(m_ui_pass.get()));
         CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
         ParticlePass&     particle_pass      = *(static_cast<ParticlePass*>(m_particle_pass.get()));
-        PathTracingPass&  path_tracing_pass  = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
 
         const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
-        if (m_effective_scene_render_mode == RenderSceneRenderMode::PathTracing &&
-            path_tracing_pass.dispatch())
-        {
-            static_cast<MainCameraPass*>(m_main_camera_pass.get())
-                ->drawPathTracing(color_grading_pass,
-                                  fxaa_pass,
-                                  tone_mapping_pass,
-                                  ui_pass,
-                                  combine_ui_pass,
-                                  current_swapchain_image_index);
-
-            g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
-            render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-            static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
-            return;
-        }
 
         static_cast<ParticlePass*>(m_particle_pass.get())
             ->setRenderCommandBufferHandle(
@@ -341,6 +305,59 @@ namespace Piccolo
     {
         MainCameraPass& main_camera_pass = *(static_cast<MainCameraPass*>(m_main_camera_pass.get()));
         main_camera_pass.m_selected_axis = selected_axis;
+    }
+
+    bool RenderPipeline::pathTracingRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
+    {
+        RHI*            render_rhi          = rhi.get();
+        RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
+
+        render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
+        updateSceneRenderMode(*render_rhi);
+
+        if (m_effective_scene_render_mode != RenderSceneRenderMode::PathTracing)
+        {
+            return false;
+        }
+
+        render_rhi->waitForFences();
+        render_rhi->resetCommandPool();
+
+        bool recreate_swapchain =
+            render_rhi->prepareBeforePass(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+        if (recreate_swapchain)
+        {
+            return true;
+        }
+
+        static_cast<DirectionalLightShadowPass*>(m_directional_light_pass.get())->draw();
+        static_cast<PointLightShadowPass*>(m_point_light_shadow_pass.get())->draw();
+
+        PathTracingPass& path_tracing_pass = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
+        if (!path_tracing_pass.dispatch())
+        {
+            return false;
+        }
+
+        ColorGradingPass& color_grading_pass = *(static_cast<ColorGradingPass*>(m_color_grading_pass.get()));
+        FXAAPass&         fxaa_pass          = *(static_cast<FXAAPass*>(m_fxaa_pass.get()));
+        ToneMappingPass&  tone_mapping_pass  = *(static_cast<ToneMappingPass*>(m_tone_mapping_pass.get()));
+        UIPass&           ui_pass            = *(static_cast<UIPass*>(m_ui_pass.get()));
+        CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
+
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
+        static_cast<MainCameraPass*>(m_main_camera_pass.get())
+            ->drawPathTracing(color_grading_pass,
+                              fxaa_pass,
+                              tone_mapping_pass,
+                              ui_pass,
+                              combine_ui_pass,
+                              current_swapchain_image_index);
+
+        g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
+        render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+        static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
+        return true;
     }
 
     void RenderPipeline::updateSceneRenderMode(RHI& rhi)
