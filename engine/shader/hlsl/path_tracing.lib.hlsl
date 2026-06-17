@@ -108,14 +108,6 @@ float3 TangentToWorld(float3 v_local, float3 n)
     return v_local.x * t + v_local.y * b + v_local.z * n;
 }
 
-// Russian Roulette termination probability (PBRT v4 §13.4.1)
-// Returns survival probability clamped to [0.05, 0.95] based on base_color luminance
-float RussianRouletteProbability(float3 base_color)
-{
-    const float lum = max(base_color.r, max(base_color.g, base_color.b));
-    return clamp(lum, 0.05f, 0.95f);
-}
-
 #define MAX_BOUNCES 4
 
 // Next-event estimation: sample environment light (IBL) as direct lighting
@@ -303,8 +295,9 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
     // --- Indirect bounce with Russian Roulette ---
     if (payload.bounce_depth < MAX_BOUNCES)
     {
-        // PBRT v4 §13.4.1: Russian roulette based on surface reflectance
-        const float rr_prob = RussianRouletteProbability(base_color);
+        // PBRT v4: terminate paths proportional to (1 - base_color luminance)
+        const float rr_lum = max(base_color.r, max(base_color.g, base_color.b));
+        const float rr_prob = clamp(rr_lum, 0.05f, 0.95f);
         if (Rand01(payload.rng) < rr_prob) // survived
         {
             float pdf;
@@ -332,7 +325,7 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
 
                 if (indirect_payload.hit != 0u)
                 {
-                    // rr_prob = survival_prob — re-weight by 1/P for unbiased estimator
+                    // re-weight by 1/P for unbiased estimator
                     Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
                           indirect_payload.radiance * NdotL / pdf / rr_prob;
                 }
