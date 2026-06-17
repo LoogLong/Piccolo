@@ -42,7 +42,8 @@ namespace Piccolo
             RenderSceneDirectionalLight scene_directional_light {};
             Matrix4x4 directional_light_proj_view {Matrix4x4::IDENTITY};
             uint32_t point_light_count {0};
-            uint32_t _padding_light[3] {0, 0, 0};
+            uint32_t trace_scale {2};
+            uint32_t _padding_light[2] {0, 0};
         };
 
         void setupDescriptorSetLayout();
@@ -94,6 +95,7 @@ namespace Piccolo
         uint32_t                  m_tlas_instance_count {0};
 
         uint32_t  m_sample_index {0};
+        uint32_t  m_trace_scale {2};
         RHIExtent2D m_extent {0, 0};
         Matrix4x4 m_last_proj_view_matrix_inv {Matrix4x4::IDENTITY};
         Vector3   m_last_camera_position {Vector3::ZERO};

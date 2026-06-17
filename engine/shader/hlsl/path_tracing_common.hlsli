@@ -18,7 +18,8 @@ struct PathTracingFrameData
     DirectionalLight scene_directional_light;
     row_major float4x4 directional_light_proj_view;
     uint point_light_count;
-    uint3 _padding_light;
+    uint trace_scale;
+    uint2 _padding_light;
 };
 
 struct PathTracingVertexData
