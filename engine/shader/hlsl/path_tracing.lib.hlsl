@@ -83,7 +83,10 @@ void PathTracingMiss(inout PathTracingRayPayload payload)
     else
     {
         const float3 ray_dir = WorldRayDirection();
-        const float3 sky_color = g_specular_texture.SampleLevel(g_linear_sampler, ray_dir, 0.0f).rgb;
+        // Match the coordinate convention used by SampleEnvironmentLight:
+        // the engine cubemaps use (x, z, y) mapping
+        const float3 sample_dir = float3(ray_dir.x, ray_dir.z, ray_dir.y);
+        const float3 sky_color = g_specular_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
         payload.radiance = sky_color;
         payload.hit      = 0u;
     }
@@ -103,6 +106,18 @@ float3 TangentToWorld(float3 v_local, float3 n)
     const float3 t = normalize(cross(up, n));
     const float3 b = cross(n, t);
     return v_local.x * t + v_local.y * b + v_local.z * n;
+}
+
+// Russian Roulette: returns (survived: bool, survival_probability: float)
+// Uses surface base_color luminance as the throughput proxy — a simple,
+// representative metric for whether the path carries energy worth tracing.
+float2 RussianRoulette(inout RNG rng, float3 base_color)
+{
+    // PBRT v4 §13.4.1: terminate paths proportional to (1 - reflectance)
+    const float lum = max(base_color.r, max(base_color.g, base_color.b));
+    const float survival_prob = clamp(lum, 0.05f, 0.95f);
+    const float survived = Rand01(rng) < survival_prob ? 1.0f : 0.0f;
+    return float2(survived, survival_prob);
 }
 
 #define MAX_BOUNCES 4
@@ -266,36 +281,42 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
         }
     }
 
-    // --- Indirect bounce ---
+    // --- Indirect bounce with Russian Roulette ---
     if (payload.bounce_depth < MAX_BOUNCES)
     {
-        float pdf;
-        const float3 sample_dir = CosineSampleHemisphere(Rand2D(payload.rng), pdf);
-        const float3 L = TangentToWorld(sample_dir, N);
-        const float  NdotL = max(dot(N, L), 0.0f);
-
-        if (pdf > 0.0f && NdotL > 0.0f)
+        // PBRT v4 §13.4.1: Russian roulette based on surface reflectance
+        float2 rr = RussianRoulette(payload.rng, base_color);
+        if (rr.x > 0.0f) // survived
         {
-            PathTracingRayPayload indirect_payload;
-            indirect_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
-            indirect_payload.hit           = 0u;
-            indirect_payload.rng           = payload.rng;
-            indirect_payload.is_shadow_ray = false;
-            indirect_payload.bounce_depth  = payload.bounce_depth + 1u;
+            float pdf;
+            const float3 sample_dir = CosineSampleHemisphere(Rand2D(payload.rng), pdf);
+            const float3 L = TangentToWorld(sample_dir, N);
+            const float  NdotL = max(dot(N, L), 0.0f);
 
-            RayDesc indirect_ray;
-            indirect_ray.Origin    = world_position + N * 0.01f;
-            indirect_ray.Direction = L;
-            indirect_ray.TMin      = 0.001f;
-            indirect_ray.TMax      = 100000.0f;
-
-            TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, indirect_ray, indirect_payload);
-            payload.rng = indirect_payload.rng;
-
-            if (indirect_payload.hit != 0u)
+            if (pdf > 0.0f && NdotL > 0.0f)
             {
-                Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
-                      indirect_payload.radiance * NdotL / pdf;
+                PathTracingRayPayload indirect_payload;
+                indirect_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+                indirect_payload.hit           = 0u;
+                indirect_payload.rng           = payload.rng;
+                indirect_payload.is_shadow_ray = false;
+                indirect_payload.bounce_depth  = payload.bounce_depth + 1u;
+
+                RayDesc indirect_ray;
+                indirect_ray.Origin    = world_position + N * 0.01f;
+                indirect_ray.Direction = L;
+                indirect_ray.TMin      = 0.001f;
+                indirect_ray.TMax      = 100000.0f;
+
+                TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, indirect_ray, indirect_payload);
+                payload.rng = indirect_payload.rng;
+
+                if (indirect_payload.hit != 0u)
+                {
+                    // rr.y = survival_prob — re-weight by 1/P for unbiased estimator
+                    Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
+                          indirect_payload.radiance * NdotL / pdf / rr.y;
+                }
             }
         }
     }
