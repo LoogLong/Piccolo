@@ -295,7 +295,7 @@ namespace Piccolo
         bindings[12].descriptorCount = 1;
         bindings[12].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-        bindings[13].binding         = 13;
+        bindings[13].binding         = 1035;
         bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         bindings[13].descriptorCount = 1;
         bindings[13].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
@@ -751,7 +751,7 @@ namespace Piccolo
 
         writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[13].dstSet          = m_descriptor_set;
-        writes[13].dstBinding      = 13;
+        writes[13].dstBinding      = 1035;
         writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         writes[13].descriptorCount = 1;
         writes[13].pImageInfo      = &accumulation_prev_info;

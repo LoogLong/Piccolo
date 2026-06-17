@@ -22,13 +22,13 @@
 
 ## File Map
 
-| File | Responsibility |
-|------|---------------|
-| `engine/shader/hlsl/path_tracing.lib.hlsl` | RayGen, ClosestHit, Miss shaders — all GPU-side path tracing logic |
-| `engine/shader/hlsl/path_tracing_common.hlsli` | HLSL structs matching C++ GPU data layouts |
-| `engine/shader/hlsl/path_tracing_rng.hlsli` | Wang hash RNG for stochastic sampling |
-| `engine/source/runtime/function/render/passes/path_tracing_pass.h` | C++ `FrameData` struct, member variables for accumulation ping-pong |
-| `engine/source/runtime/function/render/passes/path_tracing_pass.cpp` | Host-side dispatch, descriptor writes, buffer/image management |
+| File | Responsibility | Modified? |
+|------|---------------|-----------|
+| `engine/shader/hlsl/path_tracing.lib.hlsl` | RayGen, ClosestHit, Miss shaders — all GPU-side path tracing logic | ✅ Yes |
+| `engine/shader/hlsl/path_tracing_common.hlsli` | HLSL structs matching C++ GPU data layouts | ✅ Yes |
+| `engine/shader/hlsl/path_tracing_rng.hlsli` | Wang hash RNG for stochastic sampling — consumed by `InitRNG` call site, file itself unchanged | ❌ No |
+| `engine/source/runtime/function/render/passes/path_tracing_pass.h` | C++ `FrameData` struct, member variables for accumulation ping-pong | ✅ Yes |
+| `engine/source/runtime/function/render/passes/path_tracing_pass.cpp` | Host-side dispatch, descriptor writes, buffer/image management | ✅ Yes |
 
 ---
 
@@ -203,27 +203,25 @@ In `setupDescriptorSetLayout()`, add a 14th binding (binding 13) for the previou
 
 ```cpp
 // After bindings[12] ...
-bindings[13].binding         = 13;
+bindings[13].binding         = 1035; // must be >1034 to avoid overlap with g_texture_array (t11-t1034)
 bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
 bindings[13].descriptorCount = 1;
 bindings[13].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
 
 RHIDescriptorSetLayoutCreateInfo create_info {};
 create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-create_info.bindingCount = 14; // was: std::size(bindings) with 13 entries — now 14
+create_info.bindingCount = static_cast<uint32_t>(std::size(bindings));
 create_info.pBindings    = bindings;
 ```
 
-Update the bindings array size from `bindings[13]` to `bindings[14]`.
-
 - [ ] **Step 6: Update descriptor set writes for accumulation prev image**
 
-In `updateDescriptorSet()`, add the prev accumulation image info and a write for binding 13:
+In `updateDescriptorSet()`, add the prev accumulation image info and a write for binding 13. Extend the `writes` array from `[13]` to `[14]`:
 
 ```cpp
 RHIDescriptorImageInfo accumulation_prev_info {};
 accumulation_prev_info.imageView   = m_accumulation_prev_image_view;
-accumulation_prev_info.imageLayout = RHI_IMAGE_LAYOUT_GENERAL;
+accumulation_prev_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 // Extend writes array to 14 entries
 RHIWriteDescriptorSet writes[14] {};
@@ -231,12 +229,12 @@ RHIWriteDescriptorSet writes[14] {};
 
 writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 writes[13].dstSet          = m_descriptor_set;
-writes[13].dstBinding      = 13;
+writes[13].dstBinding      = 1035;
 writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
 writes[13].descriptorCount = 1;
 writes[13].pImageInfo      = &accumulation_prev_info;
 
-m_rhi->updateDescriptorSets(14, writes, 0, nullptr); // was: std::size(writes)
+m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
 ```
 
 - [ ] **Step 7: Add barrier transitions for accumulation prev image in `dispatch()`**
@@ -300,7 +298,7 @@ git commit -m "feat: add accumulation ping-pong infrastructure for path tracing
 - Modify: `engine/shader/hlsl/path_tracing_common.hlsli:15` (add `reset_accumulation` to HLSL struct)
 
 **Interfaces:**
-- Consumes: `g_accumulation_prev : register(t13, space0)` — sampled image for previous frame's accumulated radiance
+- Consumes: `g_accumulation_prev : register(t1035, space0)` — sampled image for previous frame's accumulated radiance (binding 1035 avoids overlap with g_texture_array at t11-t1034)
 - Consumes: `g_frame_data.reset_accumulation` — uint, 1 = discard history
 - Consumes: `g_frame_data.sample_index` — already existed, now used for blending weight
 - Produces: `g_scene_output[pixel]` now contains blended result instead of raw single-sample radiance
@@ -336,16 +334,23 @@ RaytracingAccelerationStructure g_scene_tlas : register(t0, space0);
 RWTexture2D<float4> g_scene_output : register(u1, space0);
 ConstantBuffer<PathTracingFrameData> g_frame_data : register(b2, space0);
 RWTexture2D<float4> g_accumulation_output : register(u3, space0);
-Texture2D<float4> g_accumulation_prev : register(t13, space0); // previous frame accumulation (read)
+Texture2D<float4> g_accumulation_prev : register(t1035, space0); // previous frame accumulation (read)
 ```
 
 Note: `g_accumulation_prev` is declared as `Texture2D<float4>` (SRV, not UAV) because HLSL DXR shaders cannot cleanly read from `RWTexture2D`. The C++ side binds it as `RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE` on binding 13, and we use `.Load(int3(pixel, 0))` for exact pixel access.
 
-- [ ] **Step 3: Replace RayGen write with accumulation blending**
+- [ ] **Step 3: Replace RayGen write with accumulation blending AND fix RNG seeding**
 
-Replace lines 57-59 (`g_scene_output[pixel] = ...; g_accumulation_output[pixel] = ...;`) in `PathTracingRayGen()` with:
+Replace lines 57-59 (`g_scene_output[pixel] = ...; g_accumulation_output[pixel] = ...;`) in `PathTracingRayGen()` with the accumulation blend. **Also fix line 43** — change `InitRNG(pixel, extent, 0)` to `InitRNG(pixel, extent, g_frame_data.sample_index)` — the hardcoded `0` caused every frame to trace identical paths, making accumulation useless:
 
 ```hlsl
+// In PathTracingRayGen(), replace the InitRNG call (line 43):
+// OLD: payload.rng = InitRNG(pixel, extent, 0);
+payload.rng = InitRNG(pixel, extent, g_frame_data.sample_index);
+
+// ... (rest of existing code: uv, ndc, world_position setup) ...
+
+// Replace the final writes (lines 57-59):
 // Temporal accumulation blend
 float3 prev_accum = float3(0.0f, 0.0f, 0.0f);
 float sample_count = 1.0f;
@@ -369,9 +374,12 @@ git add engine/shader/hlsl/path_tracing.lib.hlsl \
         engine/shader/hlsl/path_tracing_common.hlsli
 git commit -m "feat: add temporal accumulation blending in path tracing RayGen
 
-Read previous frame's accumulation from binding 13, blend with new sample
-using running-average weight. Respect FrameData::reset_accumulation flag
-to discard history on camera movement or scene changes.
+- Fix InitRNG hardcoded sample_index=0 → use g_frame_data.sample_index
+  (every frame traced identical paths, making accumulation a no-op)
+- Read previous frame's accumulation from binding 13 (Texture2D via SRV),
+  blend with new sample using running-average weight
+- Respect FrameData::reset_accumulation flag to discard history on camera
+  movement or scene changes
 
 Before: 1 spp forever, no convergence. After: N spp after N frames."
 ```
@@ -394,15 +402,20 @@ Before: 1 spp forever, no convergence. After: N spp after N frames."
 Add this function before the closest-hit shader (near line 95, after `CosineSampleHemisphere`):
 
 ```hlsl
-// Russian Roulette: returns true if the path should continue based on throughput
-// throughput: rough luminance estimate of the current path contribution
-bool RussianRouletteContinue(inout RNG rng, float3 throughput)
+// Russian Roulette: returns (survived: bool, survival_probability: float)
+// Uses surface base_color luminance as the throughput proxy — a simple,
+// representative metric for whether the path carries energy worth tracing.
+float2 RussianRoulette(inout RNG rng, float3 base_color)
 {
-    const float survival_prob = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05f, 0.95f);
-    const float random_val = Rand01(rng);
-    return random_val < survival_prob;
+    // PBRT v4 §13.4.1: terminate paths proportional to (1 - reflectance)
+    const float lum = max(base_color.r, max(base_color.g, base_color.b));
+    const float survival_prob = clamp(lum, 0.05f, 0.95f);
+    const float survived = Rand01(rng) < survival_prob ? 1.0f : 0.0f;
+    return float2(survived, survival_prob);
 }
 ```
+
+Note: `survival_prob` is returned so the caller can re-weight surviving paths by `1/survival_prob` for an unbiased estimator.
 
 - [ ] **Step 2: Replace indirect bounce section with Russian Roulette**
 
@@ -412,11 +425,9 @@ Replace the indirect bounce block (lines 256-288 in `PathTracingClosestHit`) wit
     // --- Indirect bounce with Russian Roulette ---
     if (payload.bounce_depth < MAX_BOUNCES)
     {
-        // Compute BRDF throughput for Russian Roulette
-        float3 throughput = BRDF(V, V, N, f0, base_color, metallic, roughness);
-
-        // Use Lo contribution as proxy for path throughput
-        if (RussianRouletteContinue(payload.rng, Lo + throughput))
+        // PBRT v4 §13.4.1: Russian roulette based on surface reflectance
+        float2 rr = RussianRoulette(payload.rng, base_color);
+        if (rr.x > 0.0f) // survived
         {
             float pdf;
             const float3 sample_dir = CosineSampleHemisphere(Rand2D(payload.rng), pdf);
@@ -443,11 +454,9 @@ Replace the indirect bounce block (lines 256-288 in `PathTracingClosestHit`) wit
 
                 if (indirect_payload.hit != 0u)
                 {
-                    // Weight by survival probability to keep estimator unbiased
-                    const float rr_weight = 1.0f / clamp(
-                        max(throughput.r, max(throughput.g, throughput.b)), 0.05f, 0.95f);
+                    // rr.y = survival_prob — re-weight by 1/P for unbiased estimator
                     Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
-                          indirect_payload.radiance * NdotL / pdf * rr_weight;
+                          indirect_payload.radiance * NdotL / pdf / rr.y;
                 }
             }
         }
@@ -460,9 +469,12 @@ Replace the indirect bounce block (lines 256-288 in `PathTracingClosestHit`) wit
 git add engine/shader/hlsl/path_tracing.lib.hlsl
 git commit -m "feat: add Russian Roulette path termination for indirect bounces
 
-Paths with low throughput are probabilistically terminated to save rays.
-Survival probability is clamped to [0.05, 0.95] based on path throughput.
-Surviving paths are weighted by 1/p to keep the Monte Carlo estimator unbiased.
+- RussianRoulette() uses base_color luminance as throughput proxy (PBRT
+  v4 §13.4.1) — simpler and more representative than BRDF(V,V)
+- Survival probability clamped to [0.05, 0.95]
+- Helper returns (survived, prob) tuple; caller re-weights by 1/prob using
+  the exact same survival probability that made the decision — keeps the
+  Monte Carlo estimator unbiased
 
 This reduces total rays/pixel from ~N*MAX_BOUNCES to ~N*2 on average."
 ```

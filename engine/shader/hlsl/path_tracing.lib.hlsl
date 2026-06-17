@@ -6,7 +6,7 @@ RaytracingAccelerationStructure g_scene_tlas : register(t0, space0);
 RWTexture2D<float4> g_scene_output : register(u1, space0);
 ConstantBuffer<PathTracingFrameData> g_frame_data : register(b2, space0);
 RWTexture2D<float4> g_accumulation_output : register(u3, space0);
-Texture2D<float4> g_accumulation_prev : register(t13, space0); // previous frame accumulation (read)
+Texture2D<float4> g_accumulation_prev : register(t1035, space0); // previous frame accumulation (read)
 StructuredBuffer<PathTracingVertexData> g_vertices : register(t4, space0);
 StructuredBuffer<uint> g_indices : register(t5, space0);
 StructuredBuffer<PathTracingMaterialData> g_materials : register(t6, space0);
@@ -108,16 +108,12 @@ float3 TangentToWorld(float3 v_local, float3 n)
     return v_local.x * t + v_local.y * b + v_local.z * n;
 }
 
-// Russian Roulette: returns (survived: bool, survival_probability: float)
-// Uses surface base_color luminance as the throughput proxy — a simple,
-// representative metric for whether the path carries energy worth tracing.
-float2 RussianRoulette(inout RNG rng, float3 base_color)
+// Russian Roulette termination probability (PBRT v4 §13.4.1)
+// Returns survival probability clamped to [0.05, 0.95] based on base_color luminance
+float RussianRouletteProbability(float3 base_color)
 {
-    // PBRT v4 §13.4.1: terminate paths proportional to (1 - reflectance)
     const float lum = max(base_color.r, max(base_color.g, base_color.b));
-    const float survival_prob = clamp(lum, 0.05f, 0.95f);
-    const float survived = Rand01(rng) < survival_prob ? 1.0f : 0.0f;
-    return float2(survived, survival_prob);
+    return clamp(lum, 0.05f, 0.95f);
 }
 
 #define MAX_BOUNCES 4
@@ -308,8 +304,8 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
     if (payload.bounce_depth < MAX_BOUNCES)
     {
         // PBRT v4 §13.4.1: Russian roulette based on surface reflectance
-        float2 rr = RussianRoulette(payload.rng, base_color);
-        if (rr.x > 0.0f) // survived
+        const float rr_prob = RussianRouletteProbability(base_color);
+        if (Rand01(payload.rng) < rr_prob) // survived
         {
             float pdf;
             const float3 sample_dir = CosineSampleHemisphere(Rand2D(payload.rng), pdf);
@@ -336,9 +332,9 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
 
                 if (indirect_payload.hit != 0u)
                 {
-                    // rr.y = survival_prob — re-weight by 1/P for unbiased estimator
+                    // rr_prob = survival_prob — re-weight by 1/P for unbiased estimator
                     Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
-                          indirect_payload.radiance * NdotL / pdf / rr.y;
+                          indirect_payload.radiance * NdotL / pdf / rr_prob;
                 }
             }
         }
