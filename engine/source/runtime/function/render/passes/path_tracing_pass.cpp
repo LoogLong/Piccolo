@@ -143,6 +143,14 @@ namespace Piccolo
                         RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+        transitionImage(m_accumulation_prev_image,
+                        m_accumulation_prev_image_layout,
+                        RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        0,
+                        RHI_ACCESS_SHADER_READ_BIT,
+                        RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         m_rhi->cmdBindPipelinePFN(command_buffer,
                                   RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -179,6 +187,14 @@ namespace Piccolo
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_SHADER_WRITE_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+        // Keep prev accumulation image in GENERAL layout for next frame's read
+        // (it will be transitioned to SHADER_READ_ONLY_OPTIMAL in the next dispatch)
+
+        // Swap accumulation ping-pong
+        std::swap(m_accumulation_image, m_accumulation_prev_image);
+        std::swap(m_accumulation_image_view, m_accumulation_prev_image_view);
+        std::swap(m_accumulation_memory, m_accumulation_prev_memory);
+        std::swap(m_accumulation_image_layout, m_accumulation_prev_image_layout);
 
         ++m_sample_index;
         if (render_scene->isPathTracingAccumulationDirty())
@@ -213,7 +229,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[13] {};
+        RHIDescriptorSetLayoutBinding bindings[14] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -278,6 +294,11 @@ namespace Piccolo
         bindings[12].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLER;
         bindings[12].descriptorCount = 1;
         bindings[12].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[13].binding         = 13;
+        bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[13].descriptorCount = 1;
+        bindings[13].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -421,7 +442,7 @@ namespace Piccolo
                            extent.height,
                            RHI_FORMAT_R32G32B32A32_SFLOAT,
                            RHI_IMAGE_TILING_OPTIMAL,
-                           RHI_IMAGE_USAGE_STORAGE_BIT,
+                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            m_accumulation_image,
                            m_accumulation_memory,
@@ -436,6 +457,27 @@ namespace Piccolo
                                1,
                                m_accumulation_image_view);
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
+
+        // Create prev accumulation image (for reading previous frame)
+        m_rhi->createImage(extent.width,
+                           extent.height,
+                           RHI_FORMAT_R32G32B32A32_SFLOAT,
+                           RHI_IMAGE_TILING_OPTIMAL,
+                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
+                           RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           m_accumulation_prev_image,
+                           m_accumulation_prev_memory,
+                           0,
+                           1,
+                           1);
+        m_rhi->createImageView(m_accumulation_prev_image,
+                               RHI_FORMAT_R32G32B32A32_SFLOAT,
+                               RHI_IMAGE_ASPECT_COLOR_BIT,
+                               RHI_IMAGE_VIEW_TYPE_2D,
+                               1,
+                               1,
+                               m_accumulation_prev_image_view);
+        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_accumulation_recreated_this_frame = true;
         m_extent = extent;
         resetAccumulation();
@@ -456,6 +498,8 @@ namespace Piccolo
             m_render_resource_impl->m_mesh_perframe_storage_buffer_object.camera_position;
         const RHIExtent2D extent = m_rhi->getSwapchainInfo().extent;
 
+        bool resetting = false;
+
         const bool camera_changed =
             !m_has_last_camera_state ||
             !matrixEquals(m_last_proj_view_matrix_inv, current_proj_view_inv) ||
@@ -465,6 +509,7 @@ namespace Piccolo
         if (camera_changed)
         {
             m_sample_index = 0;
+            resetting = true;
             m_last_proj_view_matrix_inv = current_proj_view_inv;
             m_last_camera_position      = current_camera_position;
             m_has_last_camera_state     = true;
@@ -475,6 +520,7 @@ namespace Piccolo
             if (render_scene->isPathTracingAccumulationDirty())
             {
                 m_sample_index = 0;
+                resetting = true;
             }
         }
 
@@ -487,6 +533,7 @@ namespace Piccolo
         frame_data.extent[0]            = extent.width;
         frame_data.extent[1]            = extent.height;
         frame_data.instance_count       = instance_count;
+        frame_data.reset_accumulation   = resetting ? 1u : 0u;
         frame_data.ambient_light        = Vector4(raster_frame.ambient_light, 0.0f);
         frame_data.scene_directional_light = raster_frame.scene_directional_light;
         frame_data.directional_light_proj_view = raster_frame.directional_light_proj_view;
@@ -556,6 +603,10 @@ namespace Piccolo
         accumulation_info.imageView   = m_accumulation_image_view;
         accumulation_info.imageLayout = RHI_IMAGE_LAYOUT_GENERAL;
 
+        RHIDescriptorImageInfo accumulation_prev_info {};
+        accumulation_prev_info.imageView   = m_accumulation_prev_image_view;
+        accumulation_prev_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
         RHIDescriptorBufferInfo frame_data_info {};
         frame_data_info.buffer = m_frame_data_buffer;
         frame_data_info.offset = 0;
@@ -606,7 +657,7 @@ namespace Piccolo
         null_image_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         null_image_info.sampler     = nullptr;
 
-        RHIWriteDescriptorSet writes[13] {};
+        RHIWriteDescriptorSet writes[14] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = m_descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -697,6 +748,13 @@ namespace Piccolo
         writes[12].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLER;
         writes[12].descriptorCount = 1;
         writes[12].pImageInfo      = &specular_info;
+
+        writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[13].dstSet          = m_descriptor_set;
+        writes[13].dstBinding      = 13;
+        writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[13].descriptorCount = 1;
+        writes[13].pImageInfo      = &accumulation_prev_info;
 
         m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
         m_descriptor_set_dirty = false;
@@ -866,6 +924,22 @@ namespace Piccolo
             m_rhi->freeMemory(m_accumulation_memory);
             m_accumulation_memory = nullptr;
         }
+        if (m_accumulation_prev_image_view != nullptr)
+        {
+            m_rhi->destroyImageView(m_accumulation_prev_image_view);
+            m_accumulation_prev_image_view = nullptr;
+        }
+        if (m_accumulation_prev_image != nullptr)
+        {
+            m_rhi->destroyImage(m_accumulation_prev_image);
+            m_accumulation_prev_image = nullptr;
+        }
+        if (m_accumulation_prev_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_accumulation_prev_memory);
+            m_accumulation_prev_memory = nullptr;
+        }
+        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_extent = {0, 0};
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
     }

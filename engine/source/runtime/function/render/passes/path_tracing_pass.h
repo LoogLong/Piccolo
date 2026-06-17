@@ -36,7 +36,7 @@ namespace Piccolo
             uint32_t  sample_index {0};
             uint32_t  extent[2] {0, 0};
             uint32_t  instance_count {0};
-            uint32_t  _padding {0};
+            uint32_t  reset_accumulation {0};
             Vector4   ambient_light {0.02f, 0.02f, 0.02f, 0.0f};
             RenderScenePointLight scene_point_lights[s_max_point_light_count] {};
             RenderSceneDirectionalLight scene_directional_light {};
@@ -74,6 +74,12 @@ namespace Piccolo
         RHIDeviceMemory* m_accumulation_memory {nullptr};
         RHIImageView*    m_accumulation_image_view {nullptr};
         RHIImageLayout   m_accumulation_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
+
+        // Ping-pong accumulation: even frames write here, odd frames read from here
+        RHIImage*        m_accumulation_prev_image {nullptr};
+        RHIDeviceMemory* m_accumulation_prev_memory {nullptr};
+        RHIImageView*    m_accumulation_prev_image_view {nullptr};
+        RHIImageLayout   m_accumulation_prev_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
 
         RHIBuffer*       m_frame_data_buffer {nullptr};
         RHIDeviceMemory* m_frame_data_memory {nullptr};
