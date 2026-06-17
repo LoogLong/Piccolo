@@ -114,7 +114,6 @@ namespace Piccolo
         return instance_id == rhs.instance_id &&
                mesh_asset_id == rhs.mesh_asset_id &&
                material_asset_id == rhs.material_asset_id &&
-               model_matrix == rhs.model_matrix &&
                enable_vertex_blending == rhs.enable_vertex_blending &&
                blend == rhs.blend &&
                base_color_factor == rhs.base_color_factor &&
@@ -180,12 +179,6 @@ namespace Piccolo
 
         for (RenderEntity& entity : m_render_entities)
         {
-            if (entity.m_enable_vertex_blending)
-            {
-                ++skipped_skinned;
-                continue;
-            }
-
             if (entity.m_blend || entity.m_base_color_factor.w < 1.0f)
             {
                 ++skipped_transparent;
@@ -208,12 +201,6 @@ namespace Piccolo
             if (mesh == nullptr || material == nullptr)
             {
                 ++skipped_missing;
-                continue;
-            }
-
-            if (!mesh->path_tracing_static_opaque_supported)
-            {
-                ++skipped_skinned;
                 continue;
             }
 

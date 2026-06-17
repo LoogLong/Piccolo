@@ -7765,7 +7765,7 @@ bool D3D12RHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* c
     hit_group_desc.ClosestHitShaderImport = closest_hit_export;
 
     D3D12_RAYTRACING_SHADER_CONFIG shader_config {};
-    shader_config.MaxPayloadSizeInBytes = 16;
+    shader_config.MaxPayloadSizeInBytes = 32;
     shader_config.MaxAttributeSizeInBytes = 8;
 
     D3D12_GLOBAL_ROOT_SIGNATURE global_root_signature {};

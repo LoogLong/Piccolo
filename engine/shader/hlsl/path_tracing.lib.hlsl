@@ -1,5 +1,6 @@
 #include "common.hlsli"
 #include "path_tracing_common.hlsli"
+#include "path_tracing_rng.hlsli"
 
 RaytracingAccelerationStructure g_scene_tlas : register(t0, space0);
 RWTexture2D<float4> g_scene_output : register(u1, space0);
@@ -10,11 +11,18 @@ StructuredBuffer<uint> g_indices : register(t5, space0);
 StructuredBuffer<PathTracingMaterialData> g_materials : register(t6, space0);
 StructuredBuffer<PathTracingGeometryData> g_geometries : register(t7, space0);
 StructuredBuffer<PathTracingInstanceData> g_instances : register(t8, space0);
+TextureCube<float4> g_irradiance_texture : register(t9, space0);
+TextureCube<float4> g_specular_texture : register(t10, space0);
+Texture2D<float4> g_texture_array[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t11, space0);
+SamplerState g_linear_sampler : register(s12, space0);
 
 struct PathTracingRayPayload
 {
     float3 radiance;
-    uint hit;
+    uint   hit;            // 0=miss, 1=hit; shadow rays reuse as: 0=occluded, 1=unoccluded
+    RNG    rng;
+    bool   is_shadow_ray;  // true = shadow ray, false = normal ray
+    uint   bounce_depth;   // 0=primary ray, 1=first indirect bounce, ...
 };
 
 [shader("raygeneration")]
@@ -24,44 +32,92 @@ void PathTracingRayGen()
     const uint2 extent = DispatchRaysDimensions().xy;
     const float2 uv = (float2(pixel) + 0.5f) / float2(max(extent, uint2(1, 1)));
 
+    const float2 ndc_uv = float2(uv.x, 1.0f - uv.y);
+    const float4 ndc = float4(UVToNdcXY(ndc_uv), 1.0f, 1.0f);
+    const float4 world = mul(g_frame_data.proj_view_matrix_inv, ndc);
+    const float3 world_position = world.xyz / max(world.w, 0.00001f);
+
     PathTracingRayPayload payload;
-    payload.radiance = float3(0.02f + uv.x * 0.3f, 0.03f + uv.y * 0.3f, 0.08f);
-    payload.hit = 0;
+    payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+    payload.hit           = 0u;
+    payload.rng           = InitRNG(pixel, extent, 0);
+    payload.is_shadow_ray = false;
+    payload.bounce_depth  = 0u;
 
     if (g_frame_data.instance_count > 0)
     {
-        const float2 ndc_uv = float2(uv.x, 1.0f - uv.y);
-        const float4 ndc = float4(UVToNdcXY(ndc_uv), 1.0f, 1.0f);
-        const float4 world = mul(g_frame_data.proj_view_matrix_inv, ndc);
-        const float3 world_position = world.xyz / max(world.w, 0.00001f);
-    
         RayDesc ray;
-        ray.Origin = g_frame_data.camera_position;
+        ray.Origin    = g_frame_data.camera_position;
         ray.Direction = normalize(world_position - g_frame_data.camera_position);
-        ray.TMin = 0.001f;
-        ray.TMax = 100000.0f;
-    
+        ray.TMin      = 0.001f;
+        ray.TMax      = 100000.0f;
+
         TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
     }
-    const float4 current_sample = float4(payload.radiance, 1.0f);
-    const float4 previous_accumulation =
-        g_frame_data.sample_index == 0 ? float4(0.0f, 0.0f, 0.0f, 0.0f) : g_accumulation_output[pixel];
-    const float sample_count = (float)g_frame_data.sample_index + 1.0f;
-    const float4 accumulated = (previous_accumulation * (float)g_frame_data.sample_index + current_sample) / sample_count;
-    g_accumulation_output[pixel] = accumulated;
-    g_scene_output[pixel] = accumulated;
+
+    g_scene_output[pixel] = float4(payload.radiance, 1.0f);
+    g_accumulation_output[pixel] = float4(payload.radiance, 1.0f);
 }
 
 [shader("miss")]
 void PathTracingMiss(inout PathTracingRayPayload payload)
 {
-    payload.radiance = float3(0.02f, 0.03f, 0.08f);
-    payload.hit = 0;
+    if (payload.is_shadow_ray)
+    {
+        payload.hit = 0u;
+        payload.radiance = float3(1.0f, 1.0f, 1.0f);
+    }
+    else
+    {
+        const float3 ray_dir = WorldRayDirection();
+        const float3 sky_color = g_specular_texture.SampleLevel(g_linear_sampler, ray_dir, 0.0f).rgb;
+        payload.radiance = sky_color;
+        payload.hit      = 0u;
+    }
+}
+
+float3 CosineSampleHemisphere(float2 u, out float pdf)
+{
+    const float r   = sqrt(u.x);
+    const float phi = 2.0f * 3.14159265f * u.y;
+    pdf = sqrt(max(1.0f - u.x, 0.0f)) / 3.14159265f;
+    return float3(r * cos(phi), r * sin(phi), sqrt(max(1.0 - u.x, 0.0)));
+}
+
+float3 TangentToWorld(float3 v_local, float3 n)
+{
+    const float3 up = abs(n.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+    const float3 t = normalize(cross(up, n));
+    const float3 b = cross(n, t);
+    return v_local.x * t + v_local.y * b + v_local.z * n;
+}
+
+#define MAX_BOUNCES 4
+
+// Next-event estimation: sample environment light (IBL) as direct lighting
+// This is a simplified version matching the deferred pipeline's IBL contribution
+float3 SampleEnvironmentLight(float3 n, float3 v, float3 base_color, float metallic, float roughness, float3 f0)
+{
+    float3 origin_samplecube_n = float3(n.x, n.z, n.y);
+
+    float3 irradiance = g_irradiance_texture.SampleLevel(g_linear_sampler, origin_samplecube_n, 0.0f).rgb;
+    float3 diffuse = irradiance * base_color;
+
+    float3 f = F_Schlick(clamp(dot(n, v), 0.0f, 1.0f), f0);
+    float3 kd = (1.0f - f) * (1.0f - metallic);
+
+    return kd * diffuse;
 }
 
 [shader("closesthit")]
 void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
 {
+    if (payload.is_shadow_ray)
+    {
+        payload.hit = 1u;
+        return;
+    }
+
     const uint safe_instance_count = max(g_frame_data.instance_count, 1u);
     const uint instance_index = min(InstanceIndex(), safe_instance_count - 1u);
     const PathTracingInstanceData instance_data = g_instances[instance_index];
@@ -85,64 +141,155 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
     const float3 normal_os = normalize(v0.normal.xyz * barycentric.x +
                                        v1.normal.xyz * barycentric.y +
                                        v2.normal.xyz * barycentric.z);
-    const float3 tangent_os = normalize(v0.tangent.xyz * barycentric.x +
-                                        v1.tangent.xyz * barycentric.y +
-                                        v2.tangent.xyz * barycentric.z);
     const float2 texcoord = v0.texcoord.xy * barycentric.x +
                             v1.texcoord.xy * barycentric.y +
                             v2.texcoord.xy * barycentric.z;
 
     const float3x4 object_to_world = ObjectToWorld3x4();
-    float3 normal_ws = normalize(mul((float3x3)object_to_world, normal_os));
-    float3 tangent_ws = normalize(mul((float3x3)object_to_world, tangent_os));
+    float3 N = normalize(mul((float3x3)object_to_world, normal_os));
     const float3 world_position = WorldRayOrigin() + RayTCurrent() * WorldRayDirection();
 
-    if (dot(normal_ws, -WorldRayDirection()) < 0.0f &&
-        (material_data.flags & PICCOLO_PATH_TRACING_MATERIAL_FLAG_DOUBLE_SIDED) != 0u)
+    float3 V = -WorldRayDirection();
+    if (dot(N, V) < 0.0f)
     {
-        normal_ws = -normal_ws;
+        N = -N;
     }
 
-    const float3 base_color = material_data.base_color_factor.rgb;
-    const float metallic = saturate(material_data.metallic_roughness_normal_occlusion.x);
-    const float roughness = max(0.04f, saturate(material_data.metallic_roughness_normal_occlusion.y));
-    const float3 emissive = material_data.emissive_factor.rgb;
-
-    float3 n = normal_ws;
-    if (dot(n, n) < 1e-6f)
+    float3 base_color = material_data.base_color_factor.rgb;
+    if (material_data.base_color_texture_index < PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES)
     {
-        n = float3(0.0f, 1.0f, 0.0f);
+        base_color *= g_texture_array[material_data.base_color_texture_index].SampleLevel(
+            g_linear_sampler, texcoord, 0.0f).rgb;
     }
-    n = normalize(n);
-    const float3 v = normalize(g_frame_data.camera_position - world_position);
-    const float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base_color, metallic);
 
-    float3 lo = float3(0.0f, 0.0f, 0.0f);
-    const uint point_light_count = min(g_frame_data.point_light_count, M_MAX_POINT_LIGHT_COUNT);
-    for (uint light_index = 0; light_index < point_light_count; ++light_index)
+    float metallic = material_data.metallic_roughness_normal_occlusion.x;
+    float roughness = material_data.metallic_roughness_normal_occlusion.y;
+    if (material_data.metallic_roughness_texture_index < PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES)
     {
-        const float3 light_position = g_frame_data.scene_point_lights[light_index].position;
-        const float light_radius = g_frame_data.scene_point_lights[light_index].radius;
-        const float3 l = normalize(light_position - world_position);
-        const float nol = min(dot(n, l), 1.0f);
-        const float distance_to_light = length(light_position - world_position);
-        const float distance_attenuation = 1.0f / (distance_to_light * distance_to_light + 1.0f);
-        const float radius_attenuation = 1.0f -
-                                         ((distance_to_light * distance_to_light) / max(light_radius * light_radius, 0.0001f));
-        const float light_attenuation = radius_attenuation * distance_attenuation * nol;
-        if (light_attenuation > 0.0f)
+        const float4 mr = g_texture_array[material_data.metallic_roughness_texture_index].SampleLevel(
+            g_linear_sampler, texcoord, 0.0f);
+        metallic *= mr.b;
+        roughness *= mr.g;
+    }
+    roughness = max(0.04f, roughness);
+
+    float3 emissive = material_data.emissive_factor.rgb;
+    if (material_data.emissive_texture_index < PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES)
+    {
+        emissive *= g_texture_array[material_data.emissive_texture_index].SampleLevel(
+            g_linear_sampler, texcoord, 0.0f).rgb;
+    }
+
+    const float3 f0 = lerp(0.04f, base_color, metallic);
+    float3 Lo = float3(0.0f, 0.0f, 0.0f);
+
+    // --- Directional light ---
+    {
+        const float3 L = normalize(g_frame_data.scene_directional_light.direction);
+        const float NdotL = dot(N, L);
+
+        if (NdotL > 0.0f)
         {
-            const float3 en = g_frame_data.scene_point_lights[light_index].intensity * light_attenuation;
-            lo += BRDF(l, v, n, f0, base_color, metallic, roughness) * en;
+            PathTracingRayPayload shadow_payload;
+            shadow_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+            shadow_payload.hit           = 0u;
+            shadow_payload.rng           = payload.rng;
+            shadow_payload.is_shadow_ray = true;
+            shadow_payload.bounce_depth  = 0u;
+
+            RayDesc shadow_ray;
+            shadow_ray.Origin    = world_position + N * 0.01f;
+            shadow_ray.Direction = L;
+            shadow_ray.TMin      = 0.001f;
+            shadow_ray.TMax      = 100000.0f;
+
+            TraceRay(g_scene_tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                     0xFF, 0, 1, 0, shadow_ray, shadow_payload);
+            payload.rng = shadow_payload.rng;
+
+            if (shadow_payload.hit == 0u)
+            {
+                Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
+                      g_frame_data.scene_directional_light.color * NdotL;
+            }
         }
     }
 
-    const float3 directional_l = normalize(g_frame_data.scene_directional_light.direction);
-    const float directional_nol = max(dot(n, directional_l), 0.0f);
-    lo += BRDF(directional_l, v, n, f0, base_color, metallic, roughness) *
-          g_frame_data.scene_directional_light.color * directional_nol;
+    // --- Point lights ---
+    const uint point_light_count = min(g_frame_data.point_light_count, M_MAX_POINT_LIGHT_COUNT);
+    for (uint li = 0; li < point_light_count; li++)
+    {
+        const PointLight light = g_frame_data.scene_point_lights[li];
+        const float3 light_vec = light.position - world_position;
+        const float  light_dist = length(light_vec);
+        const float3 L = light_vec / light_dist;
+        const float  NdotL = dot(N, L);
 
-    const float3 ambient = base_color * g_frame_data.ambient_light.xyz;
-    payload.radiance = ambient + lo + emissive;
-    payload.hit = 1;
+        if (NdotL > 0.0f)
+        {
+            PathTracingRayPayload shadow_payload;
+            shadow_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+            shadow_payload.hit           = 0u;
+            shadow_payload.rng           = payload.rng;
+            shadow_payload.is_shadow_ray = true;
+            shadow_payload.bounce_depth  = 0u;
+
+            RayDesc shadow_ray;
+            shadow_ray.Origin    = world_position + N * 0.01f;
+            shadow_ray.Direction = L;
+            shadow_ray.TMin      = 0.001f;
+            shadow_ray.TMax      = light_dist - 0.001f;
+
+            TraceRay(g_scene_tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                     0xFF, 0, 1, 0, shadow_ray, shadow_payload);
+            payload.rng = shadow_payload.rng;
+
+            if (shadow_payload.hit == 0u)
+            {
+                const float attenuation = 1.0f / max(light_dist * light_dist, 0.0001f);
+                Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
+                      light.intensity * attenuation * NdotL;
+            }
+        }
+    }
+
+    // --- Indirect bounce ---
+    if (payload.bounce_depth < MAX_BOUNCES)
+    {
+        float pdf;
+        const float3 sample_dir = CosineSampleHemisphere(Rand2D(payload.rng), pdf);
+        const float3 L = TangentToWorld(sample_dir, N);
+        const float  NdotL = max(dot(N, L), 0.0f);
+
+        if (pdf > 0.0f && NdotL > 0.0f)
+        {
+            PathTracingRayPayload indirect_payload;
+            indirect_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+            indirect_payload.hit           = 0u;
+            indirect_payload.rng           = payload.rng;
+            indirect_payload.is_shadow_ray = false;
+            indirect_payload.bounce_depth  = payload.bounce_depth + 1u;
+
+            RayDesc indirect_ray;
+            indirect_ray.Origin    = world_position + N * 0.01f;
+            indirect_ray.Direction = L;
+            indirect_ray.TMin      = 0.001f;
+            indirect_ray.TMax      = 100000.0f;
+
+            TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, indirect_ray, indirect_payload);
+            payload.rng = indirect_payload.rng;
+
+            if (indirect_payload.hit != 0u)
+            {
+                Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
+                      indirect_payload.radiance * NdotL / pdf;
+            }
+        }
+    }
+
+    float3 libl = SampleEnvironmentLight(N, V, base_color, metallic, roughness, f0);
+    float3 la = base_color * g_frame_data.ambient_light.rgb;
+
+    payload.radiance = emissive + Lo + libl + la;
+    payload.hit = 1u;
 }

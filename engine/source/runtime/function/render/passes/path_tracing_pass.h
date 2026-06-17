@@ -97,5 +97,10 @@ namespace Piccolo
         uint32_t  m_last_blas_build_count {0};
         bool      m_last_tlas_rebuilt {false};
         bool      m_accumulation_recreated_this_frame {false};
+
+        RHIImageView* m_irradiance_texture_view {nullptr};
+        RHIImageView* m_specular_texture_view {nullptr};
+        RHISampler*   m_linear_sampler {nullptr};
+        std::vector<RHIDescriptorImageInfo> m_texture_array_views;
     };
 } // namespace Piccolo

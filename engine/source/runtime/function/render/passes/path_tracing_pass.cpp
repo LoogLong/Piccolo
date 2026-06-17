@@ -213,7 +213,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[9] {};
+        RHIDescriptorSetLayoutBinding bindings[13] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -258,6 +258,26 @@ namespace Piccolo
         bindings[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[8].descriptorCount = 1;
         bindings[8].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[9].binding         = 9;
+        bindings[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[9].descriptorCount = 1;
+        bindings[9].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[10].binding         = 10;
+        bindings[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[10].descriptorCount = 1;
+        bindings[10].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[11].binding         = 11;
+        bindings[11].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[11].descriptorCount = 1024;
+        bindings[11].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[12].binding         = 12;
+        bindings[12].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLER;
+        bindings[12].descriptorCount = 1;
+        bindings[12].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -326,7 +346,7 @@ namespace Piccolo
 
         RHIRayTracingPipelineCreateInfo create_info {};
         create_info.layout                                    = m_pipeline_layout;
-        create_info.max_recursion_depth                       = 1;
+        create_info.max_recursion_depth                       = 6;
         create_info.shader_library.bytecode                   = bytecode.data();
         create_info.shader_library.bytecode_size              = bytecode.size();
         create_info.shader_library.raygen_export              = kPathTracingRayGenExport;
@@ -505,6 +525,29 @@ namespace Piccolo
             return false;
         }
 
+        if (m_specular_texture_view == nullptr || m_linear_sampler == nullptr)
+        {
+            m_irradiance_texture_view = m_render_resource_impl->m_global_render_resource._ibl_resource._irradiance_texture_image_view;
+            m_specular_texture_view   = m_render_resource_impl->m_global_render_resource._ibl_resource._specular_texture_image_view;
+            m_linear_sampler          = m_render_resource_impl->m_global_render_resource._ibl_resource._irradiance_texture_sampler;
+
+            const auto& texture_views = m_render_resource_impl->getPathTracingMaterialTextureViews();
+            m_texture_array_views.clear();
+            m_texture_array_views.reserve(texture_views.size() * 4);
+            for (const auto& tv : texture_views)
+            {
+                m_texture_array_views.push_back({nullptr, tv.base_color_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back({nullptr, tv.metallic_roughness_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back({nullptr, tv.normal_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back({nullptr, tv.emissive_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            }
+        }
+
+        if (m_specular_texture_view == nullptr || m_linear_sampler == nullptr)
+        {
+            return false;
+        }
+
         RHIDescriptorImageInfo scene_output_info {};
         scene_output_info.imageView   = m_scene_output_image_view;
         scene_output_info.imageLayout = RHI_IMAGE_LAYOUT_GENERAL;
@@ -548,7 +591,22 @@ namespace Piccolo
         acceleration_structure_info.accelerationStructureCount = 1;
         acceleration_structure_info.pAccelerationStructures    = &top_level_as;
 
-        RHIWriteDescriptorSet writes[9] {};
+        RHIDescriptorImageInfo irradiance_info {};
+        irradiance_info.imageView   = m_irradiance_texture_view;
+        irradiance_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        irradiance_info.sampler     = m_linear_sampler;
+
+        RHIDescriptorImageInfo specular_info {};
+        specular_info.imageView   = m_specular_texture_view;
+        specular_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        specular_info.sampler     = m_linear_sampler;
+
+        RHIDescriptorImageInfo null_image_info {};
+        null_image_info.imageView   = nullptr;
+        null_image_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        null_image_info.sampler     = nullptr;
+
+        RHIWriteDescriptorSet writes[13] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = m_descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -611,6 +669,34 @@ namespace Piccolo
         writes[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[8].descriptorCount = 1;
         writes[8].pBufferInfo     = &instance_buffer_info;
+
+        writes[9].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[9].dstSet          = m_descriptor_set;
+        writes[9].dstBinding      = 9;
+        writes[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[9].descriptorCount = 1;
+        writes[9].pImageInfo      = &irradiance_info;
+
+        writes[10].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[10].dstSet          = m_descriptor_set;
+        writes[10].dstBinding      = 10;
+        writes[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[10].descriptorCount = 1;
+        writes[10].pImageInfo      = &specular_info;
+
+        writes[11].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet          = m_descriptor_set;
+        writes[11].dstBinding      = 11;
+        writes[11].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[11].descriptorCount = static_cast<uint32_t>(std::max(m_texture_array_views.size(), size_t(1)));
+        writes[11].pImageInfo      = m_texture_array_views.empty() ? &null_image_info : m_texture_array_views.data();
+
+        writes[12].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[12].dstSet          = m_descriptor_set;
+        writes[12].dstBinding      = 12;
+        writes[12].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLER;
+        writes[12].descriptorCount = 1;
+        writes[12].pImageInfo      = &specular_info;
 
         m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
         m_descriptor_set_dirty = false;
