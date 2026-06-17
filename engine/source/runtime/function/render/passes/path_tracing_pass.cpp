@@ -168,8 +168,8 @@ namespace Piccolo
         dispatch_desc.ray_tracing_pipeline = m_ray_tracing_pipeline;
         dispatch_desc.layout               = m_pipeline_layout;
         dispatch_desc.shader_binding_table = m_shader_binding_table;
-        dispatch_desc.width                = m_rhi->getSwapchainInfo().extent.width / m_trace_scale;
-        dispatch_desc.height               = m_rhi->getSwapchainInfo().extent.height / m_trace_scale;
+        dispatch_desc.width                = m_rhi->getSwapchainInfo().extent.width;
+        dispatch_desc.height               = m_rhi->getSwapchainInfo().extent.height;
         dispatch_desc.depth                = 1;
         m_rhi->cmdTraceRays(command_buffer, &dispatch_desc);
 
@@ -425,23 +425,21 @@ namespace Piccolo
             return false;
         }
         const RHIExtent2D extent = m_rhi->getSwapchainInfo().extent;
-        const RHIExtent2D trace_extent = { extent.width / m_trace_scale,
-                                           extent.height / m_trace_scale };
         if (m_accumulation_image != nullptr &&
-            m_extent.width == trace_extent.width &&
-            m_extent.height == trace_extent.height)
+            m_extent.width == extent.width &&
+            m_extent.height == extent.height)
         {
             return true;
         }
 
         destroyAccumulationImage();
-        if (trace_extent.width == 0 || trace_extent.height == 0)
+        if (extent.width == 0 || extent.height == 0)
         {
             return false;
         }
 
-        m_rhi->createImage(trace_extent.width,
-                           trace_extent.height,
+        m_rhi->createImage(extent.width,
+                           extent.height,
                            RHI_FORMAT_R32G32B32A32_SFLOAT,
                            RHI_IMAGE_TILING_OPTIMAL,
                            RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
@@ -461,8 +459,8 @@ namespace Piccolo
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
 
         // Create prev accumulation image (for reading previous frame)
-        m_rhi->createImage(trace_extent.width,
-                           trace_extent.height,
+        m_rhi->createImage(extent.width,
+                           extent.height,
                            RHI_FORMAT_R32G32B32A32_SFLOAT,
                            RHI_IMAGE_TILING_OPTIMAL,
                            RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
@@ -481,7 +479,7 @@ namespace Piccolo
                                m_accumulation_prev_image_view);
         m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_accumulation_recreated_this_frame = true;
-        m_extent = trace_extent;
+        m_extent = extent;
         resetAccumulation();
         m_descriptor_set_dirty = true;
         return m_accumulation_image != nullptr && m_accumulation_image_view != nullptr;
@@ -499,8 +497,6 @@ namespace Piccolo
         const Vector3& current_camera_position =
             m_render_resource_impl->m_mesh_perframe_storage_buffer_object.camera_position;
         const RHIExtent2D extent = m_rhi->getSwapchainInfo().extent;
-        const RHIExtent2D trace_extent = { extent.width / m_trace_scale,
-                                           extent.height / m_trace_scale };
 
         bool resetting = false;
 
@@ -508,8 +504,8 @@ namespace Piccolo
             !m_has_last_camera_state ||
             !matrixEquals(m_last_proj_view_matrix_inv, current_proj_view_inv) ||
             !vectorEquals(m_last_camera_position, current_camera_position) ||
-            m_extent.width != trace_extent.width ||
-            m_extent.height != trace_extent.height;
+            m_extent.width != extent.width ||
+            m_extent.height != extent.height;
         if (camera_changed)
         {
             m_sample_index = 0;
@@ -538,7 +534,6 @@ namespace Piccolo
         frame_data.extent[1]            = extent.height;
         frame_data.instance_count       = instance_count;
         frame_data.reset_accumulation   = resetting ? 1u : 0u;
-        frame_data.trace_scale          = m_trace_scale;
         frame_data.ambient_light        = Vector4(raster_frame.ambient_light, 0.0f);
         frame_data.scene_directional_light = raster_frame.scene_directional_light;
         frame_data.directional_light_proj_view = raster_frame.directional_light_proj_view;

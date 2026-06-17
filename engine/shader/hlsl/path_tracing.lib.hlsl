@@ -68,15 +68,8 @@ void PathTracingRayGen()
 
     const float3 blended = (prev_accum * (sample_count - 1.0f) + payload.radiance) / sample_count;
 
-    // Accumulation at trace resolution
+    g_scene_output[pixel] = float4(blended, 1.0f);
     g_accumulation_output[pixel] = float4(blended, 1.0f);
-
-    // Nearest-neighbor upscale to full-resolution scene output
-    const uint2 full_pixel = pixel * g_frame_data.trace_scale;
-    g_scene_output[full_pixel] = float4(blended, 1.0f);
-    g_scene_output[full_pixel + uint2(1, 0)] = float4(blended, 1.0f);
-    g_scene_output[full_pixel + uint2(0, 1)] = float4(blended, 1.0f);
-    g_scene_output[full_pixel + uint2(1, 1)] = float4(blended, 1.0f);
 }
 
 [shader("miss")]
@@ -206,41 +199,32 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
     const float3 f0 = lerp(0.04f, base_color, metallic);
     float3 Lo = float3(0.0f, 0.0f, 0.0f);
 
-    // --- Directional light (shadow ray only on primary bounce) ---
+    // --- Directional light ---
     {
         const float3 L = normalize(g_frame_data.scene_directional_light.direction);
         const float NdotL = dot(N, L);
 
         if (NdotL > 0.0f)
         {
-            if (payload.bounce_depth == 0u)
+            PathTracingRayPayload shadow_payload;
+            shadow_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+            shadow_payload.hit           = 0u;
+            shadow_payload.rng           = payload.rng;
+            shadow_payload.is_shadow_ray = true;
+            shadow_payload.bounce_depth  = 0u;
+
+            RayDesc shadow_ray;
+            shadow_ray.Origin    = world_position + N * 0.01f;
+            shadow_ray.Direction = L;
+            shadow_ray.TMin      = 0.001f;
+            shadow_ray.TMax      = 100000.0f;
+
+            TraceRay(g_scene_tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                     0xFF, 0, 1, 0, shadow_ray, shadow_payload);
+            payload.rng = shadow_payload.rng;
+
+            if (shadow_payload.hit == 0u)
             {
-                PathTracingRayPayload shadow_payload;
-                shadow_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
-                shadow_payload.hit           = 0u;
-                shadow_payload.rng           = payload.rng;
-                shadow_payload.is_shadow_ray = true;
-                shadow_payload.bounce_depth  = 0u;
-
-                RayDesc shadow_ray;
-                shadow_ray.Origin    = world_position + N * 0.01f;
-                shadow_ray.Direction = L;
-                shadow_ray.TMin      = 0.001f;
-                shadow_ray.TMax      = 100000.0f;
-
-                TraceRay(g_scene_tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                         0xFF, 0, 1, 0, shadow_ray, shadow_payload);
-                payload.rng = shadow_payload.rng;
-
-                if (shadow_payload.hit == 0u)
-                {
-                    Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
-                          g_frame_data.scene_directional_light.color * NdotL;
-                }
-            }
-            else
-            {
-                // Indirect bounce: unshadowed directional light
                 Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
                       g_frame_data.scene_directional_light.color * NdotL;
             }
