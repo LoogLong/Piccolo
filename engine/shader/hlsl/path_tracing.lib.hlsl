@@ -6,6 +6,7 @@ RaytracingAccelerationStructure g_scene_tlas : register(t0, space0);
 RWTexture2D<float4> g_scene_output : register(u1, space0);
 ConstantBuffer<PathTracingFrameData> g_frame_data : register(b2, space0);
 RWTexture2D<float4> g_accumulation_output : register(u3, space0);
+Texture2D<float4> g_accumulation_prev : register(t13, space0); // previous frame accumulation (read)
 StructuredBuffer<PathTracingVertexData> g_vertices : register(t4, space0);
 StructuredBuffer<uint> g_indices : register(t5, space0);
 StructuredBuffer<PathTracingMaterialData> g_materials : register(t6, space0);
@@ -40,7 +41,7 @@ void PathTracingRayGen()
     PathTracingRayPayload payload;
     payload.radiance      = float3(0.0f, 0.0f, 0.0f);
     payload.hit           = 0u;
-    payload.rng           = InitRNG(pixel, extent, 0);
+    payload.rng           = InitRNG(pixel, extent, g_frame_data.sample_index);
     payload.is_shadow_ray = false;
     payload.bounce_depth  = 0u;
 
@@ -55,8 +56,20 @@ void PathTracingRayGen()
         TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
     }
 
-    g_scene_output[pixel] = float4(payload.radiance, 1.0f);
-    g_accumulation_output[pixel] = float4(payload.radiance, 1.0f);
+    // Temporal accumulation blend
+    float3 prev_accum = float3(0.0f, 0.0f, 0.0f);
+    float sample_count = 1.0f;
+
+    if (g_frame_data.reset_accumulation == 0)
+    {
+        prev_accum = g_accumulation_prev.Load(int3(pixel, 0)).rgb;
+        sample_count = float(g_frame_data.sample_index) + 1.0f;
+    }
+
+    const float3 blended = (prev_accum * (sample_count - 1.0f) + payload.radiance) / sample_count;
+
+    g_scene_output[pixel] = float4(blended, 1.0f);
+    g_accumulation_output[pixel] = float4(blended, 1.0f);
 }
 
 [shader("miss")]

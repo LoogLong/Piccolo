@@ -12,7 +12,7 @@ struct PathTracingFrameData
     uint sample_index;
     uint2 extent;
     uint instance_count;
-    uint _padding;
+    uint reset_accumulation;
     float4 ambient_light;
     PointLight scene_point_lights[M_MAX_POINT_LIGHT_COUNT];
     DirectionalLight scene_directional_light;
