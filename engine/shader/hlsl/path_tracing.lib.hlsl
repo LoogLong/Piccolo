@@ -243,36 +243,59 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
         }
     }
 
-    // --- Point lights ---
-    const uint point_light_count = min(g_frame_data.point_light_count, M_MAX_POINT_LIGHT_COUNT);
-    for (uint li = 0; li < point_light_count; li++)
+    // --- Point lights (shadow rays only on primary bounce) ---
+    if (payload.bounce_depth == 0u)
     {
-        const PointLight light = g_frame_data.scene_point_lights[li];
-        const float3 light_vec = light.position - world_position;
-        const float  light_dist = length(light_vec);
-        const float3 L = light_vec / light_dist;
-        const float  NdotL = dot(N, L);
-
-        if (NdotL > 0.0f)
+        const uint point_light_count = min(g_frame_data.point_light_count, M_MAX_POINT_LIGHT_COUNT);
+        for (uint li = 0; li < point_light_count; li++)
         {
-            PathTracingRayPayload shadow_payload;
-            shadow_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
-            shadow_payload.hit           = 0u;
-            shadow_payload.rng           = payload.rng;
-            shadow_payload.is_shadow_ray = true;
-            shadow_payload.bounce_depth  = 0u;
+            const PointLight light = g_frame_data.scene_point_lights[li];
+            const float3 light_vec = light.position - world_position;
+            const float  light_dist = length(light_vec);
+            const float3 L = light_vec / light_dist;
+            const float  NdotL = dot(N, L);
 
-            RayDesc shadow_ray;
-            shadow_ray.Origin    = world_position + N * 0.01f;
-            shadow_ray.Direction = L;
-            shadow_ray.TMin      = 0.001f;
-            shadow_ray.TMax      = light_dist - 0.001f;
+            if (NdotL > 0.0f)
+            {
+                PathTracingRayPayload shadow_payload;
+                shadow_payload.radiance      = float3(0.0f, 0.0f, 0.0f);
+                shadow_payload.hit           = 0u;
+                shadow_payload.rng           = payload.rng;
+                shadow_payload.is_shadow_ray = true;
+                shadow_payload.bounce_depth  = 0u;
 
-            TraceRay(g_scene_tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-                     0xFF, 0, 1, 0, shadow_ray, shadow_payload);
-            payload.rng = shadow_payload.rng;
+                RayDesc shadow_ray;
+                shadow_ray.Origin    = world_position + N * 0.01f;
+                shadow_ray.Direction = L;
+                shadow_ray.TMin      = 0.001f;
+                shadow_ray.TMax      = light_dist - 0.001f;
 
-            if (shadow_payload.hit == 0u)
+                TraceRay(g_scene_tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+                         0xFF, 0, 1, 0, shadow_ray, shadow_payload);
+                payload.rng = shadow_payload.rng;
+
+                if (shadow_payload.hit == 0u)
+                {
+                    const float attenuation = 1.0f / max(light_dist * light_dist, 0.0001f);
+                    Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
+                          light.intensity * attenuation * NdotL;
+                }
+            }
+        }
+    }
+    else
+    {
+        // On indirect bounces: approximate point light contribution without shadow rays
+        const uint point_light_count = min(g_frame_data.point_light_count, M_MAX_POINT_LIGHT_COUNT);
+        for (uint li = 0; li < point_light_count; li++)
+        {
+            const PointLight light = g_frame_data.scene_point_lights[li];
+            const float3 light_vec = light.position - world_position;
+            const float  light_dist = length(light_vec);
+            const float3 L = light_vec / light_dist;
+            const float  NdotL = max(dot(N, L), 0.0f);
+
+            if (NdotL > 0.0f)
             {
                 const float attenuation = 1.0f / max(light_dist * light_dist, 0.0001f);
                 Lo += BRDF(L, V, N, f0, base_color, metallic, roughness) *
