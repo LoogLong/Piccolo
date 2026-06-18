@@ -199,6 +199,16 @@ namespace Piccolo
                                    RHICommandBuffer*    command_buffer,
                                    RenderMeshGPUResource& mesh);
 
+        RHIAccelerationStructure* buildPathTracingBLASFromSkinned(
+            std::shared_ptr<RHI> rhi,
+            RHICommandBuffer* command_buffer,
+            RHIBuffer* skinned_position_buffer,
+            uint32_t vertex_count,
+            uint32_t vertex_stride,
+            RHIBuffer* index_buffer,
+            uint32_t index_count,
+            RHIIndexType index_type);
+
         std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
 
         bool updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,

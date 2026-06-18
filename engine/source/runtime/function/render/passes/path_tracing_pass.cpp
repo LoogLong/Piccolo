@@ -776,34 +776,189 @@ namespace Piccolo
 
         std::vector<RenderPathTracingCollectedInstance> collected_instances =
             m_render_resource_impl->collectPathTracingInstances(scene);
+
+        // ---- GPU skinning: upload joint matrices and setup compute pipeline ----
+        const bool has_skinned = std::any_of(collected_instances.begin(), collected_instances.end(),
+            [](const RenderPathTracingCollectedInstance& i) { return i.enable_vertex_blending; });
+
+        if (has_skinned)
+        {
+            if (!setupSkinComputePipeline())
+            {
+                // Compute shader not available; skip skinning for this frame
+            }
+            else
+            {
+                uploadJointMatrices(collected_instances);
+            }
+        }
+
+        // ---- Ensure BLAS for static meshes (per-mesh dedup) ----
         std::unordered_set<RenderMeshGPUResource*> processed_meshes;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
         {
-            if (instance.mesh != nullptr)
+            if (instance.enable_vertex_blending || instance.mesh == nullptr)
             {
-                if (!processed_meshes.insert(instance.mesh).second)
+                continue; // skinned meshes handled after compute dispatch
+            }
+
+            if (!processed_meshes.insert(instance.mesh).second)
+            {
+                continue;
+            }
+
+            const bool was_dirty = instance.mesh->path_tracing_blas_dirty;
+            m_render_resource_impl->ensurePathTracingBLAS(m_rhi, command_buffer, *instance.mesh);
+            if (was_dirty && !instance.mesh->path_tracing_blas_dirty && instance.mesh->path_tracing_bottom_level_as != nullptr)
+            {
+                ++m_last_blas_build_count;
+            }
+            instance.bottom_level_as = instance.mesh->path_tracing_bottom_level_as;
+        }
+
+        // ---- Check if TLAS needs rebuilding ----
+        const bool tlas_dirty =
+            has_skinned ||
+            scene.isPathTracingTLASDirty() ||
+            m_top_level_as == nullptr ||
+            m_tlas_instance_count != collected_instances.size();
+        m_last_tlas_rebuilt = tlas_dirty;
+        if (!tlas_dirty)
+        {
+            return true;
+        }
+
+        // ---- Update scene buffers (per-instance geometry for skinned, dedup for static) ----
+        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
+        {
+            return false;
+        }
+        m_descriptor_set_dirty = true;
+
+        // ---- GPU skinning: dispatch compute shader for skinned instances ----
+        if (has_skinned && m_skin_compute_pipeline != nullptr)
+        {
+            // Calculate total skinned vertices for buffer allocation
+            uint32_t total_skinned_vertices = 0;
+            for (const auto& inst : collected_instances)
+            {
+                if (inst.enable_vertex_blending && inst.mesh != nullptr)
                 {
-                    continue;
+                    total_skinned_vertices += inst.mesh->mesh_vertex_count;
+                }
+            }
+
+            if (!ensureSkinBuffers(total_skinned_vertices))
+            {
+                LOG_WARN("Failed to allocate skinning buffers for path tracing");
+            }
+            else
+            {
+                // Assign vertex offsets in the flat buffer (matches the order in updatePathTracingSceneBuffers)
+                uint32_t current_vertex_offset = 0;
+                for (auto& inst : collected_instances)
+                {
+                    if (inst.enable_vertex_blending && inst.mesh != nullptr)
+                    {
+                        inst.vertex_offset_in_flat_buffer = current_vertex_offset;
+                        current_vertex_offset += inst.mesh->mesh_vertex_count;
+                    }
                 }
 
-                const bool was_dirty = instance.mesh->path_tracing_blas_dirty;
-                m_render_resource_impl->ensurePathTracingBLAS(m_rhi, command_buffer, *instance.mesh);
-                if (was_dirty && !instance.mesh->path_tracing_blas_dirty && instance.mesh->path_tracing_bottom_level_as != nullptr)
-                {
-                    ++m_last_blas_build_count;
-                }
-                instance.bottom_level_as = instance.mesh->path_tracing_bottom_level_as;
+                dispatchSkinCompute(command_buffer, collected_instances);
+                // Barrier is inserted at end of dispatchSkinCompute
             }
         }
 
+        // ---- Build per-instance BLAS for skinned instances ----
+        std::unordered_set<uint32_t> active_skinned_instance_ids;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
         {
-            if (instance.mesh != nullptr)
+            if (!instance.enable_vertex_blending || instance.mesh == nullptr)
             {
-                instance.bottom_level_as = instance.mesh->path_tracing_bottom_level_as;
+                continue;
+            }
+
+            RenderMeshGPUResource* mesh = instance.mesh;
+            uint32_t inst_id = instance.instance_id;
+            active_skinned_instance_ids.insert(inst_id);
+
+            auto& resources = mesh->path_tracing_skinned_resources[inst_id];
+
+            uint32_t vertex_count = mesh->mesh_vertex_count;
+            if (resources.skinned_position_buffer == nullptr ||
+                resources.vertex_count != vertex_count)
+            {
+                if (resources.skinned_position_buffer != nullptr)
+                    m_rhi->destroyBuffer(resources.skinned_position_buffer);
+                if (resources.skinned_position_memory != nullptr)
+                    m_rhi->freeMemory(resources.skinned_position_memory);
+
+                m_rhi->createBuffer(
+                    vertex_count * sizeof(float) * 3,
+                    RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                        RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                        RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    resources.skinned_position_buffer,
+                    resources.skinned_position_memory);
+                resources.vertex_count = vertex_count;
+                resources.index_count  = mesh->mesh_index_count;
+            }
+
+            // Destroy old BLAS before building new one (vertex positions changed)
+            if (resources.blas != nullptr)
+            {
+                m_rhi->destroyAccelerationStructure(resources.blas);
+                resources.blas = nullptr;
+            }
+
+            resources.blas = m_render_resource_impl->buildPathTracingBLASFromSkinned(
+                m_rhi,
+                command_buffer,
+                resources.skinned_position_buffer,
+                vertex_count,
+                sizeof(float) * 3,
+                mesh->mesh_index_buffer,
+                mesh->mesh_index_count,
+                mesh->mesh_index_type);
+
+            instance.bottom_level_as = resources.blas;
+            if (resources.blas != nullptr)
+            {
+                ++m_last_blas_build_count;
             }
         }
 
+        // ---- Clean up orphaned per-instance resources (instances that disappeared) ----
+        std::unordered_set<RenderMeshGPUResource*> cleaned_skinned_meshes;
+        for (auto& inst : collected_instances)
+        {
+            if (inst.mesh != nullptr && inst.enable_vertex_blending &&
+                cleaned_skinned_meshes.insert(inst.mesh).second)
+            {
+                auto& map = inst.mesh->path_tracing_skinned_resources;
+                for (auto it = map.begin(); it != map.end(); )
+                {
+                    if (active_skinned_instance_ids.count(it->first) == 0)
+                    {
+                        if (it->second.blas != nullptr)
+                            m_rhi->destroyAccelerationStructure(it->second.blas);
+                        if (it->second.skinned_position_buffer != nullptr)
+                            m_rhi->destroyBuffer(it->second.skinned_position_buffer);
+                        if (it->second.skinned_position_memory != nullptr)
+                            m_rhi->freeMemory(it->second.skinned_position_memory);
+                        it = map.erase(it);
+                    }
+                    else
+                    {
+                        ++it;
+                    }
+                }
+            }
+        }
+
+        // ---- Assign shader instance indices and filter ----
         collected_instances.erase(std::remove_if(collected_instances.begin(),
                                                  collected_instances.end(),
                                                  [](const RenderPathTracingCollectedInstance& instance)
@@ -821,28 +976,12 @@ namespace Piccolo
 
         m_last_collected_instance_count = static_cast<uint32_t>(collected_instances.size());
 
-        // Assign shader instance indices
         for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
         {
             collected_instances[instance_index].shader_instance_index = instance_index;
         }
 
-        const bool tlas_dirty =
-            scene.isPathTracingTLASDirty() ||
-            m_top_level_as == nullptr ||
-            m_tlas_instance_count != collected_instances.size();
-        m_last_tlas_rebuilt = tlas_dirty;
-        if (!tlas_dirty)
-        {
-            return true;
-        }
-
-        // Only update scene buffers when TLAS actually needs rebuilding
-        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
-        {
-            return false;
-        }
-        m_descriptor_set_dirty = true;
+        // ---- Rebuild TLAS ----
 
         std::vector<RHIAccelerationStructureInstanceDesc> instances;
         instances.reserve(collected_instances.size());
@@ -1085,7 +1224,7 @@ namespace Piccolo
             pipeline_info.sType   = RHI_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
             pipeline_info.layout  = m_skin_compute_pipeline_layout;
 
-            RHIShaderModule* module = m_rhi->createShaderModule(bytecode);
+            RHIShader* module = m_rhi->createShaderModule(bytecode);
             if (module == RHI_NULL_HANDLE) return false;
 
             RHIPipelineShaderStageCreateInfo stage {};
@@ -1129,20 +1268,14 @@ namespace Piccolo
 
             m_skinned_position_output_capacity = position_data_size * 2;
 
-            RHIBufferCreateInfo buffer_info {};
-            buffer_info.sType = RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            buffer_info.size  = m_skinned_position_output_capacity;
-            buffer_info.usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                                RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            buffer_info.memoryProperties = RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-
-            if (!m_rhi->createBuffer(&buffer_info, m_skinned_position_output_buffer) ||
-                !m_rhi->allocateMemory(m_skinned_position_output_buffer, m_skinned_position_output_memory))
-            {
-                LOG_WARN("Failed to allocate skinned position output buffer for path tracing GPU skinning");
-                return false;
-            }
+            m_rhi->createBuffer(
+                m_skinned_position_output_capacity,
+                RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                m_skinned_position_output_buffer,
+                m_skinned_position_output_memory);
         }
 
         return true;
@@ -1176,23 +1309,16 @@ namespace Piccolo
 
             m_joint_matrix_buffer_capacity = data_size * 2;
 
-            RHIBufferCreateInfo buffer_info {};
-            buffer_info.sType = RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            buffer_info.size  = m_joint_matrix_buffer_capacity;
-            buffer_info.usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            buffer_info.memoryProperties = RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                           RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-
-            if (!m_rhi->createBuffer(&buffer_info, m_joint_matrix_buffer) ||
-                !m_rhi->allocateMemory(m_joint_matrix_buffer, m_joint_matrix_memory))
-            {
-                LOG_WARN("Failed to allocate joint matrix buffer for path tracing GPU skinning");
-                return false;
-            }
+            m_rhi->createBuffer(
+                m_joint_matrix_buffer_capacity,
+                RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                m_joint_matrix_buffer,
+                m_joint_matrix_memory);
         }
 
         void* mapped = nullptr;
-        if (!m_rhi->mapMemory(m_joint_matrix_memory, 0, data_size, &mapped) || mapped == nullptr)
+        if (!m_rhi->mapMemory(m_joint_matrix_memory, 0, data_size, 0, &mapped) || mapped == nullptr)
         {
             return false;
         }
@@ -1296,22 +1422,17 @@ namespace Piccolo
             RHIBuffer* constants_buffer      = nullptr;
             RHIDeviceMemory* constants_memory = nullptr;
             {
-                RHIBufferCreateInfo buffer_info {};
-                buffer_info.sType = RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-                buffer_info.size  = 16; // 4 x uint32_t
-                buffer_info.usage = RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-                buffer_info.memoryProperties = RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                               RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-                if (!m_rhi->createBuffer(&buffer_info, constants_buffer) ||
-                    !m_rhi->allocateMemory(constants_buffer, constants_memory))
-                {
-                    continue;
-                }
+                m_rhi->createBuffer(
+                    16, // 4 x uint32_t
+                    RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    constants_buffer,
+                    constants_memory);
 
                 struct { uint32_t vc; uint32_t jmo; uint32_t ovo; uint32_t pad; }
                     constants = { vertex_count, joint_matrix_offset, skinned_vertex_offset, 0 };
                 void* mapped_cb = nullptr;
-                m_rhi->mapMemory(constants_memory, 0, 16, &mapped_cb);
+                m_rhi->mapMemory(constants_memory, 0, 16, 0, &mapped_cb);
                 std::memcpy(mapped_cb, &constants, sizeof(constants));
                 m_rhi->unmapMemory(constants_memory);
             }

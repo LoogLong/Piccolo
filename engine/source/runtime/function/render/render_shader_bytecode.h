@@ -205,6 +205,12 @@ namespace Piccolo
 #else
 #define PICCOLO_VULKAN_PARTICLE_SIMULATE_COMP ::Piccolo::emptyVulkanShaderBytecode()
 #endif
+#if __has_include(<path_tracing_skin_comp.h>)
+#include <path_tracing_skin_comp.h>
+#define PICCOLO_VULKAN_PATH_TRACING_SKIN_COMP PATH_TRACING_SKIN_COMP
+#else
+#define PICCOLO_VULKAN_PATH_TRACING_SKIN_COMP ::Piccolo::emptyVulkanShaderBytecode()
+#endif
 #if __has_include(<particlebillboard_frag.h>)
 #include <particlebillboard_frag.h>
 #define PICCOLO_VULKAN_PARTICLEBILLBOARD_FRAG PARTICLEBILLBOARD_FRAG
@@ -271,6 +277,7 @@ namespace Piccolo
 #define PICCOLO_VULKAN_SKYBOX_FRAG ::Piccolo::emptyVulkanShaderBytecode()
 #define PICCOLO_VULKAN_SKYBOX_VERT ::Piccolo::emptyVulkanShaderBytecode()
 #define PICCOLO_VULKAN_TONE_MAPPING_FRAG ::Piccolo::emptyVulkanShaderBytecode()
+#define PICCOLO_VULKAN_PATH_TRACING_SKIN_COMP ::Piccolo::emptyVulkanShaderBytecode()
 #endif
 
 #if PICCOLO_ENABLE_D3D12_BACKEND && PICCOLO_D3D12_SHADER_BYTECODE_AVAILABLE != 0 && defined(__has_include)

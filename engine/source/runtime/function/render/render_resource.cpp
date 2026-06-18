@@ -268,6 +268,53 @@ namespace Piccolo
         mesh.path_tracing_blas_dirty      = false;
     }
 
+    RHIAccelerationStructure* RenderResource::buildPathTracingBLASFromSkinned(
+        std::shared_ptr<RHI> rhi,
+        RHICommandBuffer* command_buffer,
+        RHIBuffer* skinned_position_buffer,
+        uint32_t vertex_count,
+        uint32_t vertex_stride,
+        RHIBuffer* index_buffer,
+        uint32_t index_count,
+        RHIIndexType index_type)
+    {
+        if (skinned_position_buffer == nullptr || vertex_count == 0) return nullptr;
+
+        RHIAccelerationStructureGeometryDesc geometry;
+        geometry.vertex_position_buffer = skinned_position_buffer;
+        geometry.vertex_position_offset = 0;
+        geometry.vertex_count           = vertex_count;
+        geometry.vertex_stride          = vertex_stride;
+        geometry.index_buffer           = index_buffer;
+        geometry.index_offset           = 0;
+        geometry.index_count            = index_count;
+        geometry.index_type             = index_type;
+        geometry.opaque                 = true;
+
+        RHIAccelerationStructureBuildDesc build_desc;
+        build_desc.type              = RHIAccelerationStructureType::BottomLevel;
+        build_desc.geometries        = &geometry;
+        build_desc.geometry_count    = 1;
+        build_desc.prefer_fast_trace = true;
+        build_desc.allow_update      = false;
+        build_desc.perform_update    = false;
+        build_desc.source            = nullptr;
+
+        RHIAccelerationStructure* new_blas = nullptr;
+        if (!rhi->createAccelerationStructure(&build_desc, new_blas) || new_blas == nullptr)
+        {
+            return nullptr;
+        }
+
+        if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, new_blas))
+        {
+            rhi->destroyAccelerationStructure(new_blas);
+            return nullptr;
+        }
+
+        return new_blas;
+    }
+
     std::vector<RenderPathTracingCollectedInstance> RenderResource::collectPathTracingInstances(RenderScene& scene)
     {
         scene.rebuildPathTracingInstances(*this, true);
@@ -303,11 +350,11 @@ namespace Piccolo
             }
 
             // Skinning data
-            collected_instance.enable_vertex_blending = pt_instance.enable_vertex_blending;
-            if (pt_instance.enable_vertex_blending && pt_instance.entity != nullptr)
+            collected_instance.enable_vertex_blending = source_instance.enable_vertex_blending;
+            if (source_instance.enable_vertex_blending && source_instance.entity != nullptr)
             {
-                collected_instance.joint_count    = static_cast<uint32_t>(pt_instance.entity->m_joint_matrices.size());
-                collected_instance.joint_matrices = pt_instance.entity->m_joint_matrices.data();
+                collected_instance.joint_count    = static_cast<uint32_t>(source_instance.entity->m_joint_matrices.size());
+                collected_instance.joint_matrices = source_instance.entity->m_joint_matrices.data();
             }
 
             collected_instances.push_back(collected_instance);
@@ -339,43 +386,74 @@ namespace Piccolo
 
             // Build geometry record
             uint32_t geometry_index = 0;
-            auto geometry_it = geometry_indices.find(source_instance.mesh);
-            if (geometry_it == geometry_indices.end())
-            {
-                geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
-                geometry_indices[source_instance.mesh] = geometry_index;
+            const bool is_skinned = source_instance.enable_vertex_blending;
 
-                // Append this mesh's vertices and indices to global arrays
+            // Skinned meshes: each instance gets unique geometry (no dedup).
+            // Static meshes: dedup by mesh pointer (existing behavior).
+            if (!is_skinned)
+            {
+                auto geometry_it = geometry_indices.find(source_instance.mesh);
+                if (geometry_it != geometry_indices.end())
+                {
+                    geometry_index = geometry_it->second;
+                    // Build material/instance records below (existing path)
+                    // skip vertex/index append for dedup'd static meshes
+                }
+                else
+                {
+                    geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
+                    geometry_indices[source_instance.mesh] = geometry_index;
+
+                    RenderPathTracingGeometryGPUData geometry_data{};
+                    geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
+                    geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                    geometry_data.index_count = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+
+                    // Static mesh: copy rest-pose vertex data (existing behavior)
+                    for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
+                    {
+                        RenderPathTracingVertexGPUData vertex{};
+                        vertex.position = Vector4(source_instance.mesh->path_tracing_positions[v], 1.0f);
+                        vertex.normal = Vector4(source_instance.mesh->path_tracing_normals[v], 0.0f);
+                        vertex.tangent = Vector4(source_instance.mesh->path_tracing_tangents[v], 0.0f);
+                        vertex.texcoord = Vector4(source_instance.mesh->path_tracing_texcoords[v].x,
+                                                  source_instance.mesh->path_tracing_texcoords[v].y,
+                                                  0.0f,
+                                                  0.0f);
+                        m_path_tracing_vertex_data.push_back(vertex);
+                    }
+
+                    // Append indices
+                    for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                    {
+                        m_path_tracing_index_data.push_back(idx);
+                    }
+                    m_path_tracing_geometry_data.push_back(geometry_data);
+                }
+            }
+            else
+            {
+                // Skinned mesh: each instance gets its own geometry
+                geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
+
                 RenderPathTracingGeometryGPUData geometry_data{};
                 geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
-                geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
-                geometry_data.index_count = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+                geometry_data.index_offset  = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                geometry_data.index_count   = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
 
-                // Append vertices
-                for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
+                // Reserve space for skinned vertices — compute shader fills these later
+                size_t vertex_count = source_instance.mesh->path_tracing_positions.size();
+                for (size_t v = 0; v < vertex_count; ++v)
                 {
-                    RenderPathTracingVertexGPUData vertex{};
-                    vertex.position = Vector4(source_instance.mesh->path_tracing_positions[v], 1.0f);
-                    vertex.normal = Vector4(source_instance.mesh->path_tracing_normals[v], 0.0f);
-                    vertex.tangent = Vector4(source_instance.mesh->path_tracing_tangents[v], 0.0f);
-                    vertex.texcoord = Vector4(source_instance.mesh->path_tracing_texcoords[v].x,
-                                              source_instance.mesh->path_tracing_texcoords[v].y,
-                                              0.0f,
-                                              0.0f);
-                    m_path_tracing_vertex_data.push_back(vertex);
+                    m_path_tracing_vertex_data.push_back(RenderPathTracingVertexGPUData{});
                 }
 
-                // Append indices
+                // Append indices (shared with other instances of same mesh)
                 for (uint32_t idx : source_instance.mesh->path_tracing_indices)
                 {
                     m_path_tracing_index_data.push_back(idx);
                 }
-
                 m_path_tracing_geometry_data.push_back(geometry_data);
-            }
-            else
-            {
-                geometry_index = geometry_it->second;
             }
 
             // Build material record
@@ -423,6 +501,7 @@ namespace Piccolo
             instance_data.geometry_index = geometry_index;
             instance_data.material_index = shader_material_index;
             instance_data.entity_instance_id = source_instance.instance_id;
+            instance_data.flags = is_skinned ? 1u : 0u;  // bit 0: enable_vertex_blending
             instance_data.flags = 0;
             m_path_tracing_instance_data.push_back(instance_data);
         }
