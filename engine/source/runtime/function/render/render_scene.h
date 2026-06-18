@@ -26,6 +26,8 @@ namespace Piccolo
         uint32_t                      instance_id {0};
         uint32_t                      material_index {0};
         bool                          enabled {true};
+        bool                          enable_vertex_blending {false};
+        uint32_t                      joint_count {0};
     };
 
     class RenderScene

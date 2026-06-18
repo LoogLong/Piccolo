@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace Piccolo
@@ -47,6 +48,19 @@ namespace Piccolo
         std::vector<Vector2>  path_tracing_texcoords;
         std::vector<uint32_t> path_tracing_indices;
         bool                  path_tracing_geometry_dirty {true};
+
+        // Persistent per-instance skinned output buffers (multi-frame lifetime).
+        // Stored here (not in RenderPathTracingCollectedInstance) because BLAS
+        // and position buffers are GPU resources that survive across frames.
+        struct SkinnedPathTracingResources
+        {
+            RHIAccelerationStructure* blas {nullptr};
+            RHIBuffer*  skinned_position_buffer {nullptr};
+            RHIDeviceMemory* skinned_position_memory {nullptr};
+            uint32_t    vertex_count {0};
+            uint32_t    index_count {0};
+        };
+        std::unordered_map<uint32_t, SkinnedPathTracingResources> path_tracing_skinned_resources;
     };
 
     struct RenderPBRMaterialGPUResource

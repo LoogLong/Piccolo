@@ -220,6 +220,8 @@ namespace Piccolo
             instance.instance_id    = entity.m_instance_id;
             instance.material_index = material_index->second;
             instance.enabled        = true;
+            instance.enable_vertex_blending = entity.m_enable_vertex_blending;
+            instance.joint_count            = static_cast<uint32_t>(entity.m_joint_matrices.size());
             m_path_tracing_instances.push_back(instance);
 
             if (mesh->path_tracing_blas_dirty)

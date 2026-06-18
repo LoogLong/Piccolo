@@ -302,6 +302,14 @@ namespace Piccolo
                 }
             }
 
+            // Skinning data
+            collected_instance.enable_vertex_blending = pt_instance.enable_vertex_blending;
+            if (pt_instance.enable_vertex_blending && pt_instance.entity != nullptr)
+            {
+                collected_instance.joint_count    = static_cast<uint32_t>(pt_instance.entity->m_joint_matrices.size());
+                collected_instance.joint_matrices = pt_instance.entity->m_joint_matrices.data();
+            }
+
             collected_instances.push_back(collected_instance);
         }
 
