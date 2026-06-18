@@ -827,13 +827,6 @@ namespace Piccolo
             collected_instances[instance_index].shader_instance_index = instance_index;
         }
 
-        // Update path tracing scene buffers
-        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
-        {
-            return false;
-        }
-        m_descriptor_set_dirty = true;
-
         const bool tlas_dirty =
             scene.isPathTracingTLASDirty() ||
             m_top_level_as == nullptr ||
@@ -843,6 +836,13 @@ namespace Piccolo
         {
             return true;
         }
+
+        // Only update scene buffers when TLAS actually needs rebuilding
+        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
+        {
+            return false;
+        }
+        m_descriptor_set_dirty = true;
 
         std::vector<RHIAccelerationStructureInstanceDesc> instances;
         instances.reserve(collected_instances.size());
