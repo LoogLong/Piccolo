@@ -11,6 +11,7 @@ namespace Piccolo
 {
     class RenderResource;
     class RenderScene;
+    struct RenderPathTracingCollectedInstance;
 
     struct PathTracingPassInitInfo : RenderPassInitInfo
     {
@@ -57,6 +58,15 @@ namespace Piccolo
         bool buildTopLevelAS(RenderScene& scene);
         void destroyTopLevelAS();
         void destroyAccumulationImage();
+
+        // GPU skinning compute
+        void destroySkinComputeResources();
+        bool setupSkinComputePipeline();
+        bool ensureSkinBuffers(uint32_t total_skinned_vertices);
+        bool uploadJointMatrices(const std::vector<RenderPathTracingCollectedInstance>& instances);
+        void dispatchSkinCompute(RHICommandBuffer* command_buffer,
+                                 const std::vector<RenderPathTracingCollectedInstance>& instances);
+
         void transitionImage(RHIImage*              image,
                              RHIImageLayout        old_layout,
                              RHIImageLayout        new_layout,
@@ -103,6 +113,18 @@ namespace Piccolo
         uint32_t  m_last_blas_build_count {0};
         bool      m_last_tlas_rebuilt {false};
         bool      m_accumulation_recreated_this_frame {false};
+
+        // GPU skinning compute resources
+        RHIDescriptorSetLayout* m_skin_compute_descriptor_set_layout {nullptr};
+        RHIPipelineLayout*      m_skin_compute_pipeline_layout {nullptr};
+        RHIPipeline*            m_skin_compute_pipeline {nullptr};
+        RHIDescriptorSet*       m_skin_compute_descriptor_set {nullptr};
+        RHIBuffer*              m_joint_matrix_buffer {nullptr};
+        RHIDeviceMemory*        m_joint_matrix_memory {nullptr};
+        size_t                  m_joint_matrix_buffer_capacity {0};
+        RHIBuffer*              m_skinned_position_output_buffer {nullptr};
+        RHIDeviceMemory*        m_skinned_position_output_memory {nullptr};
+        size_t                  m_skinned_position_output_capacity {0};
 
         RHIImageView* m_irradiance_texture_view {nullptr};
         RHIImageView* m_specular_texture_view {nullptr};

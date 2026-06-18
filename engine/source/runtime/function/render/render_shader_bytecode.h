@@ -424,6 +424,12 @@ namespace Piccolo
 #else
 #define PICCOLO_D3D12_PARTICLEBILLBOARD_VERT ::Piccolo::emptyD3D12ShaderBytecode()
 #endif
+#if __has_include(<dxil_cpp/path_tracing_skin_comp.h>)
+#include <dxil_cpp/path_tracing_skin_comp.h>
+#define PICCOLO_D3D12_PATH_TRACING_SKIN_COMP D3D12_PATH_TRACING_SKIN_COMP
+#else
+#define PICCOLO_D3D12_PATH_TRACING_SKIN_COMP ::Piccolo::emptyD3D12ShaderBytecode()
+#endif
 #if __has_include(<dxil_cpp/path_tracing_lib.h>)
 #include <dxil_cpp/path_tracing_lib.h>
 #define PICCOLO_D3D12_PATH_TRACING_LIB D3D12_PATH_TRACING_LIB
@@ -481,6 +487,7 @@ namespace Piccolo
 #define PICCOLO_D3D12_PARTICLEBILLBOARD_FRAG ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_PARTICLEBILLBOARD_VERT ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_PATH_TRACING_LIB ::Piccolo::emptyD3D12ShaderBytecode()
+#define PICCOLO_D3D12_PATH_TRACING_SKIN_COMP ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_POST_PROCESS_VERT ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_SKYBOX_FRAG ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_SKYBOX_VERT ::Piccolo::emptyD3D12ShaderBytecode()
