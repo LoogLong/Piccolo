@@ -7,6 +7,7 @@ namespace Piccolo
 {
     void RenderPipelineBase::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
+        m_gpu_skinning_pass->preparePassData(render_resource);
         m_main_camera_pass->preparePassData(render_resource);
         m_pick_pass->preparePassData(render_resource);
         m_directional_light_pass->preparePassData(render_resource);

@@ -8,6 +8,7 @@
 #include "runtime/function/render/passes/point_light_pass.h"
 #include "runtime/function/render/passes/tone_mapping_pass.h"
 #include "runtime/function/render/passes/ui_pass.h"
+#include "runtime/function/render/passes/gpu_skinning_pass.h"
 #include "runtime/function/render/passes/particle_pass.h"
 
 #include "runtime/function/render/debugdraw/debug_draw_manager.h"
@@ -53,6 +54,7 @@ namespace Piccolo
         m_fxaa_pass               = std::make_shared<FXAAPass>();
         m_particle_pass           = std::make_shared<ParticlePass>();
         m_path_tracing_pass       = std::make_shared<PathTracingPass>();
+        m_gpu_skinning_pass       = std::make_shared<GpuSkinningPass>();
 
         RenderPassCommonInfo pass_common_info;
         pass_common_info.rhi             = m_rhi;
@@ -69,6 +71,7 @@ namespace Piccolo
         m_fxaa_pass->setCommonInfo(pass_common_info);
         m_particle_pass->setCommonInfo(pass_common_info);
         m_path_tracing_pass->setCommonInfo(pass_common_info);
+        m_gpu_skinning_pass->setCommonInfo(pass_common_info);
 
         m_point_light_shadow_pass->initialize(nullptr);
         m_directional_light_pass->initialize(nullptr);
@@ -95,6 +98,9 @@ namespace Piccolo
         path_tracing_init_info.scene_output_image      = main_camera_pass->getBackupOddImage();
         path_tracing_init_info.scene_output_image_view = main_camera_pass->getBackupOddImageView();
         m_path_tracing_pass->initialize(&path_tracing_init_info);
+
+        m_gpu_skinning_pass->initialize(nullptr);
+        std::static_pointer_cast<GpuSkinningPass>(m_gpu_skinning_pass)->setup();
 
         std::static_pointer_cast<ParticlePass>(m_particle_pass)->setupParticlePass();
 
@@ -329,6 +335,8 @@ namespace Piccolo
         {
             return true;
         }
+
+        static_cast<GpuSkinningPass*>(m_gpu_skinning_pass.get())->dispatch();
 
         static_cast<DirectionalLightShadowPass*>(m_directional_light_pass.get())->draw();
         static_cast<PointLightShadowPass*>(m_point_light_shadow_pass.get())->draw();

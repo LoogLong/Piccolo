@@ -55,6 +55,7 @@ namespace Piccolo
         RenderSceneRenderMode m_requested_scene_render_mode {RenderSceneRenderMode::Raster};
         RenderSceneRenderMode m_effective_scene_render_mode {RenderSceneRenderMode::Raster};
 
+        std::shared_ptr<RenderPassBase> m_gpu_skinning_pass;
         std::shared_ptr<RenderPassBase> m_directional_light_pass;
         std::shared_ptr<RenderPassBase> m_point_light_shadow_pass;
         std::shared_ptr<RenderPassBase> m_main_camera_pass;
