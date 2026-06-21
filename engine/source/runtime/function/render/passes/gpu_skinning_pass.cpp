@@ -44,39 +44,45 @@ namespace Piccolo
             return false;
         }
 
-        // Descriptor set layout: 8 bindings (t0-t4 SRV, b0 UBO, u0-u1 UAV)
+        // Descriptor set layout: 8 bindings (t0-t4 SRV, b5 UBO, u6-u7 UAV)
+        // NOTE: Read-only SRV bindings (t0-t4) must include a graphics stage flag
+        // to prevent toDescriptorRangeType() from mapping them to UAV.
+        // See d3d12_rhi.cpp: hasComputeStage && !hasGraphicsStage → UAV heuristic.
         {
             RHIDescriptorSetLayoutBinding bindings[8] {};
+            // t0-t4: read-only StructuredBuffer → SRV (add graphics stage to force SRV mapping)
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[0].descriptorCount = 1;
-            bindings[0].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[0].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
 
             bindings[1].binding         = 1;
             bindings[1].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[1].descriptorCount = 1;
-            bindings[1].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[1].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
 
             bindings[2].binding         = 2;
             bindings[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[2].descriptorCount = 1;
-            bindings[2].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[2].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
 
             bindings[3].binding         = 3;
             bindings[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[3].descriptorCount = 1;
-            bindings[3].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[3].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
 
             bindings[4].binding         = 4;
             bindings[4].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[4].descriptorCount = 1;
-            bindings[4].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[4].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
 
+            // b5: ConstantBuffer → CBV (unchanged)
             bindings[5].binding         = 5;
             bindings[5].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
             bindings[5].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
 
+            // u6-u7: read-write RWStructuredBuffer → UAV (compute-only, unchanged)
             bindings[6].binding         = 6;
             bindings[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[6].descriptorCount = 1;
