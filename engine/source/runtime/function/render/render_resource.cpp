@@ -433,22 +433,29 @@ namespace Piccolo
             }
             else
             {
-                // Skinned mesh: each instance gets its own geometry
+                // Skinned mesh: each instance gets its own geometry.
+                // vertex_offset = offset into g_skinned_vertices, looked up from GpuSkinningPass output.
+                // No placeholder vertices pushed to g_vertices — skinned instances read from
+                // the separate g_skinned_vertices buffer.
                 geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
 
+                // Look up skinned vertex offset from GpuSkinningPass output
+                uint32_t skinned_vertex_offset = 0;
+                auto& outputs = source_instance.mesh->skinned_mesh_outputs;
+                auto it = outputs.find(source_instance.instance_id);
+                if (it != outputs.end())
+                {
+                    skinned_vertex_offset = it->second.skinned_vertex_offset;
+                }
+
                 RenderPathTracingGeometryGPUData geometry_data{};
-                geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
+                geometry_data.vertex_offset = skinned_vertex_offset;  // offset into g_skinned_vertices (Bug B2 fix)
                 geometry_data.index_offset  = static_cast<uint32_t>(m_path_tracing_index_data.size());
                 geometry_data.index_count   = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
 
-                // Reserve space for skinned vertices — compute shader fills these later
-                size_t vertex_count = source_instance.mesh->path_tracing_positions.size();
-                for (size_t v = 0; v < vertex_count; ++v)
-                {
-                    m_path_tracing_vertex_data.push_back(RenderPathTracingVertexGPUData{});
-                }
+                // NO placeholder push to m_path_tracing_vertex_data — g_vertices is static-only
 
-                // Append indices (shared with other instances of same mesh)
+                // Append indices
                 for (uint32_t idx : source_instance.mesh->path_tracing_indices)
                 {
                     m_path_tracing_index_data.push_back(idx);

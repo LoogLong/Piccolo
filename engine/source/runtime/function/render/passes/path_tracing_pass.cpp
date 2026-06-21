@@ -840,7 +840,7 @@ namespace Piccolo
         }
         m_descriptor_set_dirty = true;
 
-        // ---- Build per-instance BLAS for skinned instances (skinned data was written by GpuSkinningPass) ----
+        // ---- Build per-instance BLAS for skinned instances (position data written by GpuSkinningPass) ----
         std::unordered_set<uint32_t> active_skinned_instance_ids;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
         {
@@ -853,54 +853,49 @@ namespace Piccolo
             uint32_t inst_id = instance.instance_id;
             active_skinned_instance_ids.insert(inst_id);
 
-            auto& resources = mesh->path_tracing_skinned_resources[inst_id];
-
-            uint32_t vertex_count = mesh->mesh_vertex_count;
-            if (resources.skinned_position_buffer == nullptr ||
-                resources.vertex_count != vertex_count)
+            // Look up skinned position buffer from GpuSkinningPass output
+            auto& outputs = mesh->skinned_mesh_outputs;
+            auto out_it = outputs.find(inst_id);
+            if (out_it == outputs.end())
             {
-                if (resources.skinned_position_buffer != nullptr)
-                    m_rhi->destroyBuffer(resources.skinned_position_buffer);
-                if (resources.skinned_position_memory != nullptr)
-                    m_rhi->freeMemory(resources.skinned_position_memory);
-
-                m_rhi->createBuffer(
-                    vertex_count * sizeof(float) * 3,
-                    RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                        RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                        RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                    resources.skinned_position_buffer,
-                    resources.skinned_position_memory);
-                resources.vertex_count = vertex_count;
-                resources.index_count  = mesh->mesh_index_count;
+                continue; // GpuSkinningPass hasn't produced output for this instance yet
+            }
+            auto& skinned_output = out_it->second;
+            if (skinned_output.skinned_position_buffer == nullptr)
+            {
+                continue;
             }
 
-            // Destroy old BLAS before building new one (vertex positions changed)
-            if (resources.blas != nullptr)
+            // Per-instance BLAS storage
+            auto& pt_resources = mesh->path_tracing_skinned_resources[inst_id];
+
+            // Destroy old BLAS before building new one (vertex positions change every frame)
+            if (pt_resources.blas != nullptr)
             {
-                m_rhi->destroyAccelerationStructure(resources.blas);
-                resources.blas = nullptr;
+                m_rhi->destroyAccelerationStructure(pt_resources.blas);
+                pt_resources.blas = nullptr;
             }
 
-            resources.blas = m_render_resource_impl->buildPathTracingBLASFromSkinned(
+            pt_resources.blas = m_render_resource_impl->buildPathTracingBLASFromSkinned(
                 m_rhi,
                 command_buffer,
-                resources.skinned_position_buffer,
-                vertex_count,
+                skinned_output.skinned_position_buffer,
+                skinned_output.vertex_count,
                 sizeof(float) * 3,
                 mesh->mesh_index_buffer,
-                mesh->mesh_index_count,
+                skinned_output.index_count,
                 mesh->mesh_index_type);
 
-            instance.bottom_level_as = resources.blas;
-            if (resources.blas != nullptr)
+            instance.bottom_level_as = pt_resources.blas;
+            if (pt_resources.blas != nullptr)
             {
                 ++m_last_blas_build_count;
             }
         }
 
-        // ---- Clean up orphaned per-instance resources (instances that disappeared) ----
+        // ---- Clean up orphaned per-instance BLAS (instances that disappeared) ----
+        // Position buffers are owned by GpuSkinningPass (skinned_mesh_outputs).
+        // PathTracingPass only owns the BLAS (path_tracing_skinned_resources).
         std::unordered_set<RenderMeshGPUResource*> cleaned_skinned_meshes;
         for (auto& inst : collected_instances)
         {
@@ -914,10 +909,6 @@ namespace Piccolo
                     {
                         if (it->second.blas != nullptr)
                             m_rhi->destroyAccelerationStructure(it->second.blas);
-                        if (it->second.skinned_position_buffer != nullptr)
-                            m_rhi->destroyBuffer(it->second.skinned_position_buffer);
-                        if (it->second.skinned_position_memory != nullptr)
-                            m_rhi->freeMemory(it->second.skinned_position_memory);
                         it = map.erase(it);
                     }
                     else
