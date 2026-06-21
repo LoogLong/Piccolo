@@ -14,7 +14,7 @@ StructuredBuffer<PathTracingGeometryData> g_geometries : register(t7, space0);
 StructuredBuffer<PathTracingInstanceData> g_instances : register(t8, space0);
 // Per-instance skinned vertex data for animated meshes.
 // Indexed as [geometry_data.vertex_offset + local_vertex_index].
-StructuredBuffer<PathTracingVertexData> g_skinned_vertices : register(t14, space0);
+StructuredBuffer<PathTracingVertexData> g_skinned_vertices : register(t1036, space0);
 TextureCube<float4> g_irradiance_texture : register(t9, space0);
 TextureCube<float4> g_specular_texture : register(t10, space0);
 Texture2D<float4> g_texture_array[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t11, space0);

@@ -295,7 +295,7 @@ namespace Piccolo
         bindings[12].descriptorCount = 1;
         bindings[12].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-        bindings[13].binding         = 14;  // t14: g_skinned_vertices
+        bindings[13].binding         = 1036;  // t1036: g_skinned_vertices
         bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[13].descriptorCount = 1;
         bindings[13].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
@@ -761,7 +761,7 @@ namespace Piccolo
 
         writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[13].dstSet          = m_descriptor_set;
-        writes[13].dstBinding      = 14;  // t14: g_skinned_vertices
+        writes[13].dstBinding      = 1036;  // t1036: g_skinned_vertices
         writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[13].descriptorCount = 1;
         writes[13].pBufferInfo     = &skinned_vertex_buffer_info;
