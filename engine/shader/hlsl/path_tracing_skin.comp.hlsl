@@ -20,11 +20,11 @@ struct SkinComputeConstants
     uint output_vertex_offset; // offset into output buffers
     uint _padding;
 };
-ConstantBuffer<SkinComputeConstants> g_constants : register(b0, space0);
+ConstantBuffer<SkinComputeConstants> g_constants : register(b5, space0);
 
 // Output
-RWStructuredBuffer<float3>                 g_skinned_positions : register(u0, space0);
-RWStructuredBuffer<PathTracingVertexData>  g_skinned_vertices  : register(u1, space0);
+RWStructuredBuffer<float3>                 g_skinned_positions : register(u6, space0);
+RWStructuredBuffer<PathTracingVertexData>  g_skinned_vertices  : register(u7, space0);
 
 [numthreads(64, 1, 1)]
 void main(uint3 dispatch_id : SV_DispatchThreadID)

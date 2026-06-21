@@ -72,17 +72,17 @@ namespace Piccolo
             bindings[4].descriptorCount = 1;
             bindings[4].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
 
-            bindings[5].binding         = 0;
+            bindings[5].binding         = 5;
             bindings[5].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
             bindings[5].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
 
-            bindings[6].binding         = 0;
+            bindings[6].binding         = 6;
             bindings[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[6].descriptorCount = 1;
             bindings[6].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
 
-            bindings[7].binding         = 1;
+            bindings[7].binding         = 7;
             bindings[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[7].descriptorCount = 1;
             bindings[7].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
@@ -147,6 +147,15 @@ namespace Piccolo
             }
 
             m_rhi->destroyShaderModule(module);
+        }
+
+        // Allocate persistent constants buffer (16 bytes, mapped per dispatch)
+        if (m_skin_constants_buffer == nullptr)
+        {
+            m_rhi->createBuffer(
+                16, RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                m_skin_constants_buffer, m_skin_constants_memory);
         }
 
         return true;
@@ -234,7 +243,7 @@ namespace Piccolo
             {
                 size_t bytes = inst.joint_count * sizeof(Matrix4x4);
                 std::memcpy(static_cast<uint8_t*>(mapped) + offset, inst.joint_matrices, bytes);
-                offset += bytes;
+                offset += s_mesh_vertex_blending_max_joint_count * sizeof(Matrix4x4);
             }
         }
         m_rhi->unmapMemory(m_joint_matrix_memory);
@@ -320,56 +329,47 @@ namespace Piccolo
             writes[4].descriptorCount = 1;
             writes[4].pBufferInfo     = &joint_matrices_info;
 
-            // Write 5: SkinComputeConstants uniform buffer (b0)
-            RHIBuffer* constants_buffer      = nullptr;
-            RHIDeviceMemory* constants_memory = nullptr;
+            // Write 5: SkinComputeConstants (b5) — persistent buffer, mapped per dispatch
             {
-                m_rhi->createBuffer(
-                    16,
-                    RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    constants_buffer,
-                    constants_memory);
-
                 struct { uint32_t vc; uint32_t jmo; uint32_t ovo; uint32_t pad; }
                     constants = { vertex_count, joint_matrix_offset, skinned_vertex_offset, 0 };
                 void* mapped_cb = nullptr;
-                m_rhi->mapMemory(constants_memory, 0, 16, 0, &mapped_cb);
+                m_rhi->mapMemory(m_skin_constants_memory, 0, 16, 0, &mapped_cb);
                 std::memcpy(mapped_cb, &constants, sizeof(constants));
-                m_rhi->unmapMemory(constants_memory);
+                m_rhi->unmapMemory(m_skin_constants_memory);
             }
 
             RHIDescriptorBufferInfo constants_info {};
-            constants_info.buffer = constants_buffer;
+            constants_info.buffer = m_skin_constants_buffer;
             constants_info.offset = 0;
             constants_info.range  = 16;
             writes[5].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[5].dstSet          = m_skin_compute_descriptor_set;
-            writes[5].dstBinding      = 0;
+            writes[5].dstBinding      = 5;
             writes[5].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             writes[5].descriptorCount = 1;
             writes[5].pBufferInfo     = &constants_info;
 
-            // Write 6: skinned positions output (u0)
+            // Write 6: skinned positions output (u6)
             RHIDescriptorBufferInfo skinned_positions_info {};
             skinned_positions_info.buffer = m_skinned_position_output_buffer;
             skinned_positions_info.offset = skinned_vertex_offset * sizeof(float) * 3;
             skinned_positions_info.range  = RHI_WHOLE_SIZE;
             writes[6].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[6].dstSet          = m_skin_compute_descriptor_set;
-            writes[6].dstBinding      = 0;
+            writes[6].dstBinding      = 6;
             writes[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[6].descriptorCount = 1;
             writes[6].pBufferInfo     = &skinned_positions_info;
 
-            // Write 7: skinned vertex data output (u1) — same buffer as g_vertices
+            // Write 7: skinned vertex data output (u7) — same buffer as g_vertices
             RHIDescriptorBufferInfo skinned_vertices_info {};
             skinned_vertices_info.buffer = m_render_resource_impl->getPathTracingVertexBuffer();
             skinned_vertices_info.offset = skinned_vertex_offset * sizeof(RenderPathTracingVertexGPUData);
             skinned_vertices_info.range  = RHI_WHOLE_SIZE;
             writes[7].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[7].dstSet          = m_skin_compute_descriptor_set;
-            writes[7].dstBinding      = 1;
+            writes[7].dstBinding      = 7;
             writes[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[7].descriptorCount = 1;
             writes[7].pBufferInfo     = &skinned_vertices_info;
@@ -384,10 +384,7 @@ namespace Piccolo
             uint32_t group_count = (vertex_count + 63) / 64;
             m_rhi->cmdDispatch(command_buffer, group_count, 1, 1);
 
-            m_rhi->destroyBuffer(constants_buffer);
-            m_rhi->freeMemory(constants_memory);
-
-            joint_matrix_offset += inst.joint_count;
+            joint_matrix_offset += s_mesh_vertex_blending_max_joint_count;
             skinned_vertex_offset += vertex_count;
         }
 

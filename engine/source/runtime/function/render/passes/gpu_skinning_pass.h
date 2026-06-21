@@ -43,5 +43,9 @@ namespace Piccolo
         RHIBuffer*       m_skinned_position_output_buffer {nullptr};
         RHIDeviceMemory* m_skinned_position_output_memory {nullptr};
         size_t           m_skinned_position_output_capacity {0};
+
+        // Persistent staging buffer for SkinComputeConstants (allocated once, mapped per dispatch)
+        RHIBuffer*       m_skin_constants_buffer {nullptr};
+        RHIDeviceMemory* m_skin_constants_memory {nullptr};
     };
 } // namespace Piccolo
