@@ -229,7 +229,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[14] {};
+        RHIDescriptorSetLayoutBinding bindings[15] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -295,10 +295,15 @@ namespace Piccolo
         bindings[12].descriptorCount = 1;
         bindings[12].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-        bindings[13].binding         = 1035;
-        bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[13].binding         = 14;  // t14: g_skinned_vertices
+        bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[13].descriptorCount = 1;
-        bindings[13].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+        bindings[13].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        bindings[14].binding         = 1035;
+        bindings[14].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[14].descriptorCount = 1;
+        bindings[14].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -637,6 +642,11 @@ namespace Piccolo
         instance_buffer_info.offset = 0;
         instance_buffer_info.range  = RHI_WHOLE_SIZE;
 
+        RHIDescriptorBufferInfo skinned_vertex_buffer_info {};
+        skinned_vertex_buffer_info.buffer = m_render_resource_impl->getSkinnedVertexBuffer();
+        skinned_vertex_buffer_info.offset = 0;
+        skinned_vertex_buffer_info.range  = RHI_WHOLE_SIZE;
+
         RHIAccelerationStructure* top_level_as = m_top_level_as;
         RHIWriteDescriptorSetAccelerationStructure acceleration_structure_info {};
         acceleration_structure_info.accelerationStructureCount = 1;
@@ -657,7 +667,7 @@ namespace Piccolo
         null_image_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         null_image_info.sampler     = nullptr;
 
-        RHIWriteDescriptorSet writes[14] {};
+        RHIWriteDescriptorSet writes[15] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = m_descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -751,10 +761,17 @@ namespace Piccolo
 
         writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[13].dstSet          = m_descriptor_set;
-        writes[13].dstBinding      = 1035;
-        writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[13].dstBinding      = 14;  // t14: g_skinned_vertices
+        writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[13].descriptorCount = 1;
-        writes[13].pImageInfo      = &accumulation_prev_info;
+        writes[13].pBufferInfo     = &skinned_vertex_buffer_info;
+
+        writes[14].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[14].dstSet          = m_descriptor_set;
+        writes[14].dstBinding      = 1035;
+        writes[14].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[14].descriptorCount = 1;
+        writes[14].pImageInfo      = &accumulation_prev_info;
 
         m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
         m_descriptor_set_dirty = false;

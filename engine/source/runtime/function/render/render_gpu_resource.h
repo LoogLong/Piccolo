@@ -55,8 +55,12 @@ namespace Piccolo
         struct SkinnedPathTracingResources
         {
             RHIAccelerationStructure* blas {nullptr};
-            RHIBuffer*  skinned_position_buffer {nullptr};
+            RHIBuffer*  skinned_position_buffer {nullptr};     // float3 positions, for BLAS (u6)
             RHIDeviceMemory* skinned_position_memory {nullptr};
+            // Skinned vertex data (PathTracingVertexData) for path tracing lives in a FLAT
+            // buffer (m_skinned_vertex_output_buffer) owned by GpuSkinningPass, exposed via
+            // RenderResource. Per-instance data is at computed offsets within that buffer.
+            // Only skinned_position_buffer is per-instance (needed for BLAS geometry).
             uint32_t    vertex_count {0};
             uint32_t    index_count {0};
         };

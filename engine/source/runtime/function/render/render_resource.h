@@ -219,6 +219,8 @@ namespace Piccolo
         RHIBuffer* getPathTracingMaterialBuffer() const { return m_path_tracing_material_buffer; }
         RHIBuffer* getPathTracingGeometryBuffer() const { return m_path_tracing_geometry_buffer; }
         RHIBuffer* getPathTracingInstanceBuffer() const { return m_path_tracing_instance_buffer; }
+        RHIBuffer* getSkinnedVertexBuffer() const { return m_skinned_vertex_buffer; }
+        void setSkinnedVertexBuffer(RHIBuffer* buf) { m_skinned_vertex_buffer = buf; }
 
         const std::vector<RenderPathTracingMaterialTextureViews>& getPathTracingMaterialTextureViews() const
         {
@@ -271,6 +273,7 @@ namespace Piccolo
         RHIDeviceMemory* m_path_tracing_geometry_buffer_memory {nullptr};
         RHIBuffer* m_path_tracing_instance_buffer {nullptr};
         RHIDeviceMemory* m_path_tracing_instance_buffer_memory {nullptr};
+        RHIBuffer* m_skinned_vertex_buffer {nullptr};
         
         size_t m_path_tracing_vertex_buffer_capacity {0};
         size_t m_path_tracing_index_buffer_capacity {0};

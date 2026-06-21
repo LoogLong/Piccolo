@@ -161,39 +161,6 @@ namespace Piccolo
         return true;
     }
 
-    bool GpuSkinningPass::ensureSkinBuffers(uint32_t total_skinned_vertices)
-    {
-        if (total_skinned_vertices == 0) return true;
-
-        size_t position_data_size = total_skinned_vertices * sizeof(float) * 3;
-        if (position_data_size > m_skinned_position_output_capacity)
-        {
-            if (m_skinned_position_output_buffer != nullptr)
-            {
-                m_rhi->destroyBuffer(m_skinned_position_output_buffer);
-                m_skinned_position_output_buffer = nullptr;
-            }
-            if (m_skinned_position_output_memory != nullptr)
-            {
-                m_rhi->freeMemory(m_skinned_position_output_memory);
-                m_skinned_position_output_memory = nullptr;
-            }
-
-            m_skinned_position_output_capacity = position_data_size * 2;
-
-            m_rhi->createBuffer(
-                m_skinned_position_output_capacity,
-                RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                    RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                    RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                m_skinned_position_output_buffer,
-                m_skinned_position_output_memory);
-        }
-
-        return true;
-    }
-
     bool GpuSkinningPass::uploadJointMatrices(const std::vector<RenderPathTracingCollectedInstance>& instances)
     {
         uint32_t total_joint_count = 0;
@@ -256,7 +223,7 @@ namespace Piccolo
         if (m_skin_compute_pipeline == nullptr || command_buffer == nullptr) return;
 
         uint32_t joint_matrix_offset = 0;
-        uint32_t skinned_vertex_offset = 0;
+        uint32_t skinned_vertex_acc_offset = 0;
 
         for (const auto& inst : instances)
         {
@@ -266,6 +233,30 @@ namespace Piccolo
             RenderMeshGPUResource* mesh = inst.mesh;
             uint32_t vertex_count = mesh->mesh_vertex_count;
             if (vertex_count == 0) continue;
+
+            // Per-instance skinned resources (for BLAS geometry source)
+            uint32_t inst_id = inst.instance_id;
+            auto& resources = mesh->path_tracing_skinned_resources[inst_id];
+
+            // Create per-instance position buffer if needed
+            if (resources.skinned_position_buffer == nullptr || resources.vertex_count != vertex_count)
+            {
+                if (resources.skinned_position_buffer != nullptr)
+                    m_rhi->destroyBuffer(resources.skinned_position_buffer);
+                if (resources.skinned_position_memory != nullptr)
+                    m_rhi->freeMemory(resources.skinned_position_memory);
+
+                m_rhi->createBuffer(
+                    vertex_count * sizeof(float) * 3,
+                    RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                        RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                        RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    resources.skinned_position_buffer,
+                    resources.skinned_position_memory);
+                resources.vertex_count = vertex_count;
+                resources.index_count  = mesh->mesh_index_count;
+            }
 
             RHIWriteDescriptorSet writes[8] {};
 
@@ -332,7 +323,7 @@ namespace Piccolo
             // Write 5: SkinComputeConstants (b5) — persistent buffer, mapped per dispatch
             {
                 struct { uint32_t vc; uint32_t jmo; uint32_t ovo; uint32_t pad; }
-                    constants = { vertex_count, joint_matrix_offset, skinned_vertex_offset, 0 };
+                    constants = { vertex_count, joint_matrix_offset, skinned_vertex_acc_offset, 0 };
                 void* mapped_cb = nullptr;
                 m_rhi->mapMemory(m_skin_constants_memory, 0, 16, 0, &mapped_cb);
                 std::memcpy(mapped_cb, &constants, sizeof(constants));
@@ -350,10 +341,10 @@ namespace Piccolo
             writes[5].descriptorCount = 1;
             writes[5].pBufferInfo     = &constants_info;
 
-            // Write 6: skinned positions output (u6)
+            // Write 6: skinned positions → PER-INSTANCE buffer (BLAS geometry source), offset 0
             RHIDescriptorBufferInfo skinned_positions_info {};
-            skinned_positions_info.buffer = m_skinned_position_output_buffer;
-            skinned_positions_info.offset = skinned_vertex_offset * sizeof(float) * 3;
+            skinned_positions_info.buffer = resources.skinned_position_buffer;
+            skinned_positions_info.offset = 0;
             skinned_positions_info.range  = RHI_WHOLE_SIZE;
             writes[6].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[6].dstSet          = m_skin_compute_descriptor_set;
@@ -362,10 +353,10 @@ namespace Piccolo
             writes[6].descriptorCount = 1;
             writes[6].pBufferInfo     = &skinned_positions_info;
 
-            // Write 7: skinned vertex data output (u7) — same buffer as g_vertices
+            // Write 7: skinned vertex data → FLAT buffer at cumulative offset
             RHIDescriptorBufferInfo skinned_vertices_info {};
-            skinned_vertices_info.buffer = m_render_resource_impl->getPathTracingVertexBuffer();
-            skinned_vertices_info.offset = skinned_vertex_offset * sizeof(RenderPathTracingVertexGPUData);
+            skinned_vertices_info.buffer = m_skinned_vertex_output_buffer;
+            skinned_vertices_info.offset = skinned_vertex_acc_offset * sizeof(RenderPathTracingVertexGPUData);
             skinned_vertices_info.range  = RHI_WHOLE_SIZE;
             writes[7].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[7].dstSet          = m_skin_compute_descriptor_set;
@@ -385,7 +376,7 @@ namespace Piccolo
             m_rhi->cmdDispatch(command_buffer, group_count, 1, 1);
 
             joint_matrix_offset += s_mesh_vertex_blending_max_joint_count;
-            skinned_vertex_offset += vertex_count;
+            skinned_vertex_acc_offset += vertex_count;
         }
 
         // UAV barrier: compute writes → acceleration structure build reads
@@ -430,6 +421,7 @@ namespace Piccolo
         RHICommandBuffer* command_buffer = m_rhi->getCurrentCommandBuffer();
         if (command_buffer == nullptr) return false;
 
+        // Ensure flat skinned vertex output buffer is allocated
         uint32_t total_skinned_vertices = 0;
         for (const auto& inst : collected_instances)
         {
@@ -438,21 +430,26 @@ namespace Piccolo
                 total_skinned_vertices += inst.mesh->mesh_vertex_count;
             }
         }
-        if (!ensureSkinBuffers(total_skinned_vertices))
+
+        size_t required_size = total_skinned_vertices * sizeof(RenderPathTracingVertexGPUData);
+        if (required_size > m_skinned_vertex_output_capacity)
         {
-            LOG_WARN("GpuSkinningPass: failed to allocate skinning buffers");
-            return false;
+            if (m_skinned_vertex_output_buffer != nullptr)
+                m_rhi->destroyBuffer(m_skinned_vertex_output_buffer);
+            if (m_skinned_vertex_output_memory != nullptr)
+                m_rhi->freeMemory(m_skinned_vertex_output_memory);
+
+            m_skinned_vertex_output_capacity = required_size * 2;
+            m_rhi->createBuffer(
+                m_skinned_vertex_output_capacity,
+                RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                m_skinned_vertex_output_buffer,
+                m_skinned_vertex_output_memory);
         }
 
-        uint32_t current_vertex_offset = 0;
-        for (auto& inst : collected_instances)
-        {
-            if (inst.enable_vertex_blending && inst.mesh != nullptr)
-            {
-                inst.vertex_offset_in_flat_buffer = current_vertex_offset;
-                current_vertex_offset += inst.mesh->mesh_vertex_count;
-            }
-        }
+        // Expose the flat vertex buffer to other passes via RenderResource
+        m_render_resource_impl->setSkinnedVertexBuffer(m_skinned_vertex_output_buffer);
 
         dispatchSkinCompute(command_buffer, collected_instances);
         return true;

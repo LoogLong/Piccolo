@@ -12,6 +12,9 @@ StructuredBuffer<uint> g_indices : register(t5, space0);
 StructuredBuffer<PathTracingMaterialData> g_materials : register(t6, space0);
 StructuredBuffer<PathTracingGeometryData> g_geometries : register(t7, space0);
 StructuredBuffer<PathTracingInstanceData> g_instances : register(t8, space0);
+// Per-instance skinned vertex data for animated meshes.
+// Indexed as [geometry_data.vertex_offset + local_vertex_index].
+StructuredBuffer<PathTracingVertexData> g_skinned_vertices : register(t14, space0);
 TextureCube<float4> g_irradiance_texture : register(t9, space0);
 TextureCube<float4> g_specular_texture : register(t10, space0);
 Texture2D<float4> g_texture_array[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t11, space0);
@@ -142,13 +145,29 @@ void PathTracingClosestHit(inout PathTracingRayPayload payload, BuiltInTriangleI
 
     const uint primitive_index = PrimitiveIndex();
     const uint index_base = geometry_data.index_offset + primitive_index * 3u;
-    const uint i0 = g_indices[index_base + 0u] + geometry_data.vertex_offset;
-    const uint i1 = g_indices[index_base + 1u] + geometry_data.vertex_offset;
-    const uint i2 = g_indices[index_base + 2u] + geometry_data.vertex_offset;
+    const uint local_i0 = g_indices[index_base + 0u];
+    const uint local_i1 = g_indices[index_base + 1u];
+    const uint local_i2 = g_indices[index_base + 2u];
 
-    const PathTracingVertexData v0 = g_vertices[i0];
-    const PathTracingVertexData v1 = g_vertices[i1];
-    const PathTracingVertexData v2 = g_vertices[i2];
+    PathTracingVertexData v0, v1, v2;
+
+    if (instance_data.flags & 1u) // enable_vertex_blending
+    {
+        // Skinned instance: read from per-instance g_skinned_vertices buffer
+        v0 = g_skinned_vertices[geometry_data.vertex_offset + local_i0];
+        v1 = g_skinned_vertices[geometry_data.vertex_offset + local_i1];
+        v2 = g_skinned_vertices[geometry_data.vertex_offset + local_i2];
+    }
+    else
+    {
+        // Static mesh: read from flat g_vertices buffer (existing behavior)
+        const uint i0 = local_i0 + geometry_data.vertex_offset;
+        const uint i1 = local_i1 + geometry_data.vertex_offset;
+        const uint i2 = local_i2 + geometry_data.vertex_offset;
+        v0 = g_vertices[i0];
+        v1 = g_vertices[i1];
+        v2 = g_vertices[i2];
+    }
 
     const float3 barycentric = float3(1.0f - attributes.barycentrics.x - attributes.barycentrics.y,
                                      attributes.barycentrics.x,

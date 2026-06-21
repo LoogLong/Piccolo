@@ -502,7 +502,6 @@ namespace Piccolo
             instance_data.material_index = shader_material_index;
             instance_data.entity_instance_id = source_instance.instance_id;
             instance_data.flags = is_skinned ? 1u : 0u;  // bit 0: enable_vertex_blending
-            instance_data.flags = 0;
             m_path_tracing_instance_data.push_back(instance_data);
         }
 

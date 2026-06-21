@@ -21,7 +21,6 @@ namespace Piccolo
 
     private:
         bool setupSkinComputePipeline();
-        bool ensureSkinBuffers(uint32_t total_skinned_vertices);
         bool uploadJointMatrices(const std::vector<RenderPathTracingCollectedInstance>& instances);
         void dispatchSkinCompute(RHICommandBuffer* command_buffer,
                                  const std::vector<RenderPathTracingCollectedInstance>& instances);
@@ -39,13 +38,15 @@ namespace Piccolo
         RHIDeviceMemory* m_joint_matrix_memory {nullptr};
         size_t           m_joint_matrix_buffer_capacity {0};
 
-        // Flat output buffer for skinned positions (BLAS geometry source)
-        RHIBuffer*       m_skinned_position_output_buffer {nullptr};
-        RHIDeviceMemory* m_skinned_position_output_memory {nullptr};
-        size_t           m_skinned_position_output_capacity {0};
-
         // Persistent staging buffer for SkinComputeConstants (allocated once, mapped per dispatch)
         RHIBuffer*       m_skin_constants_buffer {nullptr};
         RHIDeviceMemory* m_skin_constants_memory {nullptr};
+
+        // Flat output buffer for skinned vertex data (PathTracingVertexData layout).
+        // Compute shader writes per-instance data at computed offsets. Exposed to
+        // PathTracingPass via RenderResource::getSkinnedVertexBuffer().
+        RHIBuffer*       m_skinned_vertex_output_buffer {nullptr};
+        RHIDeviceMemory* m_skinned_vertex_output_memory {nullptr};
+        size_t           m_skinned_vertex_output_capacity {0};
     };
 } // namespace Piccolo
