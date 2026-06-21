@@ -1,228 +1,170 @@
-# Review: Fix GPU Skinning Pass Data-Flow and Buffer Ownership
+# Review: Fix GPU Skinning Pass Data-Flow and Buffer Ownership (v2)
 
 > Review of `docs/superpowers/plans/2026-06-19-fix-gpu-skinning-dataflow.md`
 > Date: 2026-06-19
+> Version reviewed: updated after first review round
 
 ## Verdict
 
-The plan correctly identifies and structurally fixes the three critical dataflow issues from the extraction review. The architectural changes — caching instances on `RenderResource`, moving `updatePathTracingSceneBuffers()` into `GpuSkinningPass`, and binding per-instance position buffers directly at u0 — are the right solutions. However, **two new critical bugs are introduced** (constant buffer use-after-free and persistent binding number conflicts), and two pre-existing issues from the original GPU skinning plan review remain unfixed.
+The architectural fixes (caching, reordering, per-instance u0 binding) are correct. The plan's English preamble in Task 2 correctly declares four bug fixes. **However, the code in Task 2 Step 5 was not updated to match those declarations** — it still contains the original buggy code for three of the four fixes. The preamble says one thing; the code does another.
 
 ---
 
-## 🔴 Critical Issues
+## English Declarations vs. Actual Code
 
-### Issue 1 — Task 2 Step 3 lines 281–345: Constant buffer created and destroyed within same CPU call — GPU use-after-free
+Task 2 opens with four fix declarations (lines 86–94):
 
-The `dispatchSkinCompute()` function creates a 16-byte constant buffer for `SkinComputeConstants`, uses it in a descriptor write, and then **destroys it immediately after `cmdDispatch()`**:
+| Fix | Preamble claims | Code in Step 5 actually has |
+|-----|----------------|---------------------------|
+| **(A)** Constant buffer UAF | "persistent `m_skin_constants_buffer` allocated once during `setup()`" | Lines 339–345 + 402–403: `createBuffer(16)` → `destroyBuffer()` **every dispatch** using local variables `constants_buffer` / `constants_memory` — `m_skin_constants_buffer` is never used |
+| **(B)** Binding conflicts | "`{0,1,2,3,4,5,6,7}`" | Lines 361/373/385: `dstBinding` still **0, 0, 1** (not 5, 6, 7) |
+| **(C)** Joint matrix stride | "`s_mesh_vertex_blending_max_joint_count` (1024)" | Line 405: still `inst.joint_count` |
+| **(D)** Duplicate buffer creation | "removed from PathTracingPass" | ✅ Step 7 correctly replaces with `continue` |
+
+The English descriptions are correct about **what** to fix. The Step 5 code still contains the pre-fix version.
+
+---
+
+## Fix-by-Fix Analysis
+
+### Fix (A): Constant buffer use-after-free → ❌ Code NOT updated
+
+**What the preamble says:**
+
+> The per-dispatch `createBuffer(16) → use → destroyBuffer()` pattern is replaced with a single persistent `m_skin_constants_buffer` allocated once during `setup()`. Each dispatch maps+writes+unmaps it. Never destroyed until pass teardown.
+
+**What the code does (lines 339–353 + 402–403):**
 
 ```cpp
-// Line 283-287: CREATE
-m_rhi->createBuffer(16, RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    constants_buffer, constants_memory);
+// Line 339-340: local variables, not m_skin_constants_buffer
+RHIBuffer*       constants_buffer = nullptr;
+RHIDeviceMemory* constants_memory = nullptr;
+{
+    // Line 342-345: CREATES a new buffer every dispatch
+    m_rhi->createBuffer(16, ..., constants_buffer, constants_memory);
+    // ... map, memcpy, unmap ...
+}
+// ... descriptor write + dispatch ...
 
-// ... setup constants, map/memcpy/unmap ...
-
-// Line 341-342: DISPATCH
-m_rhi->cmdDispatch(command_buffer, group_count, 1, 1);
-
-// Line 344-345: DESTROY — ON CPU TIMELINE
+// Line 402-403: DESTROYS immediately after cmdDispatch (GPU hasn't executed yet)
 m_rhi->destroyBuffer(constants_buffer);
 m_rhi->freeMemory(constants_memory);
 ```
 
-D3D12 command execution is **deferred**. `cmdDispatch()` records the command into the command buffer — the GPU has not executed it yet. `destroyBuffer()` on the CPU timeline frees the resource immediately. When the GPU later processes the command buffer, it accesses a freed buffer → **undefined behavior, TDR, or validation error**.
+The code creates a **local** `constants_buffer` (not the member `m_skin_constants_buffer`), allocates it fresh each dispatch, and destroys it immediately after recording the dispatch command. On the D3D12 GPU timeline, the buffer is destroyed before the GPU reads it — use-after-free, TDR, or validation error.
 
-This pattern also creates and destroys a buffer **per skinned instance per frame**. With multiple skinned instances, this means N buffer allocations and N frees per frame — unsustainable GPU memory churn.
-
-**Required fix:** Replace with one of:
-- **(a)** A persistent small constant buffer (allocated once, mapped+written per dispatch, never destroyed until pass teardown)
-- **(b)** A ring-buffer pattern (allocate one large buffer, write to next available slot each dispatch)
-- **(c)** Use push constants if supported (most efficient, avoids descriptor writes entirely)
-
-The raster pipeline uses a ring-buffer for per-drawcall constant data ([main_camera_pass.cpp:2538-2544](engine/source/runtime/function/render/passes/main_camera_pass.cpp#L2538-L2544)) — follow that pattern.
+**Required code change:** Allocate `m_skin_constants_buffer` once in `setup()` (or lazily on first use). In `dispatchSkinCompute()`, map the persistent buffer, write constants, unmap — no create/destroy.
 
 ---
 
-### Issue 2 — Task 2 Step 3 lines 220–329: Descriptor set binding number conflicts still present
+### Fix (B): Descriptor binding conflicts → ❌ Code partially updated
 
-The descriptor writes have duplicate `dstBinding` values:
+**What the preamble says:**
 
-```cpp
-writes[0].dstBinding = 0;   // t0
-writes[1].dstBinding = 1;   // t1
-writes[2].dstBinding = 2;   // t2
-writes[3].dstBinding = 3;   // t3
-writes[4].dstBinding = 4;   // t4
-writes[5].dstBinding = 0;   // b0   ← DUPLICATE of binding 0!
-writes[6].dstBinding = 0;   // u0   ← DUPLICATE of binding 0!
-writes[7].dstBinding = 1;   // u1   ← DUPLICATE of binding 1!
-```
+> Changed from `{0,1,2,3,4,0,0,1}` to `{0,1,2,3,4,5,6,7}`. The HLSL shader is updated to use explicit `[[vk::binding(N)]]` layout. The descriptor set layout uses the same unique bindings.
 
-This is the same Issue 1 from the [original GPU skinning plan review](docs/superpowers/plans/2026-06-18-path-tracing-gpu-skinning-review.md). The `setupSkinComputePipeline()` layout (ported from the original plan) has matching duplicate binding numbers. This is illegal — each binding within a descriptor set must be unique.
+**What was actually changed:**
 
-**Required fix:** Use sequential unique binding numbers 0–7:
+| Component | Fixed? | Detail |
+|-----------|--------|--------|
+| HLSL registers (Step 1) | ✅ | `b0→b5`, `u0→u6`, `u1→u7` |
+| Layout bindings (Step 3, text only) | ✅ | Described as `bindings[5].binding = 5;` etc. |
+| Descriptor writes (Step 5 code) | ❌ | Still old values |
+
+**Lines 361, 373, 385 still have:**
 
 ```cpp
-writes[0].dstBinding = 0;  // t0
-writes[1].dstBinding = 1;  // t1
-writes[2].dstBinding = 2;  // t2
-writes[3].dstBinding = 3;  // t3
-writes[4].dstBinding = 4;  // t4
-writes[5].dstBinding = 5;  // b0  (was 0)
-writes[6].dstBinding = 6;  // u0  (was 0)
-writes[7].dstBinding = 7;  // u1  (was 1)
+writes[5].dstBinding = 0;   // should be 5  — b5 in HLSL
+writes[6].dstBinding = 0;   // should be 6  — u6 in HLSL
+writes[7].dstBinding = 1;   // should be 7  — u7 in HLSL
 ```
 
-Apply the same fix to `setupSkinComputePipeline()` layout bindings. Add `[[vk::binding(N)]]` annotations to the HLSL shader for explicit mapping.
+With the new HLSL registers (`b5=5`, `u6=6`, `u7=7`), these `dstBinding` values must match. 0 and 1 would write to the wrong descriptor slots.
+
+**Required code change:** `writes[5].dstBinding = 5;`, `writes[6].dstBinding = 6;`, `writes[7].dstBinding = 7;`
 
 ---
 
-### Issue 3 — Task 2 Step 3 line 347: Joint matrix stride uses actual `joint_count`, not `MAX_JOINTS`
+### Fix (C): Joint matrix stride → ❌ Code NOT updated
+
+**What the preamble says:**
+
+> `dispatchSkinCompute()` uses `joint_matrix_offset += s_mesh_vertex_blending_max_joint_count` (1024) instead of `inst.joint_count`. `uploadJointMatrices()` is also fixed.
+
+**What the code does (line 405):**
 
 ```cpp
 joint_matrix_offset += inst.joint_count;
 ```
 
-This is the same Issue 2 from the [original GPU skinning plan review](docs/superpowers/plans/2026-06-18-path-tracing-gpu-skinning-review.md). The raster pipeline stores joint matrices in the GPU buffer with `s_mesh_vertex_blending_max_joint_count * instance_index` stride ([main_camera_pass.cpp:2568](engine/source/runtime/function/render/passes/main_camera_pass.cpp#L2568)):
-
+The raster pipeline stores joint matrices with `MAX_JOINTS` stride per instance ([main_camera_pass.cpp:2568](engine/source/runtime/function/render/passes/main_camera_pass.cpp#L2568)):
 ```cpp
 .joint_matrices[s_mesh_vertex_blending_max_joint_count * i + j] =
 ```
 
-The HLSL compute shader accesses via `g_constants.joint_matrix_offset + joint_idx`. If the stride is `inst.joint_count` (e.g., 128) instead of `MAX_JOINTS` (1024), instance 1's matrices land at index 128 instead of 1024 — the compute shader reads wrong matrices for all subsequent instances.
-
-**Required fix:**
-
-```cpp
-joint_matrix_offset += s_mesh_vertex_blending_max_joint_count;  // not inst.joint_count
+And the HLSL accessor uses the same stride ([mesh.vert.hlsl:22](engine/shader/hlsl/mesh.vert.hlsl#L22)):
+```hlsl
+uint joint_base = M_MESH_VERTEX_BLENDING_MAX_JOINT_COUNT * instance_id;
 ```
 
-Also update `uploadJointMatrices()` to use the same stride when copying joint matrix data to the GPU buffer.
+`s_mesh_vertex_blending_max_joint_count` is **1024** ([render_common.h:20](engine/source/runtime/function/render/render_common.h#L20)). If instance 0 has 128 joints, `inst.joint_count = 128` places instance 1's matrices at index 128. The shader expects them at index 1024. Result: wrong joint matrices for every instance after the first.
+
+**Required code change:**
+```cpp
+joint_matrix_offset += s_mesh_vertex_blending_max_joint_count;
+```
+Same fix needed in `uploadJointMatrices()` — pack matrices with MAX_JOINTS stride per instance.
 
 ---
 
-## 🟡 Medium Issues
+### Fix (D): Duplicate per-instance buffer creation → ✅ Code correct
 
-### Issue 4 — Task 3 Step 5: No error propagation from `GpuSkinningPass` to `PathTracingPass`
-
-In `render_pipeline.cpp`, the sequence is:
+Step 7 correctly replaces the duplicate creation with an existence check:
 
 ```cpp
-m_gpu_skinning_pass->dispatch();   // return value NOT checked!
-// ...
-PathTracingPass::dispatch();       // runs regardless of GpuSkinningPass failure
-```
-
-If `updatePathTracingSceneBuffers()` fails in `GpuSkinningPass` (returns false), the vertex/index/material buffers are not created/updated. `PathTracingPass` then tries to use null or stale buffers, leading to a crash or D3D12 validation error.
-
-**Required fix:** Check the return value and skip path tracing if skinning failed:
-
-```cpp
-if (!m_gpu_skinning_pass->dispatch())
+if (resources.skinned_position_buffer == nullptr || resources.vertex_count != vertex_count)
 {
-    return false;
+    continue; // GpuSkinningPass should have created this; skip if not ready
 }
 ```
 
 ---
 
-### Issue 5 — Task 2 Step 5: `getCachedPathTracingInstances()` returns `const&`, but `PathTracingPass` may need mutable elements
+## Other Fixes: All Correct
 
-The plan's Step 5 shows `PathTracingPass::buildTopLevelAS()` doing:
-
-```cpp
-std::vector<RenderPathTracingCollectedInstance> collected_instances =
-    m_render_resource_impl->getCachedPathTracingInstances();
-```
-
-This performs a **copy** of the entire vector (copy-assignment from const reference). For large scenes with many instances, this is reasonable (the original `collectPathTracingInstances()` also allocated a fresh vector). However, the plan should explicitly note that this is a copy, not a reference, since PathTracingPass modifies `collected_instances` (sets `bottom_level_as`, `shader_instance_index`, etc.). Using a non-const accessor that returns by value and clears the cache would avoid the copy:
-
-```cpp
-std::vector<RenderPathTracingCollectedInstance> takeCachedPathTracingInstances()
-{
-    return std::move(m_cached_path_tracing_instances);
-}
-```
-
----
-
-### Issue 6 — Task 2 Step 3: Per-instance buffer creation in both `GpuSkinningPass` and `PathTracingPass`
-
-`GpuSkinningPass::dispatchSkinCompute()` creates `resources.skinned_position_buffer` at lines 197–215. `PathTracingPass::buildTopLevelAS()` (from the original plan) also contains identical creation logic for the same buffer. Since `GpuSkinningPass` runs first and creates the buffer, `PathTracingPass` finds it already exists and skips creation. But the duplicate code is a maintenance hazard — if creation parameters diverge, the two passes will disagree on buffer properties.
-
-**Recommendation:** Remove the buffer creation from `PathTracingPass` and keep it only in `GpuSkinningPass`. `PathTracingPass` should assert that the buffer exists (since GpuSkinningPass ran first).
-
----
-
-### Issue 7 — Task 1 Step 1: `getCachedPathTracingInstances()` returns reference to potentially stale data
-
-If `GpuSkinningPass::dispatch()` fails or is never called (e.g., first frame initialization, or raster-only scene), `m_cached_path_tracing_instances` is empty. `PathTracingPass` would get an empty vector and either:
-- Build TLAS with zero instances (harmless — returns false)
-- Or crash during per-instance BLAS construction
-
-The plan should add a safety check: `PathTracingPass` should fall back to `collectPathTracingInstances()` if the cache is empty, or `GpuSkinningPass` should always populate the cache (even for non-skinned scenes, as the plan does at line 128).
-
-Looking at Task 2 Step 2 line 127–129:
-```cpp
-if (!has_skinned)
-{
-    m_render_resource_impl->setCachedPathTracingInstances(std::move(collected_instances));
-    return true;
-}
-```
-
-The cache IS populated for non-skinned scenes. ✓ But if `GpuSkinningPass` is skipped entirely (e.g., path tracing not active), the cache is empty.
-
----
-
-## 🟢 Minor Issues
-
-### Issue 8 — Task 2 Step 2 line 276–278: `inst.vertex_offset_in_flat_buffer` used in `dispatchSkinCompute()` but offset calculation runs in parallel `for` loop
-
-At line 151–159, offsets are computed in a separate loop, then stored on `collected_instances`. Then `dispatchSkinCompute()` reads them (line 290). Since the offset calculation loop runs before `dispatchSkinCompute()`, and the vector is the same mutable reference, the offsets are available. ✓ The plan just needs to ensure `dispatchSkinCompute` uses `inst.vertex_offset_in_flat_buffer` from the instance reference, not from the local counter.
-
-### Issue 9 — Task 3 Step 1: Build command uses `--config Debug`
-
-For a GPU compute pass, Release configuration is more representative for performance validation.
-
-### Issue 10 — Task 2 Step 3 line 322: `getPathTracingVertexBuffer()` accessed via `m_render_resource_impl`
-
-The `getPathTracingVertexBuffer()` ([render_resource.h:217](engine/source/runtime/function/render/render_resource.h#L217)) returns `m_path_tracing_vertex_buffer`, which is created by `updatePathTracingSceneBuffers()`. Since Step 2 reorders the flow to call `updatePathTracingSceneBuffers()` before `dispatchSkinCompute()`, the buffer exists by the time it's accessed. ✓
-
----
-
-## Architecture Validation
-
-| Fix Claim | Target Issue | Verdict |
-|-----------|-------------|---------|
-| Cache instances on RenderResource | vertex_offset lost across passes | ✅ Correct — `setCachedPathTracingInstances()` after offsets computed, `getCachedPathTracingInstances()` in PathTracingPass |
-| Reorder: buffer update before compute | Compute output overwritten | ✅ Correct — `updatePathTracingSceneBuffers()` at Step 4, `dispatchSkinCompute()` at Step 6 |
-| Per-instance u0 binding | Flat→per-instance buffer gap | ✅ Correct — `resources.skinned_position_buffer` bound directly, offset 0 |
-| Remove `collectPathTracingInstances()` from PathTracingPass | Double collection | ✅ Correct — replaced with cache read |
-| Remove `updatePathTracingSceneBuffers()` from PathTracingPass | Compute-before-buffer-update ordering | ✅ Correct — moved to GpuSkinningPass |
+| Item | Status | Detail |
+|------|--------|--------|
+| `takeCachedPathTracingInstances()` with `std::move` | ✅ | Step 1 — avoids copy; clears cache |
+| Empty cache fallback in PathTracingPass | ✅ | Step 7 — falls back to `collectPathTracingInstances()` |
+| Error propagation from GpuSkinningPass | ✅ | Step 8 — checks return value in `pathTracingRender()` |
+| HLSL register fix (`b0→b5`, `u0→u6`, `u1→u7`) | ✅ | Step 1 — all registers now unique |
+| Persistent constants buffer member declaration | ✅ | Step 2 — `m_skin_constants_buffer` declared in header |
+| Correct frame ordering (buffer update → compute) | ✅ | Steps 4 → 6 in `dispatch()` |
+| Per-instance u0 binding (no flat buffer) | ✅ | Step 5 — `resources.skinned_position_buffer` at offset 0 |
 
 ---
 
 ## Issue Summary
 
-| # | Severity | Task | Summary |
-|---|----------|------|---------|
-| 1 | 🔴 Critical | Task 2 Step 3 | Constant buffer created and destroyed within same CPU call — GPU use-after-free per instance |
-| 2 | 🔴 Critical | Task 2 Step 3 | Descriptor binding number conflicts (0,0,0,1) — same as original GPU skinning Issue 1 |
-| 3 | 🔴 Critical | Task 2 Step 3 | Joint matrix stride uses `inst.joint_count` instead of `s_mesh_vertex_blending_max_joint_count` |
-| 4 | 🟡 Medium | Task 3 Step 5 | `GpuSkinningPass::dispatch()` return value not checked before running PathTracingPass |
-| 5 | 🟡 Medium | Task 2 Step 5 | Cache accessor returns const ref; PathTracingPass copies entire vector (acceptable but could be move) |
-| 6 | 🟡 Medium | Task 2 Step 3 | Per-instance buffer creation duplicated in both passes |
-| 7 | 🟡 Medium | Task 1 Step 1 | Cache may be empty if GpuSkinningPass never runs |
-| 8 | 🟢 Minor | Task 2 | Offset loop ordering — verified correct |
-| 9 | 🟢 Minor | Task 3 | Debug config for build verification |
-| 10 | 🟢 Minor | Task 2 | Buffer access via m_render_resource_impl — verified safe |
+| # | Severity | Location | Summary |
+|---|----------|----------|---------|
+| 1 | 🔴 | Step 5 lines 339–345, 402–403 | Code creates/destroys `constants_buffer` per dispatch — `m_skin_constants_buffer` declared but unused; preamble says persistent |
+| 2 | 🔴 | Step 5 lines 361, 373, 385 | `dstBinding` values still 0, 0, 1 — should be 5, 6, 7 to match the fixed HLSL registers and layout |
+| 3 | 🔴 | Step 5 line 405 | `joint_matrix_offset += inst.joint_count` — should be `s_mesh_vertex_blending_max_joint_count`; preamble says it is |
+| 4 | ✅ | Step 7 | Duplicate buffer creation removed |
+| 5 | ✅ | Step 8 | Error propagation added |
+| 6 | ✅ | Step 1 | HLSL registers fixed |
+| 7 | ✅ | Step 1 | Move semantics for instance cache |
 
 ---
 
 ## Recommendation
 
-**Fix Issues 1, 2, and 3 before implementation.** Issue 1 (constant buffer use-after-free) is a new bug introduced by this plan and would cause GPU crashes or validation errors. Issues 2 and 3 are pre-existing bugs from the original GPU skinning plan that this plan inherits — fix them now rather than deferring further.
+Update **Task 2 Step 5** code to match the English fix declarations:
 
-The architectural direction is correct — the three core dataflow fixes (caching, reordering, per-instance u0 binding) properly resolve the problems identified in the extraction review.
+1. Replace `RHIBuffer* constants_buffer = nullptr;` + `createBuffer(16, ..., constants_buffer, ...)` + `destroyBuffer(constants_buffer)` with mapping of the persistent `m_skin_constants_buffer`
+2. Replace `writes[5].dstBinding = 0;` → `5`, `writes[6].dstBinding = 0;` → `6`, `writes[7].dstBinding = 1;` → `7`
+3. Replace `joint_matrix_offset += inst.joint_count;` → `joint_matrix_offset += s_mesh_vertex_blending_max_joint_count;`
+4. Apply the same joint matrix stride fix to `uploadJointMatrices()` with an explicit code block
+
+After these code-level corrections, the plan is approved for implementation.
