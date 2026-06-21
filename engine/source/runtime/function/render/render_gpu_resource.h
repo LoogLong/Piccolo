@@ -49,20 +49,22 @@ namespace Piccolo
         std::vector<uint32_t> path_tracing_indices;
         bool                  path_tracing_geometry_dirty {true};
 
-        // Persistent per-instance skinned output buffers (multi-frame lifetime).
-        // Stored here (not in RenderPathTracingCollectedInstance) because BLAS
-        // and position buffers are GPU resources that survive across frames.
+        // Skinning output — written by GpuSkinningPass, read by any consumer.
+        // Per-instance: position buffer (BLAS geometry source) + vertex data offset.
+        struct SkinnedMeshOutput
+        {
+            RHIBuffer*       skinned_position_buffer {nullptr};
+            RHIDeviceMemory* skinned_position_memory {nullptr};
+            uint32_t         skinned_vertex_offset {0};  // offset into flat g_skinned_vertices
+            uint32_t         vertex_count {0};
+            uint32_t         index_count {0};
+        };
+        std::unordered_map<uint32_t, SkinnedMeshOutput> skinned_mesh_outputs;
+
+        // Path-tracing-specific per-instance resources (BLAS built from SkinnedMeshOutput).
         struct SkinnedPathTracingResources
         {
             RHIAccelerationStructure* blas {nullptr};
-            RHIBuffer*  skinned_position_buffer {nullptr};     // float3 positions, for BLAS (u6)
-            RHIDeviceMemory* skinned_position_memory {nullptr};
-            // Skinned vertex data (PathTracingVertexData) for path tracing lives in a FLAT
-            // buffer (m_skinned_vertex_output_buffer) owned by GpuSkinningPass, exposed via
-            // RenderResource. Per-instance data is at computed offsets within that buffer.
-            // Only skinned_position_buffer is per-instance (needed for BLAS geometry).
-            uint32_t    vertex_count {0};
-            uint32_t    index_count {0};
         };
         std::unordered_map<uint32_t, SkinnedPathTracingResources> path_tracing_skinned_resources;
     };

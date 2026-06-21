@@ -7,8 +7,29 @@
 
 namespace Piccolo
 {
-    struct RenderPathTracingCollectedInstance;
     class RenderResource;
+    struct RenderMeshGPUResource;
+
+    // Output vertex layout from the GPU skinning compute shader.
+    // Must match SkinnedVertexData in gpu_skinning.hlsli (64 bytes).
+    struct GpuSkinnedVertexGPUData
+    {
+        Vector4 position {0.0f, 0.0f, 0.0f, 1.0f};
+        Vector4 normal   {0.0f, 1.0f, 0.0f, 0.0f};
+        Vector4 tangent  {1.0f, 0.0f, 0.0f, 0.0f};
+        Vector4 texcoord {0.0f, 0.0f, 0.0f, 0.0f};
+    };
+    static_assert(sizeof(GpuSkinnedVertexGPUData) == 64, "Must match SkinnedVertexData layout in HLSL");
+
+    // Minimal input data for skinning one mesh instance.
+    // No path-tracing-specific fields.
+    struct CollectedSkinnedMesh
+    {
+        RenderMeshGPUResource* mesh {nullptr};
+        uint32_t               instance_id {0};
+        uint32_t               joint_count {0};
+        const Matrix4x4*       joint_matrices {nullptr};
+    };
 
     class GpuSkinningPass : public RenderPass
     {
@@ -21,9 +42,9 @@ namespace Piccolo
 
     private:
         bool setupSkinComputePipeline();
-        bool uploadJointMatrices(const std::vector<RenderPathTracingCollectedInstance>& instances);
+        bool uploadJointMatrices(const std::vector<CollectedSkinnedMesh>& instances);
         void dispatchSkinCompute(RHICommandBuffer* command_buffer,
-                                 const std::vector<RenderPathTracingCollectedInstance>& instances);
+                                 const std::vector<CollectedSkinnedMesh>& instances);
 
         std::shared_ptr<RenderResource> m_render_resource_impl;
 
@@ -42,9 +63,9 @@ namespace Piccolo
         RHIBuffer*       m_skin_constants_buffer {nullptr};
         RHIDeviceMemory* m_skin_constants_memory {nullptr};
 
-        // Flat output buffer for skinned vertex data (PathTracingVertexData layout).
-        // Compute shader writes per-instance data at computed offsets. Exposed to
-        // PathTracingPass via RenderResource::getSkinnedVertexBuffer().
+        // Flat output buffer for skinned vertex data (GpuSkinnedVertexGPUData layout).
+        // Compute shader writes per-instance data at computed offsets. The buffer handle
+        // is exposed to consumers via RenderResource::getSkinnedVertexBuffer().
         RHIBuffer*       m_skinned_vertex_output_buffer {nullptr};
         RHIDeviceMemory* m_skinned_vertex_output_memory {nullptr};
         size_t           m_skinned_vertex_output_capacity {0};
