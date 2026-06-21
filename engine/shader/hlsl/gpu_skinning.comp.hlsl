@@ -16,9 +16,9 @@ StructuredBuffer<JointMatrixData>             g_joint_matrices      : register(t
 ConstantBuffer<SkinComputeConstants> g_constants : register(b5, space0);
 
 // Output
-// u6: per-instance skinned positions (BLAS geometry source) — always write at vertex_id
+// u6: per-instance skinned positions (BLAS geometry source) - always write at vertex_id
 RWStructuredBuffer<float3>                 g_skinned_positions : register(u6, space0);
-// u7: flat skinned vertex data (all instances concatenated) — write at output_vertex_offset + vertex_id
+// u7: flat skinned vertex data (all instances concatenated) - write at output_vertex_offset + vertex_id
 RWStructuredBuffer<SkinnedVertexData>      g_skinned_vertices  : register(u7, space0);
 
 [numthreads(64, 1, 1)]
@@ -70,10 +70,10 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float3 skinned_tangent  = normalize(mul((float3x3)skinning_matrix, rest_tangent));
 
     // Write outputs
-    // u6: per-instance position buffer — always write at local vertex_id (Bug B1 fix)
+    // u6: per-instance position buffer - always write at local vertex_id (Bug B1 fix)
     g_skinned_positions[vertex_id] = skinned_position;
 
-    // u7: flat vertex data buffer — write at cumulative offset
+    // u7: flat vertex data buffer - write at cumulative offset
     uint out_idx = g_constants.output_vertex_offset + vertex_id;
     SkinnedVertexData v;
     v.position = float4(skinned_position, 1.0f);
