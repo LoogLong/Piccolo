@@ -38,7 +38,7 @@ namespace Piccolo
         if (m_rhi == nullptr) return false;
 
         const std::vector<unsigned char>& bytecode =
-            PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PATH_TRACING_SKIN_COMP);
+            PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, GPU_SKINNING_COMP);
         if (bytecode.empty())
         {
             return false;

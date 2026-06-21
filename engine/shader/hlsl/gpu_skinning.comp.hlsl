@@ -1,5 +1,5 @@
 #include "common.hlsli"
-#include "path_tracing_common.hlsli"
+#include "gpu_skinning.hlsli"
 
 // Input: rest-pose vertex data from mesh GPU buffers
 StructuredBuffer<float3>                      g_rest_positions      : register(t0, space0);
@@ -13,18 +13,13 @@ StructuredBuffer<float2>                      g_rest_texcoords      : register(t
 StructuredBuffer<JointMatrixData>             g_joint_matrices      : register(t4, space0);
 
 // Constants
-struct SkinComputeConstants
-{
-    uint vertex_count;
-    uint joint_matrix_offset;  // index into g_joint_matrices for this instance's first matrix
-    uint output_vertex_offset; // offset into output buffers
-    uint _padding;
-};
 ConstantBuffer<SkinComputeConstants> g_constants : register(b5, space0);
 
 // Output
+// u6: per-instance skinned positions (BLAS geometry source) — always write at vertex_id
 RWStructuredBuffer<float3>                 g_skinned_positions : register(u6, space0);
-RWStructuredBuffer<PathTracingVertexData>  g_skinned_vertices  : register(u7, space0);
+// u7: flat skinned vertex data (all instances concatenated) — write at output_vertex_offset + vertex_id
+RWStructuredBuffer<SkinnedVertexData>      g_skinned_vertices  : register(u7, space0);
 
 [numthreads(64, 1, 1)]
 void main(uint3 dispatch_id : SV_DispatchThreadID)
@@ -75,10 +70,12 @@ void main(uint3 dispatch_id : SV_DispatchThreadID)
     float3 skinned_tangent  = normalize(mul((float3x3)skinning_matrix, rest_tangent));
 
     // Write outputs
-    uint out_idx = g_constants.output_vertex_offset + vertex_id;
-    g_skinned_positions[out_idx] = skinned_position;
+    // u6: per-instance position buffer — always write at local vertex_id (Bug B1 fix)
+    g_skinned_positions[vertex_id] = skinned_position;
 
-    PathTracingVertexData v;
+    // u7: flat vertex data buffer — write at cumulative offset
+    uint out_idx = g_constants.output_vertex_offset + vertex_id;
+    SkinnedVertexData v;
     v.position = float4(skinned_position, 1.0f);
     v.normal   = float4(skinned_normal, 0.0f);
     v.tangent  = float4(skinned_tangent, 0.0f);

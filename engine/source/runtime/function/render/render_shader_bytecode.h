@@ -205,11 +205,11 @@ namespace Piccolo
 #else
 #define PICCOLO_VULKAN_PARTICLE_SIMULATE_COMP ::Piccolo::emptyVulkanShaderBytecode()
 #endif
-#if __has_include(<path_tracing_skin_comp.h>)
-#include <path_tracing_skin_comp.h>
-#define PICCOLO_VULKAN_PATH_TRACING_SKIN_COMP PATH_TRACING_SKIN_COMP
+#if __has_include(<gpu_skinning_comp.h>)
+#include <gpu_skinning_comp.h>
+#define PICCOLO_VULKAN_GPU_SKINNING_COMP GPU_SKINNING_COMP
 #else
-#define PICCOLO_VULKAN_PATH_TRACING_SKIN_COMP ::Piccolo::emptyVulkanShaderBytecode()
+#define PICCOLO_VULKAN_GPU_SKINNING_COMP ::Piccolo::emptyVulkanShaderBytecode()
 #endif
 #if __has_include(<particlebillboard_frag.h>)
 #include <particlebillboard_frag.h>
@@ -277,7 +277,7 @@ namespace Piccolo
 #define PICCOLO_VULKAN_SKYBOX_FRAG ::Piccolo::emptyVulkanShaderBytecode()
 #define PICCOLO_VULKAN_SKYBOX_VERT ::Piccolo::emptyVulkanShaderBytecode()
 #define PICCOLO_VULKAN_TONE_MAPPING_FRAG ::Piccolo::emptyVulkanShaderBytecode()
-#define PICCOLO_VULKAN_PATH_TRACING_SKIN_COMP ::Piccolo::emptyVulkanShaderBytecode()
+#define PICCOLO_VULKAN_GPU_SKINNING_COMP ::Piccolo::emptyVulkanShaderBytecode()
 #endif
 
 #if PICCOLO_ENABLE_D3D12_BACKEND && PICCOLO_D3D12_SHADER_BYTECODE_AVAILABLE != 0 && defined(__has_include)
@@ -431,11 +431,11 @@ namespace Piccolo
 #else
 #define PICCOLO_D3D12_PARTICLEBILLBOARD_VERT ::Piccolo::emptyD3D12ShaderBytecode()
 #endif
-#if __has_include(<dxil_cpp/path_tracing_skin_comp.h>)
-#include <dxil_cpp/path_tracing_skin_comp.h>
-#define PICCOLO_D3D12_PATH_TRACING_SKIN_COMP D3D12_PATH_TRACING_SKIN_COMP
+#if __has_include(<dxil_cpp/gpu_skinning_comp.h>)
+#include <dxil_cpp/gpu_skinning_comp.h>
+#define PICCOLO_D3D12_GPU_SKINNING_COMP D3D12_GPU_SKINNING_COMP
 #else
-#define PICCOLO_D3D12_PATH_TRACING_SKIN_COMP ::Piccolo::emptyD3D12ShaderBytecode()
+#define PICCOLO_D3D12_GPU_SKINNING_COMP ::Piccolo::emptyD3D12ShaderBytecode()
 #endif
 #if __has_include(<dxil_cpp/path_tracing_lib.h>)
 #include <dxil_cpp/path_tracing_lib.h>
@@ -494,7 +494,7 @@ namespace Piccolo
 #define PICCOLO_D3D12_PARTICLEBILLBOARD_FRAG ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_PARTICLEBILLBOARD_VERT ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_PATH_TRACING_LIB ::Piccolo::emptyD3D12ShaderBytecode()
-#define PICCOLO_D3D12_PATH_TRACING_SKIN_COMP ::Piccolo::emptyD3D12ShaderBytecode()
+#define PICCOLO_D3D12_GPU_SKINNING_COMP ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_POST_PROCESS_VERT ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_SKYBOX_FRAG ::Piccolo::emptyD3D12ShaderBytecode()
 #define PICCOLO_D3D12_SKYBOX_VERT ::Piccolo::emptyD3D12ShaderBytecode()
