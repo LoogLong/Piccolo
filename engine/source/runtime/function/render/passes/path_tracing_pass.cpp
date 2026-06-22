@@ -112,11 +112,8 @@ namespace Piccolo
         {
             return false;
         }
-        const bool tlas_ok = buildTopLevelAS(*render_scene);
-        if (!tlas_ok || m_top_level_as == nullptr || m_tlas_instance_count == 0)
+        if (!buildTopLevelAS(*render_scene) || m_top_level_as == nullptr || m_tlas_instance_count == 0)
         {
-            LOG_ERROR("PATH_TRACING_FAIL: tlas_ok={}, tlas_ptr={}, instance_count={}",
-                      tlas_ok, static_cast<void*>(m_top_level_as), m_tlas_instance_count);
             resetAccumulation();
             return false;
         }
