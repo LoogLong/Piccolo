@@ -1,56 +1,63 @@
-# Simplify Path Tracing Post-Processing Pipeline (v2)
+# Simplify Path Tracing Post-Processing Pipeline (v3 — Final)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan.
 
-**Goal:** Replace the tone mapping and color grading passes in the path tracing composite chain with a minimal passthrough composite shader. FXAA is skipped. The UI and combine_UI subpasses remain unchanged — identical to the rasterization pipeline.
+**Goal:** Remove unnecessary tone mapping, color grading, and FXAA passes from the path tracing pipeline. Requires zero new shaders — leverages the existing `combine_ui.frag.hlsl` behavior.
 
-**Key insight:** The existing `m_path_tracing_composite_render_pass` structure (8 subpasses, attachment chain) is already correct for the UI + combine_UI flow. Only the middle passes (tone_mapping, color_grading, fxaa) need to be replaced or skipped.
+**Key insight:** The `combine_ui` fragment shader already implements a simple passthrough: if `g_ui_color` (backup_even) is nearly black → returns `g_scene_color` (backup_odd) unchanged. Since PT output lives in `backup_odd` and is never overwritten when the intermediate passes are skipped, the PT output reaches the swapchain directly.
 
 ```
-CURRENT drawPathTracing():
-  cmdBeginRenderPass(m_path_tracing_composite_render_pass)
-  cmdNextSubpass × 3                           // skip subpass 0-2 (unchanged)
-  tone_mapping_pass.draw()                     // subpass 3: REPLACE with composite
-  cmdNextSubpass
-  color_grading_pass.draw()                    // subpass 4: REPLACE with composite
-  cmdNextSubpass
-  fxaa_pass.draw()                             // subpass 5: REMOVE, skip via cmdNextSubpass
-  cmdNextSubpass
-  clearUIAttachment + drawAxis + ui_pass.draw() // subpass 6: UNCHANGED
-  cmdNextSubpass
-  combine_ui_pass.draw()                        // subpass 7: UNCHANGED
-  cmdEndRenderPass
-
-TARGET drawPathTracing():
-  cmdBeginRenderPass(m_path_tracing_composite_render_pass)
-  cmdNextSubpass × 3
-  compositePass.draw(backup_odd → backup_even)  // NEW: passthrough composite
-  cmdNextSubpass
-  compositePass.draw(backup_even → post_process_odd) // NEW: passthrough composite
-  cmdNextSubpass                                // skip fxaa (no draw call)
-  cmdNextSubpass
-  clearUIAttachment + drawAxis + ui_pass.draw() // UNCHANGED
-  cmdNextSubpass
-  combine_ui_pass.draw()                        // UNCHANGED
-  cmdEndRenderPass
+combine_ui.frag.hlsl:
+  if (ui_color is nearly black) → return scene_color;  // PT output passes through
+  else                          → return gamma(ui_color); // UI overlaid
 ```
 
-**Attachment chain (unchanged):**
+**Current attachment chain (path tracing composite render pass):**
+
 ```
-backup_odd (PT output)
-    ↓ composite subpass 3 (reads backup_odd, writes backup_even)
-backup_even
-    ↓ composite subpass 4 (reads backup_even, writes post_process_odd)
-post_process_odd (scene)
-    ↓ subpass 5 skipped (fxaa removed, post_process_even stays stale)
-post_process_even (stale)
-    ↓ subpass 6 UI (clears via loadOp + draws UI → post_process_even)
-post_process_even (UI)
-    ↓ subpass 7 combine_ui (reads post_process_odd + post_process_even → swapchain)
-swapchain
+Subpass 0: forward_lighting  → empty (no draw)
+Subpass 1:                   → empty (cmdNextSubpass)
+Subpass 2:                   → empty (cmdNextSubpass)
+Subpass 3: tone_mapping      → reads backup_odd → writes backup_even     ← DELETE
+Subpass 4: color_grading     → reads backup_even → writes post_process_odd ← DELETE
+Subpass 5: fxaa              → reads post_process_odd → writes backup_odd ← DELETE (overwrites PT!)
+Subpass 6: UI                → writes backup_even                         ← KEEP
+Subpass 7: combine_ui        → reads backup_odd + backup_even → swapchain ← KEEP
 ```
 
-**Tech Stack:** C++17, D3D12, HLSL SM 6.0, Piccolo RHI
+**Target chain:**
+
+```
+Subpass 0-5: skip all (cmdNextSubpass × 6, no draw calls)
+Subpass 6: UI                → unchanged
+Subpass 7: combine_ui        → unchanged (reads backup_odd=PT output, backup_even=UI)
+```
+
+**Tech Stack:** C++17, D3D12, Piccolo RHI
+
+---
+
+## How It Works
+
+1. `backup_odd` holds the PT output (written by `PathTracingPass::dispatch()`)
+2. Subpasses 0-5 are skipped — `backup_odd` is never overwritten (FXAA's color attachment target is `backup_odd`, but with no draw call it stays untouched)
+3. Subpass 6 (UI): writes UI elements to `backup_even`
+4. Subpass 7 (combine_ui):
+   - `g_scene_color` (t0) = `backup_odd` = raw PT output
+   - `g_ui_color` (t1) = `backup_even` = UI (black where no UI)
+   - Pixels without UI → shader returns `scene_color` (PT output)
+   - Pixels with UI → shader returns `gamma_ui` (UI overlay)
+
+The loadOp of `backup_even` at render pass begin must be CLEAR (to transparent black) so non-UI pixels are (0,0,0,0) when combine_ui reads them. This is already configured in the existing clear_values array (`{{0.0f, 0.0f, 0.0f, 1.0f}}` for backup_even). The alpha=1.0 might need adjustment to alpha=0.0 to ensure the nearly-black check in combine_ui passes for non-UI pixels. Let me verify...
+
+Actually, the shader checks:
+```hlsl
+if (ui_color.r < 1e-6f && ui_color.g < 1e-6f && ui_color.a < 1e-6f)
+```
+
+It checks r, g, AND a. If backup_even is cleared to (0, 0, 0, 1.0), then a = 1.0 which is NOT < 1e-6, so the check FAILS. combine_ui would return `gamma_ui` = gamma(0, 0, 0, 1.0) = (0, 0, 0, 1.0) = BLACK for non-UI pixels!
+
+So we need to change the clear value for backup_even from `(0,0,0,1)` to `(0,0,0,0)` in the path tracing composite render pass.
 
 ---
 
@@ -58,229 +65,142 @@ swapchain
 
 | File | Change | Description |
 |------|--------|-------------|
-| `engine/shader/hlsl/path_tracing_composite.vert.hlsl` | **NEW** | Full-screen triangle vertex shader |
-| `engine/shader/hlsl/path_tracing_composite.frag.hlsl` | **NEW** | Samples input texture, writes to output attachment |
-| `engine/source/.../render/passes/main_camera_pass.h` | Modify | Add composite pipeline members; add `setupPathTracingCompositePass()`; simplify `drawPathTracing` signature |
-| `engine/source/.../render/passes/main_camera_pass.cpp` | Modify | Setup composite pipeline + descriptor; rewrite `drawPathTracing()` |
-| `engine/source/.../render/render_pipeline.cpp` | Modify | Update `drawPathTracing()` call site |
-| `engine/source/.../render/render_shader_bytecode.h` | Modify | Register new shader macros |
+| `engine/source/.../render/passes/main_camera_pass.h` | Modify | Simplify `drawPathTracing` signature |
+| `engine/source/.../render/passes/main_camera_pass.cpp` | Modify | Skip tone_mapping/color_grading/fxaa draws; fix backup_even clear alpha |
+| `engine/source/.../render/render_pipeline.cpp` | Modify | Update call site |
+
+No new shaders. No new render passes. No new pipelines.
 
 ---
 
 ## Tasks
 
-### Task 1: Create passthrough composite shaders
+### Task 1: Fix backup_even clear alpha + skip redundant passes in `drawPathTracing()`
 
 **Files:**
-- Create: `engine/shader/hlsl/path_tracing_composite.vert.hlsl`
-- Create: `engine/shader/hlsl/path_tracing_composite.frag.hlsl`
-- Modify: `engine/source/runtime/function/render/render_shader_bytecode.h`
-
-- [ ] **Step 1: Create vertex shader**
-
-```hlsl
-struct VSOutput
-{
-    float4 position : SV_Position;
-    float2 texcoord : TEXCOORD0;
-};
-
-VSOutput main(uint vertex_id : SV_VertexID)
-{
-    // Full-screen triangle without vertex buffer
-    // id=0: (-1, -1) tex(0, 0)
-    // id=1: ( 3, -1) tex(2, 0)
-    // id=2: (-1,  3) tex(0, 2)
-    VSOutput output;
-    output.position = float4(
-        (vertex_id == 1) ? 3.0 : -1.0,
-        (vertex_id == 2) ? 3.0 : -1.0,
-        0.0, 1.0);
-    output.texcoord = float2(
-        (vertex_id == 1) ? 2.0 : 0.0,
-        (vertex_id == 2) ? 2.0 : 0.0);
-    return output;
-}
-```
-
-- [ ] **Step 2: Create fragment shader**
-
-Passthrough — samples input texture and outputs color. Same shader works for both subpass 3 (backup_odd→backup_even) and subpass 4 (backup_even→post_process_odd) because the input attachment is set via descriptor per subpass.
-
-```hlsl
-// Declared as input attachment by the render pass;
-// descriptor is updated before each subpass to point to the correct attachment.
-Texture2D g_input_texture : register(t0);
-SamplerState g_sampler : register(s0);
-
-struct VSOutput
-{
-    float4 position : SV_Position;
-    float2 texcoord : TEXCOORD0;
-};
-
-float4 main(VSOutput input) : SV_Target
-{
-    return g_input_texture.Sample(g_sampler, input.texcoord);
-}
-```
-
-- [ ] **Step 3: Register bytecode macros in `render_shader_bytecode.h`**
-
-Add `PICCOLO_VULKAN_PATH_TRACING_COMPOSITE_VERT`, `PICCOLO_VULKAN_PATH_TRACING_COMPOSITE_FRAG` (Vulkan — empty fallback) and `PICCOLO_D3D12_PATH_TRACING_COMPOSITE_VERT`, `PICCOLO_D3D12_PATH_TRACING_COMPOSITE_FRAG` (D3D12).
-
-- [ ] **Step 4: Commit**
-
----
-
-### Task 2: Setup composite pipeline in MainCameraPass
-
-**Files:**
-- Modify: `engine/source/runtime/function/render/passes/main_camera_pass.h`
 - Modify: `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
 
-- [ ] **Step 1: Add members to header**
+- [ ] **Step 1: Fix backup_even clear value**
+
+The current clear value `(0,0,0,1)` has alpha=1.0 which causes combine_ui to return black instead of the scene. Change to `(0,0,0,0)`:
 
 ```cpp
-// Path tracing passthrough composite (replaces tone_mapping + color_grading)
-RHIDescriptorSetLayout* m_pt_composite_descriptor_set_layout {nullptr};
-RHIPipelineLayout*      m_pt_composite_pipeline_layout {nullptr};
-RHIPipeline*            m_pt_composite_pipeline {nullptr};
-RHIDescriptorSet*       m_pt_composite_descriptor_set {nullptr};
-RHISampler*             m_pt_composite_sampler {nullptr};
+// Line ~2337: change alpha from 1.0f to 0.0f
+clear_values[_main_camera_pass_backup_buffer_even].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 ```
-
-- [ ] **Step 2: Implement `setupPathTracingCompositePass()`**
-
-Called once during path tracing pipeline setup. Creates:
-
-```
-Descriptor set layout:
-  binding 0: COMBINED_IMAGE_SAMPLER, FRAGMENT_BIT
-
-Pipeline layout:
-  1 descriptor set layout
-
-Descriptor set:
-  Allocated from descriptor pool (updated per subpass)
-
-Graphics pipeline:
-  Vertex: path_tracing_composite.vert
-  Fragment: path_tracing_composite.frag
-  No depth test/write, no cull, no blend
-  Color attachment format: R8G8B8A8_SRGB (same as backup/post_process buffers)
-
-Sampler:
-  Linear clamp, point mipmap
-```
-
-- [ ] **Step 3: Call `setupPathTracingCompositePass()` from init path**
-
-- [ ] **Step 4: Commit**
-
----
-
-### Task 3: Rewrite `drawPathTracing()` and simplify call site
-
-**Files:**
-- Modify: `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
-- Modify: `engine/source/runtime/function/render/render_pipeline.cpp`
-
-- [ ] **Step 1: Update descriptor before each composite subpass**
-
-Before subpass 3: bind `backup_odd` (PT output) image view as t0
-Before subpass 4: bind `backup_even` image view as t0
-
-The composite shader reads from t0, writes to the subpass color attachment.
 
 - [ ] **Step 2: Rewrite `drawPathTracing()` body**
+
+Replace the tone_mapping_pass.draw() + color_grading_pass.draw() + fxaa_pass.draw() calls with cmdNextSubpass skips:
 
 ```cpp
 void MainCameraPass::drawPathTracing(UIPass& ui_pass,
                                      CombineUIPass& combine_ui_pass,
                                      uint32_t current_swapchain_image_index)
 {
-    RHICommandBuffer* cmd = m_rhi->getCurrentCommandBuffer();
-
-    // Begin render pass (same as before)
-    // ... setup begin_info ...
-    m_rhi->cmdBeginRenderPassPFN(cmd, &begin_info, RHI_SUBPASS_CONTENTS_INLINE);
-
-    // Skip subpasses 0-2
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
-
-    // --- Subpass 3: Composite backup_odd (PT output) → backup_even ---
+    // Begin render pass (unchanged)
     {
-        RHIDescriptorImageInfo img_info {};
-        img_info.imageView   = m_scene_output_image_view;  // PT output = backup_odd
-        img_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        img_info.sampler     = m_pt_composite_sampler;
-        RHIWriteDescriptorSet write {};
-        write.sType = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_pt_composite_descriptor_set;
-        write.dstBinding = 0;
-        write.descriptorType = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &img_info;
-        m_rhi->updateDescriptorSets(1, &write, 0, nullptr);
+        RHIRenderPassBeginInfo renderpass_begin_info {};
+        renderpass_begin_info.renderPass = m_path_tracing_composite_render_pass;
+        renderpass_begin_info.framebuffer =
+            m_path_tracing_composite_swapchain_framebuffers[current_swapchain_image_index];
+        renderpass_begin_info.renderArea.offset = {0, 0};
+        renderpass_begin_info.renderArea.extent = m_rhi->getSwapchainInfo().extent;
+
+        RHIClearValue clear_values[_main_camera_pass_attachment_count];
+        clear_values[_main_camera_pass_gbuffer_a].color          = {{0.0f, 0.0f, 0.0f, 0.0f}};
+        clear_values[_main_camera_pass_gbuffer_b].color          = {{0.0f, 0.0f, 0.0f, 0.0f}};
+        clear_values[_main_camera_pass_gbuffer_c].color          = {{0.0f, 0.0f, 0.0f, 0.0f}};
+        clear_values[_main_camera_pass_backup_buffer_odd].color  = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        clear_values[_main_camera_pass_backup_buffer_even].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // FIXED: alpha=0
+        // ... rest unchanged ...
+        m_rhi->cmdBeginRenderPassPFN(cmd, &renderpass_begin_info, RHI_SUBPASS_CONTENTS_INLINE);
     }
-    m_rhi->cmdBindPipelinePFN(cmd, RHI_PIPELINE_BIND_POINT_GRAPHICS, m_pt_composite_pipeline);
-    m_rhi->cmdBindDescriptorSetsPFN(cmd, RHI_PIPELINE_BIND_POINT_GRAPHICS,
-                                     m_pt_composite_pipeline_layout, 0, 1,
-                                     &m_pt_composite_descriptor_set, 0, nullptr);
-    m_rhi->cmdDraw(cmd, 3, 1, 0, 0);  // full-screen triangle
 
-    // --- Subpass 4: Composite backup_even → post_process_odd ---
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
-    {
-        RHIDescriptorImageInfo img_info {};
-        img_info.imageView   = m_backup_even_image_view;  // backup_even
-        img_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        img_info.sampler     = m_pt_composite_sampler;
-        RHIWriteDescriptorSet write {};
-        write.sType = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_pt_composite_descriptor_set;
-        write.dstBinding = 0;
-        write.descriptorType = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &img_info;
-        m_rhi->updateDescriptorSets(1, &write, 0, nullptr);
-    }
-    m_rhi->cmdBindPipelinePFN(cmd, RHI_PIPELINE_BIND_POINT_GRAPHICS, m_pt_composite_pipeline);
-    m_rhi->cmdBindDescriptorSetsPFN(cmd, RHI_PIPELINE_BIND_POINT_GRAPHICS,
-                                     m_pt_composite_pipeline_layout, 0, 1,
-                                     &m_pt_composite_descriptor_set, 0, nullptr);
-    m_rhi->cmdDraw(cmd, 3, 1, 0, 0);
+    // Skip subpasses 0-5:
+    //   0=forward_lighting, 1=empty, 2=empty,
+    //   3=tone_mapping (REMOVED), 4=color_grading (REMOVED), 5=fxaa (REMOVED)
+    // Six cmdNextSubpass calls to reach subpass 6 (UI)
+    for (int i = 0; i < 6; ++i)
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
 
-    // --- Subpass 5: Skip FXAA (post_process_odd preserved, post_process_even stale) ---
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
-    // No draw — attachment is preserved (or cleared by UI loadOp in next subpass)
-
-    // --- Subpass 6: UI (unchanged from rasterization pipeline) ---
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
+    // Subpass 6: UI (unchanged from rasterization)
     clearUIAttachment();
     drawAxis();
     ui_pass.draw();
 
-    // --- Subpass 7: Combine UI (unchanged from rasterization pipeline) ---
-    m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);
+    // Subpass 7: Combine UI (unchanged from rasterization)
+    m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
     combine_ui_pass.draw();
 
-    m_rhi->cmdEndRenderPassPFN(cmd);
+    m_rhi->cmdEndRenderPassPFN(m_rhi->getCurrentCommandBuffer());
 }
 ```
 
-- [ ] **Step 3: Simplify `drawPathTracing()` signature**
+- [ ] **Step 3: Commit**
 
-Remove `ColorGradingPass&`, `FXAAPass&`, `ToneMappingPass&` parameters. Keep only `UIPass&`, `CombineUIPass&`, `uint32_t`.
+---
 
-- [ ] **Step 4: Update call site in `render_pipeline.cpp`**
+### Task 2: Simplify `drawPathTracing()` signature
 
-Remove the three removed parameters from the call. Remove local variables `color_grading_pass`, `fxaa_pass`, `tone_mapping_pass` if they become unused in `pathTracingRender()`.
+**Files:**
+- Modify: `engine/source/runtime/function/render/passes/main_camera_pass.h`
+- Modify: `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 1: Update declaration**
+
+Remove `ColorGradingPass&`, `FXAAPass&`, `ToneMappingPass&` from parameter list:
+
+```cpp
+// BEFORE:
+void drawPathTracing(ColorGradingPass& color_grading_pass,
+                     FXAAPass&         fxaa_pass,
+                     ToneMappingPass&  tone_mapping_pass,
+                     UIPass&           ui_pass,
+                     CombineUIPass&    combine_ui_pass,
+                     uint32_t          current_swapchain_image_index);
+
+// AFTER:
+void drawPathTracing(UIPass&           ui_pass,
+                     CombineUIPass&    combine_ui_pass,
+                     uint32_t          current_swapchain_image_index);
+```
+
+- [ ] **Step 2: Update definition to match**
+
+- [ ] **Step 3: Commit**
+
+---
+
+### Task 3: Update call site in `render_pipeline.cpp`
+
+**Files:**
+- Modify: `engine/source/runtime/function/render/render_pipeline.cpp`
+
+- [ ] **Step 1: Update call**
+
+```cpp
+// BEFORE:
+static_cast<MainCameraPass*>(m_main_camera_pass.get())
+    ->drawPathTracing(color_grading_pass,
+                      fxaa_pass,
+                      tone_mapping_pass,
+                      ui_pass,
+                      combine_ui_pass,
+                      current_swapchain_image_index);
+
+// AFTER:
+static_cast<MainCameraPass*>(m_main_camera_pass.get())
+    ->drawPathTracing(ui_pass,
+                      combine_ui_pass,
+                      current_swapchain_image_index);
+```
+
+- [ ] **Step 2: Remove unused local variables**
+
+Check if `color_grading_pass`, `fxaa_pass`, `tone_mapping_pass` local variables become unused and remove them.
+
+- [ ] **Step 3: Commit**
 
 ---
 
@@ -289,10 +209,11 @@ Remove the three removed parameters from the call. Remove local variables `color
 - [ ] **Step 1: Build**
 
 ```bash
-cmake --build . --config Debug --target PiccoloEditor
+cd d:/program/Piccolo/build
+cmake --build . --config Debug --target PiccoloEditor 2>&1 | tail -5
 ```
 
-- [ ] **Step 2: Fix compilation errors if any**
+- [ ] **Step 2: Fix any compilation errors**
 
 ---
 
@@ -300,11 +221,13 @@ cmake --build . --config Debug --target PiccoloEditor
 
 | Metric | Before | After |
 |--------|--------|-------|
-| Post-process shaders | 3 (tone_map, color_grading, fxaa) | 1 (composite) |
-| tone_mapping_pass.draw() | Yes | Replaced by composite.draw() |
-| color_grading_pass.draw() | Yes | Replaced by composite.draw() |
-| fxaa_pass.draw() | Yes | Removed (skip subpass) |
-| ui_pass.draw() | Unchanged | Unchanged |
-| combine_ui_pass.draw() | Unchanged | Unchanged |
-| Render pass structure | Unchanged | Unchanged (same attachments, same subpasses) |
-| GPU bandwidth (full-screen R/W per frame) | ~5 reads + ~4 writes | ~3 reads + ~3 writes |
+| tone_mapping_pass.draw() | Yes | **Removed** |
+| color_grading_pass.draw() | Yes | **Removed** |
+| fxaa_pass.draw() | Yes | **Removed** |
+| ui_pass.draw() | Yes | Yes (unchanged) |
+| combine_ui_pass.draw() | Yes | Yes (unchanged) |
+| New shaders | — | **Zero** |
+| New pipelines | — | **Zero** |
+| New render passes | — | **Zero** |
+| GPU full-screen passes saved | — | 3 (tone map + color grade + FXAA) |
+| PT output path | PT → tone_map → color_grade → FXAA → combine → swapchain | PT → combine → swapchain |
