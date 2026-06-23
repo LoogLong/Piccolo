@@ -794,17 +794,20 @@ namespace Piccolo
         std::vector<RenderPathTracingCollectedInstance> collected_instances =
             m_render_resource_impl->collectPathTracingInstances(scene);
 
-        // ---- Check if scene has skinned instances ----
-        const bool has_skinned = std::any_of(collected_instances.begin(), collected_instances.end(),
-            [](const RenderPathTracingCollectedInstance& i) { return i.enable_vertex_blending; });
-
-        // ---- Ensure BLAS for static meshes (per-mesh dedup) ----
+        // ---- Ensure BLAS for static meshes + check for skinned instances ----
+        // Merge has_skinned detection into the static BLAS loop to avoid a separate pass.
+        bool has_skinned = false;
         std::unordered_set<RenderMeshGPUResource*> processed_meshes;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
         {
-            if (instance.enable_vertex_blending || instance.mesh == nullptr)
+            if (instance.enable_vertex_blending)
             {
+                has_skinned = true;
                 continue; // skinned meshes handled after compute dispatch
+            }
+            if (instance.mesh == nullptr)
+            {
+                continue;
             }
 
             if (!processed_meshes.insert(instance.mesh).second)
@@ -833,8 +836,9 @@ namespace Piccolo
             return true;
         }
 
-        // ---- Build per-instance BLAS for skinned instances (position data written by GpuSkinningPass) ----
+        // ---- Build per-instance BLAS for skinned instances + track meshes for orphan cleanup ----
         std::unordered_set<uint32_t> active_skinned_instance_ids;
+        std::unordered_set<RenderMeshGPUResource*> skinned_meshes_in_frame;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
         {
             if (!instance.enable_vertex_blending || instance.mesh == nullptr)
@@ -845,6 +849,7 @@ namespace Piccolo
             RenderMeshGPUResource* mesh = instance.mesh;
             uint32_t inst_id = instance.instance_id;
             active_skinned_instance_ids.insert(inst_id);
+            skinned_meshes_in_frame.insert(mesh);  // track for orphan cleanup below
 
             // Look up skinned position buffer from GpuSkinningPass output
             auto& outputs = mesh->skinned_mesh_outputs;
@@ -886,28 +891,23 @@ namespace Piccolo
             }
         }
 
-        // ---- Clean up orphaned per-instance BLAS (instances that disappeared) ----
-        // Position buffers are owned by GpuSkinningPass (skinned_mesh_outputs).
-        // PathTracingPass only owns the BLAS (path_tracing_skinned_resources).
-        std::unordered_set<RenderMeshGPUResource*> cleaned_skinned_meshes;
-        for (auto& inst : collected_instances)
+        // ---- Clean up orphaned per-instance BLAS ----
+        // Iterate only the skinned meshes present this frame (tracked above),
+        // not the full collected_instances list.
+        for (auto* mesh : skinned_meshes_in_frame)
         {
-            if (inst.mesh != nullptr && inst.enable_vertex_blending &&
-                cleaned_skinned_meshes.insert(inst.mesh).second)
+            auto& map = mesh->path_tracing_skinned_resources;
+            for (auto it = map.begin(); it != map.end(); )
             {
-                auto& map = inst.mesh->path_tracing_skinned_resources;
-                for (auto it = map.begin(); it != map.end(); )
+                if (active_skinned_instance_ids.count(it->first) == 0)
                 {
-                    if (active_skinned_instance_ids.count(it->first) == 0)
-                    {
-                        if (it->second.blas != nullptr)
-                            m_rhi->destroyAccelerationStructure(it->second.blas);
-                        it = map.erase(it);
-                    }
-                    else
-                    {
-                        ++it;
-                    }
+                    if (it->second.blas != nullptr)
+                        m_rhi->destroyAccelerationStructure(it->second.blas);
+                    it = map.erase(it);
+                }
+                else
+                {
+                    ++it;
                 }
             }
         }
