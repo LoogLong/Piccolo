@@ -30,13 +30,10 @@ namespace Piccolo
         RenderMeshGPUResource*          mesh {nullptr};
         RenderPBRMaterialGPUResource*   material {nullptr};
         RenderEntity* entity {nullptr};
-        uint32_t shader_instance_index {0};
-
         // Skinning support -- transient per-frame data
         bool                            enable_vertex_blending {false};
         uint32_t                        joint_count {0};
         const Matrix4x4*                joint_matrices {nullptr};  // pointer to entity's joint matrices
-        uint32_t                        vertex_offset_in_flat_buffer {0};   // where this instance's vertices are in g_vertices
     };
 
     struct RenderPathTracingVertexGPUData

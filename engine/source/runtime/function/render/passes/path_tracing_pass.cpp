@@ -833,13 +833,6 @@ namespace Piccolo
             return true;
         }
 
-        // ---- Update scene buffers (per-instance geometry for skinned, dedup for static) ----
-        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
-        {
-            return false;
-        }
-        m_descriptor_set_dirty = true;
-
         // ---- Build per-instance BLAS for skinned instances (position data written by GpuSkinningPass) ----
         std::unordered_set<uint32_t> active_skinned_instance_ids;
         for (RenderPathTracingCollectedInstance& instance : collected_instances)
@@ -937,10 +930,14 @@ namespace Piccolo
 
         m_last_collected_instance_count = static_cast<uint32_t>(collected_instances.size());
 
-        for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
+        // ---- Update scene buffers with FILTERED instances ----
+        // Must be called AFTER filtering so g_instances indices match TLAS/DXR InstanceIndex().
+        // (Bug B3 fix: previously called before per-instance BLAS loop with unfiltered list.)
+        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
         {
-            collected_instances[instance_index].shader_instance_index = instance_index;
+            return false;
         }
+        m_descriptor_set_dirty = true;
 
         // ---- Rebuild TLAS ----
 
