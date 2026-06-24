@@ -338,9 +338,6 @@ namespace Piccolo
 
         static_cast<GpuSkinningPass*>(m_gpu_skinning_pass.get())->dispatch();
 
-        static_cast<DirectionalLightShadowPass*>(m_directional_light_pass.get())->draw();
-        static_cast<PointLightShadowPass*>(m_point_light_shadow_pass.get())->draw();
-
         PathTracingPass& path_tracing_pass = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
         if (!path_tracing_pass.dispatch())
         {
