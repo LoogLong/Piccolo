@@ -75,12 +75,9 @@ namespace Piccolo
             ParticlePass& particle_pass,
             uint32_t          current_swapchain_image_index);
 
-        void drawPathTracing(ColorGradingPass& color_grading_pass,
-            FXAAPass& fxaa_pass,
-            ToneMappingPass& tone_mapping_pass,
-            UIPass& ui_pass,
-            CombineUIPass& combine_ui_pass,
-            uint32_t          current_swapchain_image_index);
+        void drawPathTracing(UIPass& ui_pass,
+                             CombineUIPass& combine_ui_pass,
+                             uint32_t       current_swapchain_image_index);
 
         RHIImage* getBackupOddImage() const;
         RHIImageView* getBackupOddImageView() const;

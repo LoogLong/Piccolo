@@ -347,18 +347,12 @@ namespace Piccolo
             return false;
         }
 
-        ColorGradingPass& color_grading_pass = *(static_cast<ColorGradingPass*>(m_color_grading_pass.get()));
-        FXAAPass&         fxaa_pass          = *(static_cast<FXAAPass*>(m_fxaa_pass.get()));
-        ToneMappingPass&  tone_mapping_pass  = *(static_cast<ToneMappingPass*>(m_tone_mapping_pass.get()));
-        UIPass&           ui_pass            = *(static_cast<UIPass*>(m_ui_pass.get()));
-        CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
+        UIPass&           ui_pass         = *(static_cast<UIPass*>(m_ui_pass.get()));
+        CombineUIPass&    combine_ui_pass = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
 
         const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
-            ->drawPathTracing(color_grading_pass,
-                              fxaa_pass,
-                              tone_mapping_pass,
-                              ui_pass,
+            ->drawPathTracing(ui_pass,
                               combine_ui_pass,
                               current_swapchain_image_index);
 

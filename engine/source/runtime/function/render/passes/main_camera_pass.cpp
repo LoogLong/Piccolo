@@ -2313,12 +2313,9 @@ namespace Piccolo
         m_rhi->cmdEndRenderPassPFN(m_rhi->getCurrentCommandBuffer());
     }
 
-    void MainCameraPass::drawPathTracing(ColorGradingPass& color_grading_pass,
-                                         FXAAPass&         fxaa_pass,
-                                         ToneMappingPass&  tone_mapping_pass,
-                                         UIPass&           ui_pass,
-                                         CombineUIPass&    combine_ui_pass,
-                                         uint32_t          current_swapchain_image_index)
+    void MainCameraPass::drawPathTracing(UIPass&        ui_pass,
+                                         CombineUIPass& combine_ui_pass,
+                                         uint32_t       current_swapchain_image_index)
     {
         {
             RHIRenderPassBeginInfo renderpass_begin_info {};
@@ -2347,22 +2344,12 @@ namespace Piccolo
                                          RHI_SUBPASS_CONTENTS_INLINE);
         }
 
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-
-        tone_mapping_pass.draw();
-
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-
-        color_grading_pass.draw();
-
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-
-        if (m_enable_fxaa)
-            fxaa_pass.draw();
-
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+        // Skip subpasses 0-5 (forward_lighting→tone_mapping→color_grading→fxaa).
+        // Path tracing output (backup_odd) is never overwritten since fxaa is skipped.
+        // clearUIAttachment() in subpass 6 clears backup_even to (0,0,0,0) so
+        // combine_ui returns scene_color for non-UI pixels.
+        for (int i = 0; i < 6; ++i)
+            m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
 
         clearUIAttachment();
         drawAxis();
