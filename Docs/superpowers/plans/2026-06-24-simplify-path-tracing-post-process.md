@@ -48,16 +48,7 @@ Subpass 7: combine_ui        → unchanged (reads backup_odd=PT output, backup_e
    - Pixels without UI → shader returns `scene_color` (PT output)
    - Pixels with UI → shader returns `gamma_ui` (UI overlay)
 
-The loadOp of `backup_even` at render pass begin must be CLEAR (to transparent black) so non-UI pixels are (0,0,0,0) when combine_ui reads them. This is already configured in the existing clear_values array (`{{0.0f, 0.0f, 0.0f, 1.0f}}` for backup_even). The alpha=1.0 might need adjustment to alpha=0.0 to ensure the nearly-black check in combine_ui passes for non-UI pixels. Let me verify...
-
-Actually, the shader checks:
-```hlsl
-if (ui_color.r < 1e-6f && ui_color.g < 1e-6f && ui_color.a < 1e-6f)
-```
-
-It checks r, g, AND a. If backup_even is cleared to (0, 0, 0, 1.0), then a = 1.0 which is NOT < 1e-6, so the check FAILS. combine_ui would return `gamma_ui` = gamma(0, 0, 0, 1.0) = (0, 0, 0, 1.0) = BLACK for non-UI pixels!
-
-So we need to change the clear value for backup_even from `(0,0,0,1)` to `(0,0,0,0)` in the path tracing composite render pass.
+No changes to clear values or the combine_ui shader are needed. `clearUIAttachment()` (called at the start of subpass 6) already clears `backup_even` to `(0,0,0,0)` including alpha via `cmdClearAttachments`. The render pass loadOp's clear value is overwritten before combine_ui reads the attachment. Non-UI pixels naturally have r=g=a=0, passing the nearly-black check and returning `scene_color`.
 
 ---
 
@@ -75,69 +66,49 @@ No new shaders. No new render passes. No new pipelines.
 
 ## Tasks
 
-### Task 1: Fix backup_even clear alpha + skip redundant passes in `drawPathTracing()`
+### Task 1: Rewrite `drawPathTracing()` — skip 3 redundant passes
 
 **Files:**
 - Modify: `engine/source/runtime/function/render/passes/main_camera_pass.cpp`
 
-- [ ] **Step 1: Fix backup_even clear value**
+- [ ] **Step 1: Replace tone_map/color_grading/fxaa draws with cmdNextSubpass skips**
 
-The current clear value `(0,0,0,1)` has alpha=1.0 which causes combine_ui to return black instead of the scene. Change to `(0,0,0,0)`:
+In `drawPathTracing()`, replace:
 
 ```cpp
-// Line ~2337: change alpha from 1.0f to 0.0f
-clear_values[_main_camera_pass_backup_buffer_even].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+// OLD (3 individual cmdNextSubpass + 3 draw calls):
+m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);  // subpass 1
+m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);  // subpass 2
+m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);  // subpass 3
+tone_mapping_pass.draw();
+m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);  // subpass 4
+color_grading_pass.draw();
+m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);  // subpass 5
+if (m_enable_fxaa) fxaa_pass.draw();
+m_rhi->cmdNextSubpassPFN(cmd, RHI_SUBPASS_CONTENTS_INLINE);  // subpass 6
+clearUIAttachment();
+drawAxis();
+ui_pass.draw();
 ```
 
-- [ ] **Step 2: Rewrite `drawPathTracing()` body**
-
-Replace the tone_mapping_pass.draw() + color_grading_pass.draw() + fxaa_pass.draw() calls with cmdNextSubpass skips:
+With:
 
 ```cpp
-void MainCameraPass::drawPathTracing(UIPass& ui_pass,
-                                     CombineUIPass& combine_ui_pass,
-                                     uint32_t current_swapchain_image_index)
-{
-    // Begin render pass (unchanged)
-    {
-        RHIRenderPassBeginInfo renderpass_begin_info {};
-        renderpass_begin_info.renderPass = m_path_tracing_composite_render_pass;
-        renderpass_begin_info.framebuffer =
-            m_path_tracing_composite_swapchain_framebuffers[current_swapchain_image_index];
-        renderpass_begin_info.renderArea.offset = {0, 0};
-        renderpass_begin_info.renderArea.extent = m_rhi->getSwapchainInfo().extent;
-
-        RHIClearValue clear_values[_main_camera_pass_attachment_count];
-        clear_values[_main_camera_pass_gbuffer_a].color          = {{0.0f, 0.0f, 0.0f, 0.0f}};
-        clear_values[_main_camera_pass_gbuffer_b].color          = {{0.0f, 0.0f, 0.0f, 0.0f}};
-        clear_values[_main_camera_pass_gbuffer_c].color          = {{0.0f, 0.0f, 0.0f, 0.0f}};
-        clear_values[_main_camera_pass_backup_buffer_odd].color  = {{0.0f, 0.0f, 0.0f, 1.0f}};
-        clear_values[_main_camera_pass_backup_buffer_even].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // FIXED: alpha=0
-        // ... rest unchanged ...
-        m_rhi->cmdBeginRenderPassPFN(cmd, &renderpass_begin_info, RHI_SUBPASS_CONTENTS_INLINE);
-    }
-
-    // Skip subpasses 0-5:
-    //   0=forward_lighting, 1=empty, 2=empty,
-    //   3=tone_mapping (REMOVED), 4=color_grading (REMOVED), 5=fxaa (REMOVED)
-    // Six cmdNextSubpass calls to reach subpass 6 (UI)
-    for (int i = 0; i < 6; ++i)
-        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-
-    // Subpass 6: UI (unchanged from rasterization)
-    clearUIAttachment();
-    drawAxis();
-    ui_pass.draw();
-
-    // Subpass 7: Combine UI (unchanged from rasterization)
+// NEW (6 cmdNextSubpass skips, zero intermediate draws):
+for (int i = 0; i < 6; ++i)
     m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
-    combine_ui_pass.draw();
-
-    m_rhi->cmdEndRenderPassPFN(m_rhi->getCurrentCommandBuffer());
-}
+// Now in subpass 6 (UI) — unchanged from rasterization
+clearUIAttachment();
+drawAxis();
+ui_pass.draw();
 ```
 
-- [ ] **Step 3: Commit**
+No other changes needed:
+- `backup_even` loadOp=CLEAR is irrelevant — `clearUIAttachment()` overwrites it to (0,0,0,0) in subpass 6
+- `backup_odd` stays unchanged (PT output) — fxaa is skipped so it's never overwritten
+- combine_ui reads backup_odd (PT output) + backup_even (UI, zero where no UI) → returns PT output for non-UI pixels
+
+- [ ] **Step 2: Commit**
 
 ---
 
