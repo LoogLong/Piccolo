@@ -369,7 +369,8 @@ namespace Piccolo
     }
 
     bool RenderResource::updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
-                                                       const std::vector<RenderPathTracingCollectedInstance>& collected_instances)
+                                                       const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
+                                                       bool full_rebuild)
     {
         m_path_tracing_vertex_data.clear();
         m_path_tracing_index_data.clear();
@@ -409,24 +410,27 @@ namespace Piccolo
                     geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
                     geometry_data.index_count = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
 
-                    // Static mesh: copy rest-pose vertex data (existing behavior)
-                    for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
+                    // Static mesh: copy rest-pose vertex data
+                    if (full_rebuild)
                     {
-                        RenderPathTracingVertexGPUData vertex{};
-                        vertex.position = Vector4(source_instance.mesh->path_tracing_positions[v], 1.0f);
-                        vertex.normal = Vector4(source_instance.mesh->path_tracing_normals[v], 0.0f);
-                        vertex.tangent = Vector4(source_instance.mesh->path_tracing_tangents[v], 0.0f);
-                        vertex.texcoord = Vector4(source_instance.mesh->path_tracing_texcoords[v].x,
-                                                  source_instance.mesh->path_tracing_texcoords[v].y,
-                                                  0.0f,
-                                                  0.0f);
-                        m_path_tracing_vertex_data.push_back(vertex);
+                        for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
+                        {
+                            RenderPathTracingVertexGPUData vertex{};
+                            vertex.position = Vector4(source_instance.mesh->path_tracing_positions[v], 1.0f);
+                            vertex.normal = Vector4(source_instance.mesh->path_tracing_normals[v], 0.0f);
+                            vertex.tangent = Vector4(source_instance.mesh->path_tracing_tangents[v], 0.0f);
+                            vertex.texcoord = Vector4(source_instance.mesh->path_tracing_texcoords[v].x,
+                                                      source_instance.mesh->path_tracing_texcoords[v].y,
+                                                      0.0f, 0.0f);
+                            m_path_tracing_vertex_data.push_back(vertex);
+                        }
                     }
 
                     // Append indices
-                    for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                    if (full_rebuild)
                     {
-                        m_path_tracing_index_data.push_back(idx);
+                        for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                            m_path_tracing_index_data.push_back(idx);
                     }
                     m_path_tracing_geometry_data.push_back(geometry_data);
                 }
@@ -453,12 +457,13 @@ namespace Piccolo
                 geometry_data.index_offset  = static_cast<uint32_t>(m_path_tracing_index_data.size());
                 geometry_data.index_count   = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
 
-                // NO placeholder push to m_path_tracing_vertex_data — g_vertices is static-only
+                // NO placeholder push to m_path_tracing_vertex_data
 
                 // Append indices
-                for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                if (full_rebuild)
                 {
-                    m_path_tracing_index_data.push_back(idx);
+                    for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                        m_path_tracing_index_data.push_back(idx);
                 }
                 m_path_tracing_geometry_data.push_back(geometry_data);
             }
@@ -568,32 +573,35 @@ namespace Piccolo
             return true;
         };
 
-        // Update all buffers
-        if (!update_buffer(m_path_tracing_vertex_buffer,
-                          m_path_tracing_vertex_buffer_memory,
-                          m_path_tracing_vertex_buffer_capacity,
-                          m_path_tracing_vertex_data.data(),
-                          m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData)))
+        // Update buffers — skip vertex/index/material when only transforms changed
+        if (full_rebuild)
         {
-            return false;
-        }
+            if (!update_buffer(m_path_tracing_vertex_buffer,
+                              m_path_tracing_vertex_buffer_memory,
+                              m_path_tracing_vertex_buffer_capacity,
+                              m_path_tracing_vertex_data.data(),
+                              m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData)))
+            {
+                return false;
+            }
 
-        if (!update_buffer(m_path_tracing_index_buffer,
-                          m_path_tracing_index_buffer_memory,
-                          m_path_tracing_index_buffer_capacity,
-                          m_path_tracing_index_data.data(),
-                          m_path_tracing_index_data.size() * sizeof(uint32_t)))
-        {
-            return false;
-        }
+            if (!update_buffer(m_path_tracing_index_buffer,
+                              m_path_tracing_index_buffer_memory,
+                              m_path_tracing_index_buffer_capacity,
+                              m_path_tracing_index_data.data(),
+                              m_path_tracing_index_data.size() * sizeof(uint32_t)))
+            {
+                return false;
+            }
 
-        if (!update_buffer(m_path_tracing_material_buffer,
-                          m_path_tracing_material_buffer_memory,
-                          m_path_tracing_material_buffer_capacity,
-                          m_path_tracing_material_data.data(),
-                          m_path_tracing_material_data.size() * sizeof(RenderPathTracingMaterialGPUData)))
-        {
-            return false;
+            if (!update_buffer(m_path_tracing_material_buffer,
+                              m_path_tracing_material_buffer_memory,
+                              m_path_tracing_material_buffer_capacity,
+                              m_path_tracing_material_data.data(),
+                              m_path_tracing_material_data.size() * sizeof(RenderPathTracingMaterialGPUData)))
+            {
+                return false;
+            }
         }
 
         if (!update_buffer(m_path_tracing_geometry_buffer,

@@ -931,9 +931,12 @@ namespace Piccolo
         m_last_collected_instance_count = static_cast<uint32_t>(collected_instances.size());
 
         // ---- Update scene buffers with FILTERED instances ----
-        // Must be called AFTER filtering so g_instances indices match TLAS/DXR InstanceIndex().
-        // (Bug B3 fix: previously called before per-instance BLAS loop with unfiltered list.)
-        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances))
+        // Full rebuild only when static data changed (new meshes, first frame).
+        // Otherwise only instance+geometry buffers are updated (transforms + skinned vertex_offset).
+        const bool static_data_changed = scene.isPathTracingTLASDirty() ||
+                                         m_last_collected_instance_count == 0;
+        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances,
+                                                                    static_data_changed))
         {
             return false;
         }

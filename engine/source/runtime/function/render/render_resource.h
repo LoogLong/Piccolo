@@ -209,7 +209,8 @@ namespace Piccolo
         std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
 
         bool updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
-                                           const std::vector<RenderPathTracingCollectedInstance>& collected_instances);
+                                           const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
+                                           bool full_rebuild = false);
 
         RHIBuffer* getPathTracingVertexBuffer() const { return m_path_tracing_vertex_buffer; }
         RHIBuffer* getPathTracingIndexBuffer() const { return m_path_tracing_index_buffer; }
