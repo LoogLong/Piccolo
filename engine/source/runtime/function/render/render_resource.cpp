@@ -276,7 +276,8 @@ namespace Piccolo
         uint32_t vertex_stride,
         RHIBuffer* index_buffer,
         uint32_t index_count,
-        RHIIndexType index_type)
+        RHIIndexType index_type,
+        RHIAccelerationStructure* source_blas)
     {
         if (skinned_position_buffer == nullptr || vertex_count == 0) return nullptr;
 
@@ -291,28 +292,39 @@ namespace Piccolo
         geometry.index_type             = index_type;
         geometry.opaque                 = true;
 
+        const bool is_update = (source_blas != nullptr);
+
         RHIAccelerationStructureBuildDesc build_desc;
         build_desc.type              = RHIAccelerationStructureType::BottomLevel;
         build_desc.geometries        = &geometry;
         build_desc.geometry_count    = 1;
         build_desc.prefer_fast_trace = true;
-        build_desc.allow_update      = false;
-        build_desc.perform_update    = false;
-        build_desc.source            = nullptr;
+        build_desc.allow_update      = !is_update;  // first create: allow update; update: reuse existing
+        build_desc.perform_update    = is_update;   // subsequent frames: update in-place
+        build_desc.source            = is_update ? source_blas : nullptr;
 
-        RHIAccelerationStructure* new_blas = nullptr;
-        if (!rhi->createAccelerationStructure(&build_desc, new_blas) || new_blas == nullptr)
+        RHIAccelerationStructure* blas = nullptr;
+        if (is_update)
         {
+            // Update in-place: use existing BLAS, no createAccelerationStructure needed
+            blas = source_blas;
+        }
+        else
+        {
+            if (!rhi->createAccelerationStructure(&build_desc, blas) || blas == nullptr)
+            {
+                return nullptr;
+            }
+        }
+
+        if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, blas))
+        {
+            if (!is_update)
+                rhi->destroyAccelerationStructure(blas);
             return nullptr;
         }
 
-        if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, new_blas))
-        {
-            rhi->destroyAccelerationStructure(new_blas);
-            return nullptr;
-        }
-
-        return new_blas;
+        return blas;
     }
 
     std::vector<RenderPathTracingCollectedInstance> RenderResource::collectPathTracingInstances(RenderScene& scene)

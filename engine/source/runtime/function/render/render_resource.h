@@ -204,7 +204,8 @@ namespace Piccolo
             uint32_t vertex_stride,
             RHIBuffer* index_buffer,
             uint32_t index_count,
-            RHIIndexType index_type);
+            RHIIndexType index_type,
+            RHIAccelerationStructure* source_blas = nullptr);  // if set, perform update in-place
 
         std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
 

@@ -773,7 +773,30 @@ namespace Piccolo
         writes[14].descriptorCount = 1;
         writes[14].pImageInfo      = &accumulation_prev_info;
 
-        m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
+        // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
+        // t11=texture_array); dynamic descriptors every frame.
+        const uint32_t write_count = m_static_descriptors_written
+            ? static_cast<uint32_t>(std::size(writes)) - 5  // skip writes[1],[9],[10],[11],[12]
+            : static_cast<uint32_t>(std::size(writes));
+        RHIWriteDescriptorSet* p_writes = writes;
+        if (m_static_descriptors_written)
+        {
+            // Compact: write only dynamic bindings (skip static)
+            RHIWriteDescriptorSet dynamic_writes[10];
+            uint32_t j = 0;
+            for (uint32_t i = 0; i < std::size(writes); ++i)
+            {
+                // Skip static bindings: u1(1), t9(9), t10(10), t11(11), s12(12)
+                if (i != 1 && i != 9 && i != 10 && i != 11 && i != 12)
+                    dynamic_writes[j++] = writes[i];
+            }
+            m_rhi->updateDescriptorSets(j, dynamic_writes, 0, nullptr);
+        }
+        else
+        {
+            m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
+            m_static_descriptors_written = true;
+        }
         m_descriptor_set_dirty = false;
         return true;
     }
@@ -864,15 +887,8 @@ namespace Piccolo
                 continue;
             }
 
-            // Per-instance BLAS storage
+            // Per-instance BLAS: create with allow_update on first frame, update in-place thereafter
             auto& pt_resources = mesh->path_tracing_skinned_resources[inst_id];
-
-            // Destroy old BLAS before building new one (vertex positions change every frame)
-            if (pt_resources.blas != nullptr)
-            {
-                m_rhi->destroyAccelerationStructure(pt_resources.blas);
-                pt_resources.blas = nullptr;
-            }
 
             pt_resources.blas = m_render_resource_impl->buildPathTracingBLASFromSkinned(
                 m_rhi,
@@ -882,7 +898,8 @@ namespace Piccolo
                 sizeof(float) * 3,
                 mesh->mesh_index_buffer,
                 skinned_output.index_count,
-                mesh->mesh_index_type);
+                mesh->mesh_index_type,
+                pt_resources.blas);  // pass existing BLAS for update; nullptr on first frame
 
             instance.bottom_level_as = pt_resources.blas;
             if (pt_resources.blas != nullptr)
