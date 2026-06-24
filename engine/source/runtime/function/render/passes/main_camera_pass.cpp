@@ -2347,6 +2347,7 @@ namespace Piccolo
 
         // Subpass 0 (forward_lighting): render particles on top of PT output (backup_odd).
         // Particles blend with the path traced scene via alpha blending.
+        particle_pass.setRenderCommandBufferHandle(m_rhi->getCurrentCommandBuffer());
         particle_pass.draw();
 
         // Skip subpasses 1-5 (tone_mapping→color_grading→fxaa).
