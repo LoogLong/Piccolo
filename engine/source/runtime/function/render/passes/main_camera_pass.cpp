@@ -625,13 +625,19 @@ namespace Piccolo
             subpasses[i].pipelineBindPoint = RHI_PIPELINE_BIND_POINT_GRAPHICS;
         }
 
-        // Subpass 0 (forward_lighting): color output to backup_odd.
-        // Particles blend onto the path tracing output via alpha blending.
+        // Subpass 0 (forward_lighting): color output to backup_odd + depth.
+        // Particles blend onto the path tracing output; depth attachment needed
+        // for pipeline compatibility (particle pipeline has depthTestEnable=true).
         RHIAttachmentReference forward_lighting_color {};
         forward_lighting_color.attachment = _main_camera_pass_backup_buffer_odd;
         forward_lighting_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         subpasses[_main_camera_subpass_forward_lighting].colorAttachmentCount = 1;
         subpasses[_main_camera_subpass_forward_lighting].pColorAttachments    = &forward_lighting_color;
+
+        RHIAttachmentReference forward_lighting_depth {};
+        forward_lighting_depth.attachment = _main_camera_pass_depth;
+        forward_lighting_depth.layout     = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_forward_lighting].pDepthStencilAttachment = &forward_lighting_depth;
 
         RHIAttachmentReference tone_mapping_input {};
         tone_mapping_input.attachment = _main_camera_pass_backup_buffer_odd;
