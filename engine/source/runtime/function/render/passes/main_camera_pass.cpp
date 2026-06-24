@@ -2313,7 +2313,8 @@ namespace Piccolo
         m_rhi->cmdEndRenderPassPFN(m_rhi->getCurrentCommandBuffer());
     }
 
-    void MainCameraPass::drawPathTracing(UIPass&        ui_pass,
+    void MainCameraPass::drawPathTracing(ParticlePass&  particle_pass,
+                                         UIPass&        ui_pass,
                                          CombineUIPass& combine_ui_pass,
                                          uint32_t       current_swapchain_image_index)
     {
@@ -2344,11 +2345,13 @@ namespace Piccolo
                                          RHI_SUBPASS_CONTENTS_INLINE);
         }
 
-        // Skip subpasses 0-5 (forward_lighting→tone_mapping→color_grading→fxaa).
-        // Path tracing output (backup_odd) is never overwritten since fxaa is skipped.
-        // clearUIAttachment() in subpass 6 clears backup_even to (0,0,0,0) so
-        // combine_ui returns scene_color for non-UI pixels.
-        for (int i = 0; i < 6; ++i)
+        // Subpass 0 (forward_lighting): render particles on top of PT output (backup_odd).
+        // Particles blend with the path traced scene via alpha blending.
+        particle_pass.draw();
+
+        // Skip subpasses 1-5 (tone_mapping→color_grading→fxaa).
+        // Path tracing output (backup_odd) preserved — fxaa skipped so never overwritten.
+        for (int i = 0; i < 5; ++i)
             m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
 
         clearUIAttachment();

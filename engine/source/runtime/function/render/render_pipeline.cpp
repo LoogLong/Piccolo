@@ -344,12 +344,14 @@ namespace Piccolo
             return false;
         }
 
+        ParticlePass&    particle_pass   = *(static_cast<ParticlePass*>(m_particle_pass.get()));
         UIPass&           ui_pass         = *(static_cast<UIPass*>(m_ui_pass.get()));
         CombineUIPass&    combine_ui_pass = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
 
         const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
-            ->drawPathTracing(ui_pass,
+            ->drawPathTracing(particle_pass,
+                              ui_pass,
                               combine_ui_pass,
                               current_swapchain_image_index);
 

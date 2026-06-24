@@ -75,7 +75,8 @@ namespace Piccolo
             ParticlePass& particle_pass,
             uint32_t          current_swapchain_image_index);
 
-        void drawPathTracing(UIPass& ui_pass,
+        void drawPathTracing(ParticlePass&  particle_pass,
+                             UIPass& ui_pass,
                              CombineUIPass& combine_ui_pass,
                              uint32_t       current_swapchain_image_index);
 
