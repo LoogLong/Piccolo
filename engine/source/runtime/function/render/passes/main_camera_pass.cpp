@@ -572,7 +572,7 @@ namespace Piccolo
         RHIAttachmentDescription& backup_even = attachments[_main_camera_pass_backup_buffer_even];
         backup_even.format         = m_framebuffer.attachments[_main_camera_pass_backup_buffer_even].format;
         backup_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;  // Overwritten by clearUIAttachment in subpass 6
         backup_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         backup_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         backup_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -582,7 +582,7 @@ namespace Piccolo
         RHIAttachmentDescription& post_odd = attachments[_main_camera_pass_post_process_buffer_odd];
         post_odd.format         = m_framebuffer.attachments[_main_camera_pass_post_process_buffer_odd].format;
         post_odd.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        post_odd.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        post_odd.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;  // PT doesn't use post_process
         post_odd.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         post_odd.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         post_odd.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -592,7 +592,7 @@ namespace Piccolo
         RHIAttachmentDescription& post_even = attachments[_main_camera_pass_post_process_buffer_even];
         post_even.format         = m_framebuffer.attachments[_main_camera_pass_post_process_buffer_even].format;
         post_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        post_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        post_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;  // PT doesn't use post_process
         post_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         post_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         post_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
