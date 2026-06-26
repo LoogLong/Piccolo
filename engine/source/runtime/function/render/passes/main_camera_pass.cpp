@@ -73,11 +73,15 @@ namespace Piccolo
                 RHIImageUsageFlags image_usage = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                                                  RHI_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-                if (buffer_index == _main_camera_pass_backup_buffer_odd)
+                if (buffer_index == _main_camera_pass_backup_buffer_odd ||
+                    buffer_index == _main_camera_pass_backup_buffer_even)
                 {
+                    // backup_odd: STORAGE for path tracing output write
+                    // backup_even: no TRANSIENT — prevents D3D12 memory alias with swapchain
                     image_usage = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-                                  RHI_IMAGE_USAGE_STORAGE_BIT;
+                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+                    if (buffer_index == _main_camera_pass_backup_buffer_odd)
+                        image_usage |= RHI_IMAGE_USAGE_STORAGE_BIT;
                 }
 
                 m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
