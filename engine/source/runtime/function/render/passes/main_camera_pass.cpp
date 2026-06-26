@@ -1,4 +1,5 @@
 #include "runtime/function/render/passes/main_camera_pass.h"
+#include "runtime/core/base/macro.h"
 #include "runtime/function/render/render_helper.h"
 #include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
@@ -104,6 +105,11 @@ namespace Piccolo
                                    1,
                                    1,
                                    m_framebuffer.attachments[buffer_index].view);
+
+            LOG_INFO("setupAttachments[{}] image={} view={}",
+                     buffer_index,
+                     static_cast<void*>(m_framebuffer.attachments[buffer_index].image),
+                     static_cast<void*>(m_framebuffer.attachments[buffer_index].view));
         }
 
         m_framebuffer.attachments[_main_camera_pass_post_process_buffer_odd].format  = RHI_FORMAT_R16G16B16A16_SFLOAT;
@@ -2130,6 +2136,12 @@ namespace Piccolo
             framebuffer_create_info.renderPass = m_path_tracing_composite_render_pass;
             framebuffer_create_info.attachmentCount =
                 (sizeof(framebuffer_attachments_for_image_view) / sizeof(framebuffer_attachments_for_image_view[0]));
+            LOG_INFO("PT framebuffer[{}]: attach[3]={} attach[4]={} attach[8]={}",
+                     i,
+                     static_cast<void*>(framebuffer_attachments_for_image_view[3]),
+                     static_cast<void*>(framebuffer_attachments_for_image_view[4]),
+                     static_cast<void*>(framebuffer_attachments_for_image_view[8]));
+
             framebuffer_create_info.pAttachments = framebuffer_attachments_for_image_view;
             framebuffer_create_info.width        = m_rhi->getSwapchainInfo().extent.width;
             framebuffer_create_info.height       = m_rhi->getSwapchainInfo().extent.height;

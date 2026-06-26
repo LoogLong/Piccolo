@@ -5181,6 +5181,13 @@ bool D3D12RHI::createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RH
     {
         auto* view = static_cast<D3D12RHIImageView*>(pCreateInfo->pAttachments[i]);
         framebuffer->attachments.push_back(view);
+        if (view != nullptr && view->image != nullptr)
+        {
+            LOG_INFO("createFramebuffer[{}] view={} image={} resource={} has_rtv={}",
+                     i, static_cast<void*>(view), static_cast<void*>(view->image),
+                     static_cast<void*>(view->image->resource.Get()),
+                     view->has_rtv);
+        }
 #ifdef _WIN32
         if (view == nullptr || m_d3d12_device == nullptr)
         {
