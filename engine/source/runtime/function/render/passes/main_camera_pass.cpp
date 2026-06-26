@@ -572,7 +572,7 @@ namespace Piccolo
         RHIAttachmentDescription& backup_even = attachments[_main_camera_pass_backup_buffer_even];
         backup_even.format         = m_framebuffer.attachments[_main_camera_pass_backup_buffer_even].format;
         backup_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;  // Overwritten by clearUIAttachment in subpass 6
+        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;  // CLEAR prevents D3D12 alias with swapchain attachment
         backup_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         backup_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         backup_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
