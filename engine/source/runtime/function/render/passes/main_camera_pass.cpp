@@ -73,15 +73,11 @@ namespace Piccolo
                 RHIImageUsageFlags image_usage = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                                                  RHI_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-                if (buffer_index == _main_camera_pass_backup_buffer_odd ||
-                    buffer_index == _main_camera_pass_backup_buffer_even)
+                if (buffer_index == _main_camera_pass_backup_buffer_odd)
                 {
-                    // backup_odd: STORAGE for path tracing output write
-                    // backup_even: no TRANSIENT — prevents D3D12 memory alias with swapchain
                     image_usage = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-                    if (buffer_index == _main_camera_pass_backup_buffer_odd)
-                        image_usage |= RHI_IMAGE_USAGE_STORAGE_BIT;
+                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                                  RHI_IMAGE_USAGE_STORAGE_BIT;
                 }
 
                 m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
@@ -576,7 +572,7 @@ namespace Piccolo
         RHIAttachmentDescription& backup_even = attachments[_main_camera_pass_backup_buffer_even];
         backup_even.format         = m_framebuffer.attachments[_main_camera_pass_backup_buffer_even].format;
         backup_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;  // CLEAR prevents D3D12 alias with swapchain attachment
+        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
         backup_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         backup_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         backup_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -586,7 +582,7 @@ namespace Piccolo
         RHIAttachmentDescription& post_odd = attachments[_main_camera_pass_post_process_buffer_odd];
         post_odd.format         = m_framebuffer.attachments[_main_camera_pass_post_process_buffer_odd].format;
         post_odd.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        post_odd.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;  // PT doesn't use post_process
+        post_odd.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
         post_odd.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         post_odd.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         post_odd.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -596,7 +592,7 @@ namespace Piccolo
         RHIAttachmentDescription& post_even = attachments[_main_camera_pass_post_process_buffer_even];
         post_even.format         = m_framebuffer.attachments[_main_camera_pass_post_process_buffer_even].format;
         post_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        post_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;  // PT doesn't use post_process
+        post_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
         post_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         post_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         post_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -629,9 +625,8 @@ namespace Piccolo
             subpasses[i].pipelineBindPoint = RHI_PIPELINE_BIND_POINT_GRAPHICS;
         }
 
-        // Subpass 0 (forward_lighting): color output to backup_odd + depth.
-        // Particles blend onto the path tracing output; depth attachment needed
-        // for pipeline compatibility (particle pipeline has depthTestEnable=true).
+        // Subpass 2 (forward_lighting): color output to backup_odd + depth.
+        // Particles blend onto the path tracing output.
         RHIAttachmentReference forward_lighting_color {};
         forward_lighting_color.attachment = _main_camera_pass_backup_buffer_odd;
         forward_lighting_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
