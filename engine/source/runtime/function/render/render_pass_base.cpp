@@ -12,4 +12,5 @@ namespace Piccolo
     }
     void RenderPassBase::preparePassData(std::shared_ptr<RenderResourceBase> render_resource) {}
     void RenderPassBase::initializeUIRenderBackend(WindowUI* window_ui) {}
+    void RenderPassBase::shutdownUIRenderBackend() {}
 } // namespace Piccolo

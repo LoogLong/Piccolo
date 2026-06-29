@@ -60,7 +60,7 @@ namespace Piccolo
         void setupDescriptorLayout();
         void setupPipelines();
 
-        RHIDescriptorSetLayout* m_descriptor_layout;
+        RHIDescriptorSetLayout* m_descriptor_layout {nullptr};
         std::vector<DebugDrawPipelineBase> m_render_pipelines;
         DebugDrawFramebuffer m_framebuffer;
         std::shared_ptr<RHI> m_rhi;

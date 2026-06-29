@@ -10,11 +10,12 @@ namespace Piccolo
     }
 
     void RenderScene::updateVisibleObjects(std::shared_ptr<RenderResource> render_resource,
-                                           std::shared_ptr<RenderCamera>   camera)
+                                           std::shared_ptr<RenderCamera>   camera,
+                                           bool                            apply_vulkan_y_flip)
     {
         updateVisibleObjectsDirectionalLight(render_resource, camera);
         updateVisibleObjectsPointLight(render_resource);
-        updateVisibleObjectsMainCamera(render_resource, camera);
+        updateVisibleObjectsMainCamera(render_resource, camera, apply_vulkan_y_flip);
         updateVisibleObjectsAxis(render_resource);
         updateVisibleObjectsParticle(render_resource);
     }
@@ -119,11 +120,11 @@ namespace Piccolo
                 }
                 temp_node.node_id = entity.m_instance_id;
 
-                VulkanMesh& mesh_asset           = render_resource->getEntityMesh(entity);
+                RenderMeshGPUResource& mesh_asset           = render_resource->getEntityMesh(entity);
                 temp_node.ref_mesh               = &mesh_asset;
                 temp_node.enable_vertex_blending = entity.m_enable_vertex_blending;
 
-                VulkanPBRMaterial& material_asset = render_resource->getEntityMaterial(entity);
+                RenderPBRMaterialGPUResource& material_asset = render_resource->getEntityMaterial(entity);
                 temp_node.ref_material            = &material_asset;
             }
         }
@@ -173,23 +174,24 @@ namespace Piccolo
                 }
                 temp_node.node_id = entity.m_instance_id;
 
-                VulkanMesh& mesh_asset           = render_resource->getEntityMesh(entity);
+                RenderMeshGPUResource& mesh_asset           = render_resource->getEntityMesh(entity);
                 temp_node.ref_mesh               = &mesh_asset;
                 temp_node.enable_vertex_blending = entity.m_enable_vertex_blending;
 
-                VulkanPBRMaterial& material_asset = render_resource->getEntityMaterial(entity);
+                RenderPBRMaterialGPUResource& material_asset = render_resource->getEntityMaterial(entity);
                 temp_node.ref_material            = &material_asset;
             }
         }
     }
 
     void RenderScene::updateVisibleObjectsMainCamera(std::shared_ptr<RenderResource> render_resource,
-                                                     std::shared_ptr<RenderCamera>   camera)
+                                                     std::shared_ptr<RenderCamera>   camera,
+                                                     bool                            apply_vulkan_y_flip)
     {
         m_main_camera_visible_mesh_nodes.clear();
 
         Matrix4x4 view_matrix      = camera->getViewMatrix();
-        Matrix4x4 proj_matrix      = camera->getPersProjMatrix();
+        Matrix4x4 proj_matrix      = camera->getPersProjMatrix(apply_vulkan_y_flip);
         Matrix4x4 proj_view_matrix = proj_matrix * view_matrix;
 
         ClusterFrustum f = CreateClusterFrustumFromMatrix(proj_view_matrix, -1.0, 1.0, -1.0, 1.0, 0.0, 1.0);
@@ -213,11 +215,11 @@ namespace Piccolo
                 }
                 temp_node.node_id = entity.m_instance_id;
 
-                VulkanMesh& mesh_asset           = render_resource->getEntityMesh(entity);
+                RenderMeshGPUResource& mesh_asset           = render_resource->getEntityMesh(entity);
                 temp_node.ref_mesh               = &mesh_asset;
                 temp_node.enable_vertex_blending = entity.m_enable_vertex_blending;
 
-                VulkanPBRMaterial& material_asset = render_resource->getEntityMaterial(entity);
+                RenderPBRMaterialGPUResource& material_asset = render_resource->getEntityMaterial(entity);
                 temp_node.ref_material            = &material_asset;
             }
         }
@@ -232,7 +234,7 @@ namespace Piccolo
             m_axis_node.model_matrix = axis.m_model_matrix;
             m_axis_node.node_id      = axis.m_instance_id;
 
-            VulkanMesh& mesh_asset             = render_resource->getEntityMesh(axis);
+            RenderMeshGPUResource& mesh_asset             = render_resource->getEntityMesh(axis);
             m_axis_node.ref_mesh               = &mesh_asset;
             m_axis_node.enable_vertex_blending = axis.m_enable_vertex_blending;
         }

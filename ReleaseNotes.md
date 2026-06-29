@@ -1,3 +1,88 @@
+# 渲染后端迁移说明
+
+## D3D12 后端选择与回退（2026-06）
+
+### 已完成
+- 新增运行时渲染后端配置项：`RenderBackend`、`RenderBackendAllowFallback`
+- 启动流程支持后端工厂选择：`Auto / Vulkan / D3D12`
+- Windows 平台 `Auto` 默认请求 `D3D12`
+- D3D12 初始化失败时仅在配置允许且构建包含 Vulkan 时才会回退到 Vulkan
+- `RenderSystem` 的 viewport 读写已通过 RHI 抽象接口统一
+- D3D12 主渲染路径已接入 shader bytecode、descriptor/root signature、render pass/framebuffer、graphics/compute pipeline、命令录制、粒子、拾取、debug draw 与 DX12 ImGui 分支
+- 公共 RHI 与渲染资源接口已从 Vulkan/VMA allocation 类型中解耦，VMA 仅保留在 Vulkan 后端内部
+- D3D12 descriptor 更新改为 CPU staging heap 写入后复制到 shader-visible heap，uniform buffer backing resource 按 CBV 要求对齐，资源创建失败会显式上报
+- D3D12 设备创建在无可用硬件 adapter 时可回退到 WARP software adapter，便于 Windows CI 执行启动烟测
+- Windows CI 已直接通过 CMake 构建 Debug/Release PiccoloEditor，Debug 构建会运行 D3D12 启动烟测
+- Windows CI now validates both D3D12-only and dual-backend build modes; Debug dual-backend also runs an explicit Vulkan startup smoke.
+- Hosted Windows Vulkan smoke now provisions the Vulkan runtime with SwiftShader and pins `VK_ICD_FILENAMES` to that software ICD before launch.
+- D3D12 源文件已在非 Windows 构建中通过 CMake 和 RHI factory guard 排除，Linux/macOS 路径继续使用 Vulkan
+- D3D12 ImGui 初始化使用实际 swapchain format 创建 DX12 renderer backend，避免 UI PSO render target format 与 back buffer 不一致
+- Windows deployment config now treats D3D12 as the primary backend when D3D12 is enabled and forbids silent Vulkan fallback; Windows Vulkan-only packages receive an explicit Vulkan deployment config.
+- Non-Windows deployment output now receives a Vulkan-compatible `RenderBackend=Auto` config instead of the Windows D3D12-primary config.
+- CMake now exposes `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`; Windows can build D3D12-only without linking PiccoloRuntime/imgui against Vulkan, while non-Windows builds continue to require Vulkan.
+- D3D12 builds require `dxc.exe`; Vulkan builds require Vulkan SDK/glslang.
+- 2026-06 D3D12 completion pass aligned submit ordering, point shadows, FXAA shader behavior, and dynamic descriptor reuse so Windows D3D12 can serve as the primary Vulkan-compatible render backend for the default editor scene.
+
+### 当前状态
+- Windows primary mode is D3D12; Windows D3D12-capable Editor deployment 配置默认使用 `RenderBackend=D3D12` 且禁用回退，不会静默回退 Vulkan
+- Windows Vulkan-only deployment 配置使用 `RenderBackend=Vulkan` 且禁用回退，避免 `Auto` 在 Windows 上解析到 D3D12
+- Windows 可通过 smoke 脚本分别验证 `RenderBackend=D3D12`、`RenderBackend=Auto` 和 `RenderBackend=Vulkan` 初始化路径
+- Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 D3D12-only 构建，验证运行时和 ImGui 目标不再链接 Vulkan。
+- Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 dual-backend 构建，验证 D3D12 主路径与显式 Vulkan 路径可共存。
+- Linux/macOS deployment 输出使用 `RenderBackend=Auto` 并解析到 Vulkan；非 Windows Vulkan 仍受支持。
+- D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
+- 当前不新增测试源码；验证以构建、smoke 脚本、日志扫描和文档审查为主。
+- 2026-06-08 手动验证更新：Windows D3D12-only Debug/Release PiccoloEditor 构建通过，Debug/Release D3D12 smoke 均在禁止 Vulkan fallback 时通过；Windows dual-backend Debug 构建通过，显式 Vulkan smoke 通过；自动化生命周期覆盖了 Debug editor 启动、默认 world/level 加载、重复 resize、minimize/restore 和 restore 后 60 秒存活检查，日志扫描未发现 D3D12 debug-layer/device/fallback/error 匹配。
+- 2026-06-08 验证 caveat：未声明完整手动/目视 D3D12 runtime 验收完成；自动截图未能证明渲染画面，一次 Debug 截图运行显示 Visual C++ Debug Assertion (`debug_heap.cpp:908`, `is_block_type_valid(header->_block_use)`)，正常关闭未验证；交互和目视项仍需覆盖相机移动、mesh picking 稳定 ID、UI panel toggle、axis/debug draw 触发、level reload、主相机/post-process/ImGui/debug draw/particles 的视觉确认。
+- 后续风险属于正常 engine runtime validation，而不是 backend wiring 未完成。
+- 2026-06-10 验证更新：Windows dual-backend Debug 构建通过，D3D12/Auto->D3D12/Vulkan smoke 均通过；D3D12 visible capture 非黑比例 100%，默认场景截图与 Vulkan 对照无明显 pass 缺失；FPS gate 中 D3D12 545.90 FPS、Vulkan 568.85 FPS，D3D12 未出现 1 FPS 回退。
+
+### 验证命令
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Debug --target PiccoloEditor --parallel
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+```
+
+Windows D3D12-only 验证：
+
+```powershell
+cmake -S . -B build_d3d12_only -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+cmake --build build_d3d12_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+cmake --build build_d3d12_only --config Release --target PiccoloEditor -- /verbosity:minimal
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Release -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+```
+
+Windows dual-backend 验证：
+
+```powershell
+cmake -S . -B build_dual_backend -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+cmake --build build_dual_backend --config Debug --target PiccoloEditor -- /verbosity:minimal
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+```
+
+Linux/macOS 验证应执行常规 editor 构建，确认 D3D12 源文件未参与非 Windows 编译且默认后端仍为 Vulkan。
+
+### 后续迁移清单
+- D3D12 queue submit 已接入 fence-backed queue/fence/semaphore 语义，支持按具体 RHI fence 等待、重置和提交 signal
+- D3D12 render pass 已保留 begin info/clear values，按 subpass 绑定 input/color/depth/resolve attachment layout，loadOp 只在附件首次使用时应用，并在 subpass 边界执行 resolve/copy
+- D3D12 image resource barrier 已接入 per-subresource 状态跟踪，copy、upload、render pass 与显式 image barrier 可按 mip/layer 范围转换
+- D3D12/Vulkan ImGui backend 会在 RenderSystem 清理 RHI 前显式 shutdown，避免 UI renderer/platform 资源晚于图形设备释放
+- D3D12 push/pop render events 已映射到 command-list PIX-compatible BeginEvent/EndEvent，便于在 GPU 捕获中查看 pass marker
+- D3D12 默认与 mipmap sampler 已按 RHI 缓存语义复用并接入销毁路径，swapchain 清理会释放 wrapped image/view 与 back buffer 引用
+- D3D12 prepareContext 已同步 swapchain back buffer、当前 frame index 与命令缓冲，确保每帧资源更新阶段使用正确的 ring buffer 槽位
+- D3D12 默认 command pool 已接入 RHI 生命周期入口，默认帧命令缓冲改为通过 allocateCommandBuffers 创建
+- D3D12 destroyDevice 已接管设备级 COM 资源释放，RenderSystem 清理顺序调整为先释放渲染资源与 pipeline，再关闭 RHI
+- D3D12 prepareBeforePass 已接入 framebuffer 尺寸变化检测，swapchain 重建成功后会触发 pipeline 的 framebuffer 依赖资源刷新
+- D3D12 submitRendering 已补充 Present/command list close 失败日志、device removed reason 记录与 swapchain 重建后 pass 资源刷新
+- D3D12 image-to-image copy 已通过 RHI region/subresource 接口支持显式 mip、array layer 与拷贝区域
+- D3D12 buffer host mirror 现在显式跟踪有效性，GPU `CopyBufferRegion` 仍是 Windows buffer copy 的权威路径，CPU mirror 只在来源与目标缓存均有效时同步。
+- D3D12 render pass、descriptor heap 与 particle copy/compute 路径已补充高风险 no-op 诊断、显式 attachment/resolve/present 状态转换、UI 后 descriptor heap 恢复和 indirect dispatch ordering。
+
 # Pilot引擎 0.0.8 版本发布说明
 ✨ 大家好！Pilot引擎自4月4日发布以来，我们很高兴得到很多开发者朋友们的关注，非常感谢社区开发者们的贡献！
 在整合了开发者社区贡献的更改和我们内部开发更改之后，在此我们激动地发布**Pilot引擎0.0.8版本**！

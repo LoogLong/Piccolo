@@ -16,12 +16,16 @@ namespace Piccolo
     public:
         void initialize(const RenderPassInitInfo* init_info) override final;
         void initializeUIRenderBackend(WindowUI* window_ui) override final;
+        void shutdownUIRenderBackend() override final;
         void draw() override final;
 
     private:
         void uploadFonts();
 
     private:
-        WindowUI* m_window_ui;
+        WindowUI*      m_window_ui {nullptr};
+        RHIBackendType m_initialized_backend {RHIBackendType::Auto};
+        bool           m_platform_backend_initialized {false};
+        bool           m_renderer_backend_initialized {false};
     };
 } // namespace Piccolo

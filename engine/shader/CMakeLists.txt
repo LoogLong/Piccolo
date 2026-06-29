@@ -13,27 +13,60 @@ file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gl
                                             "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.rmiss"
                                             "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.rcall")
 
+file(GLOB_RECURSE HLSL_SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.vert.hlsl"
+                                                       "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.frag.hlsl"
+                                                       "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.comp.hlsl"
+                                                       "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.geom.hlsl")
+file(GLOB_RECURSE HLSL_SHADER_INCLUDE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.hlsli")
+
 SOURCE_GROUP("shaders" FILES ${SHADER_FILES})
+SOURCE_GROUP("hlsl" FILES ${HLSL_SHADER_FILES} ${HLSL_SHADER_INCLUDE_FILES})
 
 set(SHADER_INCLUDE_FOLDER ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set(HLSL_SHADER_INCLUDE_FOLDER ${CMAKE_CURRENT_SOURCE_DIR}/hlsl)
 
 set(GENERATED_SHADER_FOLDER "generated")
 if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER})
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER})
 endif()
 
-if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/spv)
+if (PICCOLO_ENABLE_VULKAN_BACKEND AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/spv)
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/spv)
+endif()
+
+if (PICCOLO_ENABLE_VULKAN_BACKEND AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/cpp)
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/cpp)
 endif()
 
 include(${PICCOLO_ROOT_DIR}/cmake/ShaderCompile.cmake)
 
-compile_shader(
-  "${SHADER_FILES}"
-  "${TARGET_NAME}"
-  "${SHADER_INCLUDE_FOLDER}"
-  "${GENERATED_SHADER_FOLDER}"
-  "${glslangValidator_executable}")
+if(PICCOLO_ENABLE_VULKAN_BACKEND)
+  compile_shader(
+    "${SHADER_FILES}"
+    "${TARGET_NAME}"
+    "${SHADER_INCLUDE_FOLDER}"
+    "${GENERATED_SHADER_FOLDER}"
+    "${glslangValidator_executable}")
+else()
+  add_custom_target(${TARGET_NAME})
+endif()
+
+if(WIN32 AND PICCOLO_ENABLE_D3D12_BACKEND)
+  if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/dxil)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/dxil)
+  endif()
+
+  if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/dxil_cpp)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/dxil_cpp)
+  endif()
+
+  compile_hlsl_shader(
+    "${HLSL_SHADER_FILES}"
+    "${TARGET_NAME}"
+    "${HLSL_SHADER_INCLUDE_FOLDER}"
+    "${GENERATED_SHADER_FOLDER}"
+    "${dxc_executable}")
+endif()
 
 set_target_properties("${TARGET_NAME}" PROPERTIES FOLDER "Engine" )
 

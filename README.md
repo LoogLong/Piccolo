@@ -111,3 +111,61 @@ cmake -S . -B build -DENABLE_PHYSICS_DEBUG_RENDERER=ON
 Note:
 1. Please clean the build directory before regenerating the solution. We've encountered building problems in regenerating directly with previous CMakeCache.
 2. Physics Debug Renderer will run when you start PiccoloEditor. We've synced the camera position between both scenes. But the initial camera mode in Physics Debug Renderer is wrong. Scrolling down the mouse wheel once will change the camera of Physics Debug Renderer to the correct mode.
+
+### Render Backend Selection
+
+Piccolo runtime now supports backend selection from config files:
+
+```ini
+RenderBackend=Auto
+RenderBackendAllowFallback=true
+```
+
+- `RenderBackend` supports `Auto`, `Vulkan`, `D3D12`.
+- Windows primary mode is D3D12.
+- Windows D3D12-only builds can be configured with `PICCOLO_ENABLE_VULKAN_BACKEND=OFF`.
+- Vulkan remains available for Windows debug/fallback builds when `PICCOLO_ENABLE_VULKAN_BACKEND=ON`.
+- Linux/macOS continue to use Vulkan.
+- The bundled Windows PiccoloEditor deployment config explicitly selects `RenderBackend=D3D12` and `RenderBackendAllowFallback=false` when D3D12 is enabled.
+- Windows Vulkan-only builds package `RenderBackend=Vulkan` and `RenderBackendAllowFallback=false` because `Auto` resolves to D3D12 on Windows.
+- Non-Windows deployment output uses `RenderBackend=Auto`, which resolves to Vulkan on Linux/macOS.
+- D3D12 builds require `dxc.exe`.
+- Vulkan builds require Vulkan SDK/glslang.
+- If no hardware D3D12 adapter is available, the D3D12 backend can initialize through WARP for smoke validation.
+- `RenderBackendAllowFallback=true` lets failed D3D12 startup retry Vulkan only when the build includes Vulkan.
+- On non-Windows platforms, the D3D12 path is disabled.
+- Build-time backend switches are available with `PICCOLO_ENABLE_VULKAN_BACKEND` and `PICCOLO_ENABLE_D3D12_BACKEND`.
+- Linux/macOS builds require `PICCOLO_ENABLE_VULKAN_BACKEND=ON`; `PICCOLO_ENABLE_D3D12_BACKEND` is forced off outside Windows.
+
+For Windows D3D12-primary validation, set `RenderBackend=D3D12` and `RenderBackendAllowFallback=false`.
+Use `RenderBackendAllowFallback=true` only when you intentionally want a Vulkan debug fallback.
+
+Windows backend smoke validation:
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Debug --target PiccoloEditor --parallel
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Auto -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+```
+
+Windows backend build validation modes:
+
+```powershell
+cmake -S . -B build_d3d12_only -DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+cmake --build build_d3d12_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+cmake --build build_d3d12_only --config Release --target PiccoloEditor -- /verbosity:minimal
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Debug -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_d3d12_only -Configuration Release -RenderBackend D3D12 -ExpectedBackend D3D12 -DisallowFallback
+
+cmake -S . -B build_dual_backend -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON
+cmake --build build_dual_backend --config Debug --target PiccoloEditor -- /verbosity:minimal
+.\scripts\tests\render_backend\smoke_backend_boot.ps1 -BuildDir build_dual_backend -Configuration Debug -RenderBackend Vulkan -ExpectedBackend Vulkan
+
+cmake -S . -B build_vulkan_only -DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=OFF
+cmake --build build_vulkan_only --config Debug --target PiccoloEditor -- /verbosity:minimal
+```
+
+The smoke script temporarily overrides the built editor config and restores it after the run. Windows Vulkan-only builds should package `RenderBackend=Vulkan`; on Linux/macOS, build the editor normally to confirm the guarded D3D12 path is not compiled and the deployment config selects a Vulkan-compatible backend.
+Windows CI installs the Vulkan runtime with SwiftShader and sets `VK_ICD_FILENAMES` to the SwiftShader ICD before running the hosted Vulkan smoke.

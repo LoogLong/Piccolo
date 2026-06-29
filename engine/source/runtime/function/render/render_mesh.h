@@ -11,23 +11,23 @@ namespace Piccolo
 {
     struct MeshVertex
     {
-        struct VulkanMeshVertexPostition
+        struct VertexPosition
         {
             Vector3 position;
         };
 
-        struct VulkanMeshVertexVaryingEnableBlending
+        struct VertexVaryingEnableBlending
         {
             Vector3 normal;
             Vector3 tangent;
         };
 
-        struct VulkanMeshVertexVarying
+        struct VertexVarying
         {
             Vector2 texcoord;
         };
 
-        struct VulkanMeshVertexJointBinding
+        struct VertexJointBinding
         {
             int indices[4];
             Vector4  weights;
@@ -39,15 +39,15 @@ namespace Piccolo
 
             // position
             binding_descriptions[0].binding   = 0;
-            binding_descriptions[0].stride    = sizeof(VulkanMeshVertexPostition);
+            binding_descriptions[0].stride    = sizeof(VertexPosition);
             binding_descriptions[0].inputRate = RHI_VERTEX_INPUT_RATE_VERTEX;
             // varying blending
             binding_descriptions[1].binding   = 1;
-            binding_descriptions[1].stride    = sizeof(VulkanMeshVertexVaryingEnableBlending);
+            binding_descriptions[1].stride    = sizeof(VertexVaryingEnableBlending);
             binding_descriptions[1].inputRate = RHI_VERTEX_INPUT_RATE_VERTEX;
             // varying
             binding_descriptions[2].binding   = 2;
-            binding_descriptions[2].stride    = sizeof(VulkanMeshVertexVarying);
+            binding_descriptions[2].stride    = sizeof(VertexVarying);
             binding_descriptions[2].inputRate = RHI_VERTEX_INPUT_RATE_VERTEX;
             return binding_descriptions;
         }
@@ -60,23 +60,23 @@ namespace Piccolo
             attribute_descriptions[0].binding  = 0;
             attribute_descriptions[0].location = 0;
             attribute_descriptions[0].format   = RHI_FORMAT_R32G32B32_SFLOAT;
-            attribute_descriptions[0].offset   = offsetof(VulkanMeshVertexPostition, position);
+            attribute_descriptions[0].offset   = offsetof(VertexPosition, position);
 
             // varying blending
             attribute_descriptions[1].binding  = 1;
             attribute_descriptions[1].location = 1;
             attribute_descriptions[1].format   = RHI_FORMAT_R32G32B32_SFLOAT;
-            attribute_descriptions[1].offset   = offsetof(VulkanMeshVertexVaryingEnableBlending, normal);
+            attribute_descriptions[1].offset   = offsetof(VertexVaryingEnableBlending, normal);
             attribute_descriptions[2].binding  = 1;
             attribute_descriptions[2].location = 2;
             attribute_descriptions[2].format   = RHI_FORMAT_R32G32B32_SFLOAT;
-            attribute_descriptions[2].offset   = offsetof(VulkanMeshVertexVaryingEnableBlending, tangent);
+            attribute_descriptions[2].offset   = offsetof(VertexVaryingEnableBlending, tangent);
 
             // varying
             attribute_descriptions[3].binding  = 2;
             attribute_descriptions[3].location = 3;
             attribute_descriptions[3].format   = RHI_FORMAT_R32G32_SFLOAT;
-            attribute_descriptions[3].offset   = offsetof(VulkanMeshVertexVarying, texcoord);
+            attribute_descriptions[3].offset   = offsetof(VertexVarying, texcoord);
 
             return attribute_descriptions;
         }

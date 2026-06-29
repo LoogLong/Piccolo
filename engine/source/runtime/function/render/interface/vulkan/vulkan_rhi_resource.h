@@ -2,11 +2,18 @@
 
 #include "runtime/function/render/interface/rhi.h"
 
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 #include <optional>
 
 namespace Piccolo
 {
+    class VulkanAllocation : public RHIAllocation
+    {
+    public:
+        VmaAllocation allocation {nullptr};
+    };
+
     class VulkanBuffer : public RHIBuffer
     {
     public:

@@ -1,6 +1,4 @@
 #include "runtime/function/render/render_pipeline.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-
 #include "runtime/function/render/passes/color_grading_pass.h"
 #include "runtime/function/render/passes/combine_ui_pass.h"
 #include "runtime/function/render/passes/directional_light_pass.h"
@@ -115,17 +113,17 @@ namespace Piccolo
 
     void RenderPipeline::forwardRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
     {
-        VulkanRHI*      vulkan_rhi      = static_cast<VulkanRHI*>(rhi.get());
-        RenderResource* vulkan_resource = static_cast<RenderResource*>(render_resource.get());
+        RHI*            render_rhi      = rhi.get();
+        RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
 
-        vulkan_resource->resetRingBufferOffset(vulkan_rhi->m_current_frame_index);
+        render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
 
-        vulkan_rhi->waitForFences();
+        render_rhi->waitForFences();
 
-        vulkan_rhi->resetCommandPool();
+        render_rhi->resetCommandPool();
 
         bool recreate_swapchain =
-            vulkan_rhi->prepareBeforePass(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+            render_rhi->prepareBeforePass(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
         if (recreate_swapchain)
         {
             return;
@@ -146,6 +144,7 @@ namespace Piccolo
             ->setRenderCommandBufferHandle(
                 static_cast<MainCameraPass*>(m_main_camera_pass.get())->getRenderCommandBuffer());
 
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
             ->drawForward(color_grading_pass,
                           fxaa_pass,
@@ -153,29 +152,37 @@ namespace Piccolo
                           ui_pass,
                           combine_ui_pass,
                           particle_pass,
-                          vulkan_rhi->m_current_swapchain_image_index);
+                          current_swapchain_image_index);
 
         
-        g_runtime_global_context.m_debugdraw_manager->draw(vulkan_rhi->m_current_swapchain_image_index);
+        g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        vulkan_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
+        if (render_rhi->getBackendType() == RHIBackendType::D3D12)
+        {
+            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
+        }
+
+        render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+        if (render_rhi->getBackendType() != RHIBackendType::D3D12)
+        {
+            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
+        }
         static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
     }
 
     void RenderPipeline::deferredRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
     {
-        VulkanRHI*      vulkan_rhi      = static_cast<VulkanRHI*>(rhi.get());
-        RenderResource* vulkan_resource = static_cast<RenderResource*>(render_resource.get());
+        RHI*            render_rhi      = rhi.get();
+        RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
 
-        vulkan_resource->resetRingBufferOffset(vulkan_rhi->m_current_frame_index);
+        render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
 
-        vulkan_rhi->waitForFences();
+        render_rhi->waitForFences();
 
-        vulkan_rhi->resetCommandPool();
+        render_rhi->resetCommandPool();
 
         bool recreate_swapchain =
-            vulkan_rhi->prepareBeforePass(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+            render_rhi->prepareBeforePass(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
         if (recreate_swapchain)
         {
             return;
@@ -196,6 +203,7 @@ namespace Piccolo
             ->setRenderCommandBufferHandle(
                 static_cast<MainCameraPass*>(m_main_camera_pass.get())->getRenderCommandBuffer());
 
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
             ->draw(color_grading_pass,
                    fxaa_pass,
@@ -203,12 +211,20 @@ namespace Piccolo
                    ui_pass,
                    combine_ui_pass,
                    particle_pass,
-                   vulkan_rhi->m_current_swapchain_image_index);
+                   current_swapchain_image_index);
                    
-        g_runtime_global_context.m_debugdraw_manager->draw(vulkan_rhi->m_current_swapchain_image_index);
+        g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        vulkan_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
+        if (render_rhi->getBackendType() == RHIBackendType::D3D12)
+        {
+            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
+        }
+
+        render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+        if (render_rhi->getBackendType() != RHIBackendType::D3D12)
+        {
+            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
+        }
         static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
     }
 

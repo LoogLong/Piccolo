@@ -4,8 +4,6 @@
 #include "runtime/function/render/render_helper.h"
 
 #include "runtime/function/render/render_mesh.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
 
 #include "runtime/function/render/passes/main_camera_pass.h"
 
@@ -93,29 +91,30 @@ namespace Piccolo
         RenderMeshData       mesh_data,
         RenderMaterialData   material_data)
     {
-        getOrCreateVulkanMesh(rhi, render_entity, mesh_data);
-        getOrCreateVulkanMaterial(rhi, render_entity, material_data);
+        getOrCreateMesh(rhi, render_entity, mesh_data);
+        getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
         RenderEntity         render_entity,
         RenderMeshData       mesh_data)
     {
-        getOrCreateVulkanMesh(rhi, render_entity, mesh_data);
+        getOrCreateMesh(rhi, render_entity, mesh_data);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
         RenderEntity         render_entity,
         RenderMaterialData   material_data)
     {
-        getOrCreateVulkanMaterial(rhi, render_entity, material_data);
+        getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
-    void RenderResource::updatePerFrameBuffer(std::shared_ptr<RenderScene>  render_scene,
+    void RenderResource::updatePerFrameBuffer(std::shared_ptr<RHI>          rhi,
+        std::shared_ptr<RenderScene>  render_scene,
         std::shared_ptr<RenderCamera> camera)
     {
         Matrix4x4 view_matrix = camera->getViewMatrix();
-        Matrix4x4 proj_matrix = camera->getPersProjMatrix();
+        Matrix4x4 proj_matrix = camera->getPersProjMatrix(rhi->getBackendType() == RHIBackendType::Vulkan);
         Vector3   camera_position = camera->position();
         Matrix4x4 proj_view_matrix = proj_matrix * view_matrix;
 
@@ -129,6 +128,7 @@ namespace Piccolo
         m_particle_collision_perframe_storage_buffer_object.proj_inv_matrix  = proj_matrix.inverse();
 
         m_mesh_perframe_storage_buffer_object.proj_view_matrix = proj_view_matrix;
+        m_mesh_perframe_storage_buffer_object.proj_view_matrix_inv = proj_view_matrix.inverse();
         m_mesh_perframe_storage_buffer_object.camera_position = camera_position;
         m_mesh_perframe_storage_buffer_object.ambient_light = ambient_light;
         m_mesh_perframe_storage_buffer_object.point_light_num = point_light_num;
@@ -168,8 +168,6 @@ namespace Piccolo
 
     void RenderResource::createIBLSamplers(std::shared_ptr<RHI> rhi)
     {
-        VulkanRHI* raw_rhi = static_cast<VulkanRHI*>(rhi.get());
-
         RHIPhysicalDeviceProperties physical_device_properties{};
         rhi->getPhysicalDeviceProperties(&physical_device_properties);
 
@@ -196,7 +194,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._brdfLUT_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create BRDF LUT sampler");
         }
 
         samplerInfo.minLod = 0.0f;
@@ -210,7 +208,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._irradiance_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create irradiance texture sampler");
         }
 
         if (m_global_render_resource._ibl_resource._specular_texture_sampler != RHI_NULL_HANDLE)
@@ -220,7 +218,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._specular_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create specular texture sampler");
         }
     }
 
@@ -268,20 +266,20 @@ namespace Piccolo
             specular_cubemap_miplevels);
     }
 
-    VulkanMesh&
-        RenderResource::getOrCreateVulkanMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data)
+    RenderMeshGPUResource&
+        RenderResource::getOrCreateMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data)
     {
         size_t assetid = entity.m_mesh_asset_id;
 
-        auto it = m_vulkan_meshes.find(assetid);
-        if (it != m_vulkan_meshes.end())
+        auto it = m_meshes.find(assetid);
+        if (it != m_meshes.end())
         {
             return it->second;
         }
         else
         {
-            VulkanMesh temp;
-            auto       res = m_vulkan_meshes.insert(std::make_pair(assetid, std::move(temp)));
+            RenderMeshGPUResource temp;
+            auto       res = m_meshes.insert(std::make_pair(assetid, std::move(temp)));
             assert(res.second);
 
             uint32_t index_buffer_size = static_cast<uint32_t>(mesh_data.m_static_mesh_data.m_index_buffer->m_size);
@@ -291,7 +289,7 @@ namespace Piccolo
             MeshVertexDataDefinition* vertex_buffer_data =
                 reinterpret_cast<MeshVertexDataDefinition*>(mesh_data.m_static_mesh_data.m_vertex_buffer->m_data);
 
-            VulkanMesh& now_mesh = res.first->second;
+            RenderMeshGPUResource& now_mesh = res.first->second;
 
             if (mesh_data.m_skeleton_binding_buffer)
             {
@@ -325,23 +323,21 @@ namespace Piccolo
         }
     }
 
-    VulkanPBRMaterial& RenderResource::getOrCreateVulkanMaterial(std::shared_ptr<RHI> rhi,
+    RenderPBRMaterialGPUResource& RenderResource::getOrCreateMaterial(std::shared_ptr<RHI> rhi,
         RenderEntity         entity,
         RenderMaterialData   material_data)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
-
         size_t assetid = entity.m_material_asset_id;
 
-        auto it = m_vulkan_pbr_materials.find(assetid);
-        if (it != m_vulkan_pbr_materials.end())
+        auto it = m_pbr_materials.find(assetid);
+        if (it != m_pbr_materials.end())
         {
             return it->second;
         }
         else
         {
-            VulkanPBRMaterial temp;
-            auto              res = m_vulkan_pbr_materials.insert(std::make_pair(assetid, std::move(temp)));
+            RenderPBRMaterialGPUResource temp;
+            auto              res = m_pbr_materials.insert(std::make_pair(assetid, std::move(temp)));
             assert(res.second);
 
             float empty_image[] = { 0.5f, 0.5f, 0.5f, 0.5f };
@@ -406,7 +402,7 @@ namespace Piccolo
                 emissive_image_format = material_data.m_emissive_texture->m_format;
             }
 
-            VulkanPBRMaterial& now_material = res.first->second;
+            RenderPBRMaterialGPUResource& now_material = res.first->second;
 
             // similiarly to the vertex/index buffer, we should allocate the uniform
             // buffer in DEVICE_LOCAL memory and use the temp stage buffer to copy the
@@ -448,22 +444,17 @@ namespace Piccolo
 
                 rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-                // use the vmaAllocator to allocate asset uniform buffer
+                // allocate asset uniform buffer in device local memory
                 RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
                 bufferInfo.size = buffer_size;
                 bufferInfo.usage = RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-                VmaAllocationCreateInfo allocInfo = {};
-                allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-                rhi->createBufferWithAlignmentVMA(
-                    vulkan_context->m_assets_allocator,
+                rhi->createBufferWithAlignment(
                     &bufferInfo,
-                    &allocInfo,
+                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                     m_global_render_resource._storage_buffer._min_uniform_buffer_offset_alignment,
                     now_material.material_uniform_buffer,
-                    &now_material.material_uniform_buffer_allocation,
-                    NULL);
+                    now_material.material_uniform_buffer_allocation);
 
                 // use the data from staging buffer
                 rhi->copyBuffer(inefficient_staging_buffer, now_material.material_uniform_buffer, 0, 0, buffer_size);
@@ -501,7 +492,7 @@ namespace Piccolo
             RHIDescriptorSetAllocateInfo material_descriptor_set_alloc_info;
             material_descriptor_set_alloc_info.sType = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             material_descriptor_set_alloc_info.pNext = NULL;
-            material_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            material_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             material_descriptor_set_alloc_info.descriptorSetCount = 1;
             material_descriptor_set_alloc_info.pSetLayouts        = m_material_descriptor_set_layout;
 
@@ -595,7 +586,7 @@ namespace Piccolo
                                         MeshVertexDataDefinition const*        vertex_buffer_data,
                                         uint32_t                               joint_binding_buffer_size,
                                         MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
-                                        VulkanMesh&                            now_mesh)
+                                        RenderMeshGPUResource&                            now_mesh)
     {
         now_mesh.enable_vertex_blending = enable_vertex_blending;
         assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
@@ -622,10 +613,8 @@ namespace Piccolo
                                             MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
                                             uint32_t                               index_buffer_size,
                                             uint16_t*                              index_buffer_data,
-                                            VulkanMesh&                            now_mesh)
+                                            RenderMeshGPUResource&                            now_mesh)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
-
         if (enable_vertex_blending)
         {
             assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
@@ -633,12 +622,12 @@ namespace Piccolo
             assert(0 == (index_buffer_size % sizeof(uint16_t)));
             uint32_t index_count = index_buffer_size / sizeof(uint16_t);
 
-            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VulkanMeshVertexPostition) * vertex_count;
+            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VertexPosition) * vertex_count;
             RHIDeviceSize vertex_varying_enable_blending_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexVaryingEnableBlending) * vertex_count;
-            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VulkanMeshVertexVarying) * vertex_count;
+                sizeof(MeshVertex::VertexVaryingEnableBlending) * vertex_count;
+            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VertexVarying) * vertex_count;
             RHIDeviceSize vertex_joint_binding_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexJointBinding) * index_count;
+                sizeof(MeshVertex::VertexJointBinding) * index_count;
 
             RHIDeviceSize vertex_position_buffer_offset = 0;
             RHIDeviceSize vertex_varying_enable_blending_buffer_offset =
@@ -666,18 +655,18 @@ namespace Piccolo
                            0,
                            &inefficient_staging_buffer_data);
 
-            MeshVertex::VulkanMeshVertexPostition* mesh_vertex_positions =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexPostition*>(
+            MeshVertex::VertexPosition* mesh_vertex_positions =
+                reinterpret_cast<MeshVertex::VertexPosition*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_position_buffer_offset);
-            MeshVertex::VulkanMeshVertexVaryingEnableBlending* mesh_vertex_blending_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVaryingEnableBlending*>(
+            MeshVertex::VertexVaryingEnableBlending* mesh_vertex_blending_varyings =
+                reinterpret_cast<MeshVertex::VertexVaryingEnableBlending*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) +
                     vertex_varying_enable_blending_buffer_offset);
-            MeshVertex::VulkanMeshVertexVarying* mesh_vertex_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVarying*>(
+            MeshVertex::VertexVarying* mesh_vertex_varyings =
+                reinterpret_cast<MeshVertex::VertexVarying*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_varying_buffer_offset);
-            MeshVertex::VulkanMeshVertexJointBinding* mesh_vertex_joint_binding =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexJointBinding*>(
+            MeshVertex::VertexJointBinding* mesh_vertex_joint_binding =
+                reinterpret_cast<MeshVertex::VertexJointBinding*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_joint_binding_buffer_offset);
 
             for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
@@ -727,43 +716,32 @@ namespace Piccolo
 
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-            // use the vmaAllocator to allocate asset vertex buffer
+            // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-
-            VmaAllocationCreateInfo allocInfo = {};
-            allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
             bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_position_buffer,
-                                 &now_mesh.mesh_vertex_position_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_position_buffer,
+                                            now_mesh.mesh_vertex_position_buffer_allocation);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_enable_blending_buffer,
-                                 &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_buffer,
-                                 &now_mesh.mesh_vertex_varying_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_buffer,
+                                            now_mesh.mesh_vertex_varying_buffer_allocation);
 
             bufferInfo.usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_joint_binding_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_joint_binding_buffer,
-                                 &now_mesh.mesh_vertex_joint_binding_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_joint_binding_buffer,
+                                            now_mesh.mesh_vertex_joint_binding_buffer_allocation);
 
             // use the data from staging buffer
             rhi->copyBuffer(inefficient_staging_buffer,
@@ -796,7 +774,7 @@ namespace Piccolo
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.sType =
                 RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pNext = NULL;
-            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pSetLayouts        = m_mesh_descriptor_set_layout;
 
@@ -842,10 +820,10 @@ namespace Piccolo
             assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
             uint32_t vertex_count = vertex_buffer_size / sizeof(MeshVertexDataDefinition);
 
-            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VulkanMeshVertexPostition) * vertex_count;
+            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VertexPosition) * vertex_count;
             RHIDeviceSize vertex_varying_enable_blending_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexVaryingEnableBlending) * vertex_count;
-            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VulkanMeshVertexVarying) * vertex_count;
+                sizeof(MeshVertex::VertexVaryingEnableBlending) * vertex_count;
+            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VertexVarying) * vertex_count;
 
             RHIDeviceSize vertex_position_buffer_offset = 0;
             RHIDeviceSize vertex_varying_enable_blending_buffer_offset =
@@ -871,15 +849,15 @@ namespace Piccolo
                            0,
                            &inefficient_staging_buffer_data);
 
-            MeshVertex::VulkanMeshVertexPostition* mesh_vertex_positions =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexPostition*>(
+            MeshVertex::VertexPosition* mesh_vertex_positions =
+                reinterpret_cast<MeshVertex::VertexPosition*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_position_buffer_offset);
-            MeshVertex::VulkanMeshVertexVaryingEnableBlending* mesh_vertex_blending_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVaryingEnableBlending*>(
+            MeshVertex::VertexVaryingEnableBlending* mesh_vertex_blending_varyings =
+                reinterpret_cast<MeshVertex::VertexVaryingEnableBlending*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) +
                     vertex_varying_enable_blending_buffer_offset);
-            MeshVertex::VulkanMeshVertexVarying* mesh_vertex_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVarying*>(
+            MeshVertex::VertexVarying* mesh_vertex_varyings =
+                reinterpret_cast<MeshVertex::VertexVarying*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_varying_buffer_offset);
 
             for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
@@ -904,34 +882,25 @@ namespace Piccolo
 
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-            // use the vmaAllocator to allocate asset vertex buffer
+            // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
             bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-            VmaAllocationCreateInfo allocInfo = {};
-            allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_position_buffer,
-                                 &now_mesh.mesh_vertex_position_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_position_buffer,
+                                            now_mesh.mesh_vertex_position_buffer_allocation);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_enable_blending_buffer,
-                                 &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_buffer,
-                                 &now_mesh.mesh_vertex_varying_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_buffer,
+                                            now_mesh.mesh_vertex_varying_buffer_allocation);
 
             // use the data from staging buffer
             rhi->copyBuffer(inefficient_staging_buffer,
@@ -959,7 +928,7 @@ namespace Piccolo
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.sType =
                 RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pNext = NULL;
-            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pSetLayouts        = m_mesh_descriptor_set_layout;
 
@@ -1006,10 +975,8 @@ namespace Piccolo
     void RenderResource::updateIndexBuffer(std::shared_ptr<RHI> rhi,
                                            uint32_t             index_buffer_size,
                                            void*                index_buffer_data,
-                                           VulkanMesh&          now_mesh)
+                                           RenderMeshGPUResource&          now_mesh)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
-
         // temp staging buffer
         RHIDeviceSize buffer_size = index_buffer_size;
 
@@ -1026,20 +993,15 @@ namespace Piccolo
         memcpy(staging_buffer_data, index_buffer_data, (size_t)buffer_size);
         rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-        // use the vmaAllocator to allocate asset index buffer
+        // allocate asset index buffer in device local memory
         RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = buffer_size;
         bufferInfo.usage = RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-        rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                             &bufferInfo,
-                             &allocInfo,
-                             now_mesh.mesh_index_buffer,
-                             &now_mesh.mesh_index_buffer_allocation,
-                             NULL);
+        rhi->createBufferWithAllocation(&bufferInfo,
+                                        RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                        now_mesh.mesh_index_buffer,
+                                        now_mesh.mesh_index_buffer_allocation);
 
         // use the data from staging buffer
         rhi->copyBuffer( inefficient_staging_buffer, now_mesh.mesh_index_buffer, 0, 0, buffer_size);
@@ -1097,12 +1059,12 @@ namespace Piccolo
             texture_data.emissive_image_format);
     }
 
-    VulkanMesh& RenderResource::getEntityMesh(RenderEntity entity)
+    RenderMeshGPUResource& RenderResource::getEntityMesh(RenderEntity entity)
     {
         size_t assetid = entity.m_mesh_asset_id;
 
-        auto it = m_vulkan_meshes.find(assetid);
-        if (it != m_vulkan_meshes.end())
+        auto it = m_meshes.find(assetid);
+        if (it != m_meshes.end())
         {
             return it->second;
         }
@@ -1112,12 +1074,12 @@ namespace Piccolo
         }
     }
 
-    VulkanPBRMaterial& RenderResource::getEntityMaterial(RenderEntity entity)
+    RenderPBRMaterialGPUResource& RenderResource::getEntityMaterial(RenderEntity entity)
     {
         size_t assetid = entity.m_material_asset_id;
 
-        auto it = m_vulkan_pbr_materials.find(assetid);
-        if (it != m_vulkan_pbr_materials.end())
+        auto it = m_pbr_materials.find(assetid);
+        if (it != m_pbr_materials.end())
         {
             return it->second;
         }
@@ -1135,9 +1097,8 @@ namespace Piccolo
 
     void RenderResource::createAndMapStorageBuffer(std::shared_ptr<RHI> rhi)
     {
-        VulkanRHI* raw_rhi = static_cast<VulkanRHI*>(rhi.get());
         StorageBuffer& _storage_buffer = m_global_render_resource._storage_buffer;
-        uint32_t       frames_in_flight = raw_rhi->k_max_frames_in_flight;
+        uint32_t       frames_in_flight = rhi->getMaxFramesInFlight();
 
         RHIPhysicalDeviceProperties properties;
         rhi->getPhysicalDeviceProperties(&properties);
@@ -1197,6 +1158,6 @@ namespace Piccolo
                        0,
                        &_storage_buffer._axis_inefficient_storage_buffer_memory_pointer);
 
-        static_assert(64 >= sizeof(MeshVertex::VulkanMeshVertexJointBinding), "");
+        static_assert(64 >= sizeof(MeshVertex::VertexJointBinding), "");
     }
 } // namespace Piccolo

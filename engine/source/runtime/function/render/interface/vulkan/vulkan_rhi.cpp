@@ -2408,6 +2408,11 @@ namespace Piccolo
         }
     }
 
+    RHIBackendType VulkanRHI::getBackendType() const
+    {
+        return RHIBackendType::Vulkan;
+    }
+
     void VulkanRHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer,
         RHIPipelineStageFlags srcStageMask,
         RHIPipelineStageFlags dstStageMask,
@@ -2566,22 +2571,63 @@ namespace Piccolo
             vk_buffer_image_copy_list.data());
     }
 
-    void VulkanRHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height)
+    void VulkanRHI::cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImage* dstImage, uint32_t regionCount, const RHIImageBlit* pRegions)
     {
-        VkImageCopy imagecopyRegion = {};
-        imagecopyRegion.srcSubresource = { (VkImageAspectFlags)srcFlag, 0, 0, 1 };
-        imagecopyRegion.srcOffset = { 0, 0, 0 };
-        imagecopyRegion.dstSubresource = { (VkImageAspectFlags)dstFlag, 0, 0, 1 };
-        imagecopyRegion.dstOffset = { 0, 0, 0 };
-        imagecopyRegion.extent = { width, height, 1 };
+        if (commandBuffer == nullptr ||
+            srcImage == nullptr ||
+            dstImage == nullptr ||
+            pRegions == nullptr ||
+            regionCount == 0)
+        {
+            return;
+        }
+
+        std::vector<VkImageCopy> image_copy_regions;
+        image_copy_regions.reserve(regionCount);
+        for (uint32_t region_index = 0; region_index < regionCount; ++region_index)
+        {
+            const RHIImageBlit& region = pRegions[region_index];
+            const int32_t width        = region.srcOffsets[1].x - region.srcOffsets[0].x;
+            const int32_t height       = region.srcOffsets[1].y - region.srcOffsets[0].y;
+            const int32_t depth        = region.srcOffsets[1].z - region.srcOffsets[0].z;
+            if (width <= 0 || height <= 0)
+            {
+                continue;
+            }
+
+            VkImageCopy image_copy {};
+            image_copy.srcSubresource = {static_cast<VkImageAspectFlags>(region.srcSubresource.aspectMask),
+                                         region.srcSubresource.mipLevel,
+                                         region.srcSubresource.baseArrayLayer,
+                                         (std::max)(1U, region.srcSubresource.layerCount)};
+            image_copy.srcOffset = {region.srcOffsets[0].x,
+                                    region.srcOffsets[0].y,
+                                    region.srcOffsets[0].z};
+            image_copy.dstSubresource = {static_cast<VkImageAspectFlags>(region.dstSubresource.aspectMask),
+                                         region.dstSubresource.mipLevel,
+                                         region.dstSubresource.baseArrayLayer,
+                                         (std::max)(1U, region.dstSubresource.layerCount)};
+            image_copy.dstOffset = {region.dstOffsets[0].x,
+                                    region.dstOffsets[0].y,
+                                    region.dstOffsets[0].z};
+            image_copy.extent = {static_cast<uint32_t>(width),
+                                 static_cast<uint32_t>(height),
+                                 static_cast<uint32_t>((std::max)(1, depth))};
+            image_copy_regions.push_back(image_copy);
+        }
+
+        if (image_copy_regions.empty())
+        {
+            return;
+        }
 
         vkCmdCopyImage(((VulkanCommandBuffer*)commandBuffer)->getResource(),
             ((VulkanImage*)srcImage)->getResource(),
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             ((VulkanImage*)dstImage)->getResource(),
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &imagecopyRegion);
+            static_cast<uint32_t>(image_copy_regions.size()),
+            image_copy_regions.data());
     }
 
     void VulkanRHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, uint32_t regionCount, RHIBufferCopy* pRegions)
@@ -2805,7 +2851,7 @@ namespace Piccolo
         ((VulkanDeviceMemory*)buffer_memory)->setResource(vk_device_memory);
     }
 
-    bool VulkanRHI::createBufferVMA(VmaAllocator allocator, const RHIBufferCreateInfo* pBufferCreateInfo, const VmaAllocationCreateInfo* pAllocationCreateInfo, RHIBuffer* & pBuffer, VmaAllocation* pAllocation, VmaAllocationInfo* pAllocationInfo)
+    bool VulkanRHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIBuffer* & pBuffer, RHIAllocation*& pAllocation)
     {
         VkBuffer vk_buffer;
         VkBufferCreateInfo buffer_create_info{};
@@ -2819,26 +2865,35 @@ namespace Piccolo
         buffer_create_info.pQueueFamilyIndices = (const uint32_t*)pBufferCreateInfo->pQueueFamilyIndices;
 
         pBuffer = new VulkanBuffer();
-        VkResult result = vmaCreateBuffer(allocator,
+        auto* allocation = new VulkanAllocation();
+        VmaAllocationCreateInfo allocation_create_info = {};
+        allocation_create_info.usage = (memoryPropertyFlags & RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ?
+            VMA_MEMORY_USAGE_CPU_TO_GPU :
+            VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VkResult result = vmaCreateBuffer(m_assets_allocator,
             &buffer_create_info,
-            pAllocationCreateInfo,
+            &allocation_create_info,
             &vk_buffer,
-            pAllocation,
-            pAllocationInfo);
+            &allocation->allocation,
+            nullptr);
 
         ((VulkanBuffer*)pBuffer)->setResource(vk_buffer);
 
         if (result == VK_SUCCESS)
         {
+            pAllocation = allocation;
             return true;
         }
         else
         {
+            delete allocation;
+            pAllocation = nullptr;
             return false;
         }
     }
 
-    bool VulkanRHI::createBufferWithAlignmentVMA(VmaAllocator allocator, const RHIBufferCreateInfo* pBufferCreateInfo, const VmaAllocationCreateInfo* pAllocationCreateInfo, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, VmaAllocation* pAllocation, VmaAllocationInfo* pAllocationInfo)
+    bool VulkanRHI::createBufferWithAlignment(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation)
     {
         VkBuffer vk_buffer;
         VkBufferCreateInfo buffer_create_info{};
@@ -2852,23 +2907,32 @@ namespace Piccolo
         buffer_create_info.pQueueFamilyIndices = (const uint32_t*)pBufferCreateInfo->pQueueFamilyIndices;
 
         pBuffer = new VulkanBuffer();
-        VkResult result = vmaCreateBufferWithAlignment(allocator,
+        auto* allocation = new VulkanAllocation();
+        VmaAllocationCreateInfo allocation_create_info = {};
+        allocation_create_info.usage = (memoryPropertyFlags & RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ?
+            VMA_MEMORY_USAGE_CPU_TO_GPU :
+            VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VkResult result = vmaCreateBufferWithAlignment(m_assets_allocator,
             &buffer_create_info,
-            pAllocationCreateInfo,
+            &allocation_create_info,
             minAlignment,
             &vk_buffer,
-            pAllocation,
-            pAllocationInfo);
+            &allocation->allocation,
+            nullptr);
 
         ((VulkanBuffer*)pBuffer)->setResource(vk_buffer);
 
         if (result == VK_SUCCESS)
         {
+            pAllocation = allocation;
             return true;
         }
         else
         {
             LOG_ERROR("vmaCreateBufferWithAlignment failed!");
+            delete allocation;
+            pAllocation = nullptr;
             return false;
         }
     }
@@ -2917,28 +2981,32 @@ namespace Piccolo
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
     }
 
-    void VulkanRHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
+    void VulkanRHI::createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
     {
         VkImage vk_image;
         VkImageView vk_image_view;
+        auto* allocation = new VulkanAllocation();
         
-        VulkanUtil::createGlobalImage(this, vk_image, vk_image_view,image_allocation,texture_image_width,texture_image_height,texture_image_pixels,texture_image_format,miplevels);
+        VulkanUtil::createGlobalImage(this, vk_image, vk_image_view, allocation->allocation, texture_image_width, texture_image_height, texture_image_pixels, texture_image_format, miplevels);
         
         image = new VulkanImage();
         image_view = new VulkanImageView();
+        image_allocation = allocation;
         ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
     }
 
-    void VulkanRHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
+    void VulkanRHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
     {
         VkImage vk_image;
         VkImageView vk_image_view;
+        auto* allocation = new VulkanAllocation();
 
-        VulkanUtil::createCubeMap(this, vk_image, vk_image_view, image_allocation, texture_image_width, texture_image_height, texture_image_pixels, texture_image_format, miplevels);
+        VulkanUtil::createCubeMap(this, vk_image, vk_image_view, allocation->allocation, texture_image_width, texture_image_height, texture_image_pixels, texture_image_format, miplevels);
 
         image = new VulkanImage();
         image_view = new VulkanImageView();
+        image_allocation = allocation;
         ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
     }
@@ -3030,16 +3098,19 @@ namespace Piccolo
         command_buffer_allocate_info.commandBufferCount = pAllocateInfo->commandBufferCount;
 
         VkCommandBuffer vk_command_buffer;
-        pCommandBuffers = new RHICommandBuffer();
+        auto* command_buffer = new VulkanCommandBuffer();
         VkResult result = vkAllocateCommandBuffers(m_device, &command_buffer_allocate_info, &vk_command_buffer);
-        ((VulkanCommandBuffer*)pCommandBuffers)->setResource(vk_command_buffer);
 
         if (result == VK_SUCCESS)
         {
+            command_buffer->setResource(vk_command_buffer);
+            pCommandBuffers = command_buffer;
             return true;
         }
         else
         {
+            delete command_buffer;
+            pCommandBuffers = nullptr;
             LOG_ERROR("vkAllocateCommandBuffers failed!");
             return false;
         }
@@ -3212,6 +3283,17 @@ namespace Piccolo
     {
         VkCommandBuffer vk_command_buffer = ((VulkanCommandBuffer*)pCommandBuffers)->getResource();
         vkFreeCommandBuffers(m_device, ((VulkanCommandPool*)commandPool)->getResource(), commandBufferCount, &vk_command_buffer);
+    }
+
+    void VulkanRHI::freeAllocation(RHIAllocation*& allocation)
+    {
+        auto* vulkan_allocation = static_cast<VulkanAllocation*>(allocation);
+        if (vulkan_allocation != nullptr && vulkan_allocation->allocation != nullptr)
+        {
+            vmaFreeMemory(m_assets_allocator, vulkan_allocation->allocation);
+        }
+        delete vulkan_allocation;
+        allocation = nullptr;
     }
 
     void VulkanRHI::freeMemory(RHIDeviceMemory* &memory)
@@ -3594,6 +3676,14 @@ namespace Piccolo
         desc.depth_image = m_depth_image;
         return desc;
     }
+    void VulkanRHI::setViewport(float x, float y, float width, float height, float min_depth, float max_depth)
+    {
+        m_viewport = {x, y, width, height, min_depth, max_depth};
+    }
+    RHIViewport VulkanRHI::getViewport() const
+    {
+        return m_viewport;
+    }
     uint8_t VulkanRHI::getMaxFramesInFlight() const
     {
         return k_max_frames_in_flight;
@@ -3601,6 +3691,10 @@ namespace Piccolo
     uint8_t VulkanRHI::getCurrentFrameIndex() const
     {
         return m_current_frame_index;
+    }
+    uint32_t VulkanRHI::getCurrentSwapchainImageIndex() const
+    {
+        return m_current_swapchain_image_index;
     }
     void VulkanRHI::setCurrentFrameIndex(uint8_t index)
     {

@@ -30,7 +30,7 @@ namespace Piccolo
         RHIImage*        m_font_image = nullptr;
         RHIImageView*    m_font_imageView = nullptr;
         RHIDeviceMemory* m_font_imageMemory = nullptr;
-        VmaAllocation    m_allocation;
+        RHIAllocation*   m_allocation {nullptr};
 
         void loadFont();
 

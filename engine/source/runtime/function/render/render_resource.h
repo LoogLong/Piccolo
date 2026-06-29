@@ -2,12 +2,10 @@
 
 #include "runtime/function/render/render_resource_base.h"
 #include "runtime/function/render/render_type.h"
+#include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/interface/rhi.h"
 
 #include "runtime/function/render/render_common.h"
-
-#include <vk_mem_alloc.h>
-#include <vulkan/vulkan.h>
 
 #include <array>
 #include <cstdint>
@@ -26,17 +24,17 @@ namespace Piccolo
         RHIImage* _brdfLUT_texture_image;
         RHIImageView* _brdfLUT_texture_image_view;
         RHISampler* _brdfLUT_texture_sampler;
-        VmaAllocation _brdfLUT_texture_image_allocation;
+        RHIAllocation* _brdfLUT_texture_image_allocation;
 
         RHIImage* _irradiance_texture_image;
         RHIImageView* _irradiance_texture_image_view;
         RHISampler* _irradiance_texture_sampler;
-        VmaAllocation _irradiance_texture_image_allocation;
+        RHIAllocation* _irradiance_texture_image_allocation;
 
         RHIImage* _specular_texture_image;
         RHIImageView* _specular_texture_image_view;
         RHISampler* _specular_texture_sampler;
-        VmaAllocation _specular_texture_image_allocation;
+        RHIAllocation* _specular_texture_image_allocation;
     };
 
     struct IBLResourceData
@@ -59,7 +57,7 @@ namespace Piccolo
     {
         RHIImage* _color_grading_LUT_texture_image;
         RHIImageView* _color_grading_LUT_texture_image_view;
-        VmaAllocation _color_grading_LUT_texture_image_allocation;
+        RHIAllocation* _color_grading_LUT_texture_image_allocation;
     };
 
     struct ColorGradingResourceData
@@ -122,12 +120,13 @@ namespace Piccolo
             RenderEntity         render_entity,
             RenderMaterialData   material_data) override final;
 
-        virtual void updatePerFrameBuffer(std::shared_ptr<RenderScene>  render_scene,
+        virtual void updatePerFrameBuffer(std::shared_ptr<RHI>          rhi,
+            std::shared_ptr<RenderScene>  render_scene,
             std::shared_ptr<RenderCamera> camera) override final;
 
-        VulkanMesh& getEntityMesh(RenderEntity entity);
+        RenderMeshGPUResource& getEntityMesh(RenderEntity entity);
 
-        VulkanPBRMaterial& getEntityMaterial(RenderEntity entity);
+        RenderPBRMaterialGPUResource& getEntityMaterial(RenderEntity entity);
 
         void resetRingBufferOffset(uint8_t current_frame_index);
 
@@ -145,8 +144,8 @@ namespace Piccolo
         ParticleCollisionPerframeStorageBufferObject   m_particle_collision_perframe_storage_buffer_object;
 
         // cached mesh and material
-        std::map<size_t, VulkanMesh>        m_vulkan_meshes;
-        std::map<size_t, VulkanPBRMaterial> m_vulkan_pbr_materials;
+        std::map<size_t, RenderMeshGPUResource>        m_meshes;
+        std::map<size_t, RenderPBRMaterialGPUResource> m_pbr_materials;
 
         // descriptor set layout in main camera pass will be used when uploading resource
         RHIDescriptorSetLayout* const* m_mesh_descriptor_set_layout {nullptr};
@@ -159,9 +158,9 @@ namespace Piccolo
                                std::array<std::shared_ptr<TextureData>, 6> irradiance_maps,
                                std::array<std::shared_ptr<TextureData>, 6> specular_maps);
 
-        VulkanMesh& getOrCreateVulkanMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data);
-        VulkanPBRMaterial&
-        getOrCreateVulkanMaterial(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMaterialData material_data);
+        RenderMeshGPUResource& getOrCreateMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data);
+        RenderPBRMaterialGPUResource&
+        getOrCreateMaterial(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMaterialData material_data);
 
         void updateMeshData(std::shared_ptr<RHI>                          rhi,
                             bool                                          enable_vertex_blending,
@@ -171,7 +170,7 @@ namespace Piccolo
                             struct MeshVertexDataDefinition const*        vertex_buffer_data,
                             uint32_t                                      joint_binding_buffer_size,
                             struct MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
-                            VulkanMesh&                                   now_mesh);
+                            RenderMeshGPUResource&                                   now_mesh);
         void updateVertexBuffer(std::shared_ptr<RHI>                          rhi,
                                 bool                                          enable_vertex_blending,
                                 uint32_t                                      vertex_buffer_size,
@@ -180,11 +179,11 @@ namespace Piccolo
                                 struct MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
                                 uint32_t                                      index_buffer_size,
                                 uint16_t*                                     index_buffer_data,
-                                VulkanMesh&                                   now_mesh);
+                                RenderMeshGPUResource&                                   now_mesh);
         void updateIndexBuffer(std::shared_ptr<RHI> rhi,
                                uint32_t             index_buffer_size,
                                void*                index_buffer_data,
-                               VulkanMesh&          now_mesh);
+                               RenderMeshGPUResource&          now_mesh);
         void updateTextureImageData(std::shared_ptr<RHI> rhi, const TextureDataToUpdate& texture_data);
     };
 } // namespace Piccolo

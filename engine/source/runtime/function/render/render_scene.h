@@ -41,7 +41,8 @@ namespace Piccolo
 
         // update visible objects in each frame
         void updateVisibleObjects(std::shared_ptr<RenderResource> render_resource,
-                                  std::shared_ptr<RenderCamera>   camera);
+                                  std::shared_ptr<RenderCamera>   camera,
+                                  bool                            apply_vulkan_y_flip);
 
         // set visible nodes ptr in render pass
         void setVisibleNodesReference();
@@ -67,7 +68,8 @@ namespace Piccolo
                                                   std::shared_ptr<RenderCamera>   camera);
         void updateVisibleObjectsPointLight(std::shared_ptr<RenderResource> render_resource);
         void updateVisibleObjectsMainCamera(std::shared_ptr<RenderResource> render_resource,
-                                            std::shared_ptr<RenderCamera>   camera);
+                                            std::shared_ptr<RenderCamera>   camera,
+                                            bool                            apply_vulkan_y_flip);
         void updateVisibleObjectsAxis(std::shared_ptr<RenderResource> render_resource);
         void updateVisibleObjectsParticle(std::shared_ptr<RenderResource> render_resource);
     };

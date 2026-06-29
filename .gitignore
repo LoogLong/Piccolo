@@ -1,4 +1,8 @@
 build/
+build_d3d12_only/
+build_dual_backend/
+build_vulkan_only/
+.worktrees/
 cpm_modules/
 CPM_modules/
 CPM_*.cmake
