@@ -1,7 +1,11 @@
-#include "runtime/function/framework/component/animation/animation_component.h"
+﻿#include "runtime/function/framework/component/animation/animation_component.h"
 
-#include "runtime/function/animation/animation_system.h"
+#include "function/framework/world/world_manager.h"
+#include "function/global/global_context.h"
 #include "runtime/function/framework/object/object.h"
+
+#include "runtime/function/animation/lganim/single_instance.h"
+#include "runtime/function/animation/lganim/mm_instance.h"
 
 namespace Piccolo
 {
@@ -9,22 +13,47 @@ namespace Piccolo
     {
         m_parent_object = parent_object;
 
-        auto skeleton_res = AnimationManager::tryLoadSkeleton(m_animation_res.skeleton_file_path);
-
-        m_skeleton.buildSkeleton(*skeleton_res);
+        // m_anim_instance = std::make_shared<CSingleAnimInstance>(&m_animation_res);
+        m_anim_instance = std::make_shared<CAnimInstanceMotionMatching>(&m_animation_res);
+       
+        m_skeleton = m_anim_instance->GetSkeleton();
     }
 
     void AnimationComponent::tick(float delta_time)
     {
-        m_animation_res.blend_state.blend_ratio[0] +=
-            (delta_time / m_animation_res.blend_state.blend_clip_file_length[0]);
-        m_animation_res.blend_state.blend_ratio[0] -= floor(m_animation_res.blend_state.blend_ratio[0]);
+        // 保证一帧只更新一次
+        const int32_t frame_count = g_runtime_global_context.m_world_manager->getFrameCount();
+        if (m_ticked_frame == frame_count)
+	    {
+            return;
+	    }
+        m_ticked_frame = frame_count;
 
-        m_skeleton.applyAnimation(AnimationManager::getBlendStateWithClipData(m_animation_res.blend_state));
-        m_animation_res.animation_result = m_skeleton.outputAnimationResult();
+
+    	m_anim_instance->TickAnimation(delta_time);
     }
 
-    const AnimationResult& AnimationComponent::getResult() const { return m_animation_res.animation_result; }
+    const AnimationResult& AnimationComponent::getResult() const { return m_anim_instance->GetResult(); }
 
-    const Skeleton& AnimationComponent::getSkeleton() const { return m_skeleton; }
+    const Skeleton& AnimationComponent::getSkeleton() const { return *m_skeleton; }
+
+    const std::vector<Matrix4x4>& AnimationComponent::GetComponentResult() const
+    {
+        return m_anim_instance->GetComponentResult();
+    }
+
+    const std::vector<uint32_t>& AnimationComponent::GetParentInfo() const
+    {
+    	return m_anim_instance->GetParentInfo();
+    }
+
+    bool AnimationComponent::HasRootMotion() const
+    {
+	    return m_anim_instance->HasRootMotion();
+    }
+
+    Transform AnimationComponent::GetRootMotion() const
+    {
+	    return m_anim_instance->GetRootMotion();
+    }
 } // namespace Piccolo
