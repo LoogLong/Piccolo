@@ -19,11 +19,13 @@ namespace Piccolo
 
         setupAttachments();
         setupRenderPass();
+        setupPathTracingCompositeRenderPass();
         setupDescriptorSetLayout();
         setupPipelines();
         setupDescriptorSet();
         setupFramebufferDescriptorSet();
         setupSwapchainFramebuffers();
+        setupPathTracingCompositeSwapchainFramebuffers();
 
         setupParticlePass();
     }
@@ -68,12 +70,21 @@ namespace Piccolo
             }
             else
             {
+                RHIImageUsageFlags image_usage = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                                 RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                                                 RHI_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+                if (buffer_index == _main_camera_pass_backup_buffer_odd)
+                {
+                    image_usage = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                  RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                                  RHI_IMAGE_USAGE_STORAGE_BIT;
+                }
+
                 m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
                                    m_rhi->getSwapchainInfo().extent.height,
                                    m_framebuffer.attachments[buffer_index].format,
                                    RHI_IMAGE_TILING_OPTIMAL,
-                                   RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-                                   RHI_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                                   image_usage,
                                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                    m_framebuffer.attachments[buffer_index].image,
                                    m_framebuffer.attachments[buffer_index].mem,
@@ -526,6 +537,212 @@ namespace Piccolo
         if (m_rhi->createRenderPass(&renderpass_create_info, m_framebuffer.render_pass) != RHI_SUCCESS)
         {
             throw std::runtime_error("failed to create render pass");
+        }
+    }
+
+    void MainCameraPass::setupPathTracingCompositeRenderPass()
+    {
+        RHIAttachmentDescription attachments[_main_camera_pass_attachment_count] = {};
+
+        attachments[_main_camera_pass_gbuffer_a].format         = m_framebuffer.attachments[_main_camera_pass_gbuffer_a].format;
+        attachments[_main_camera_pass_gbuffer_a].samples        = RHI_SAMPLE_COUNT_1_BIT;
+        attachments[_main_camera_pass_gbuffer_a].loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[_main_camera_pass_gbuffer_a].storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[_main_camera_pass_gbuffer_a].stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[_main_camera_pass_gbuffer_a].stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[_main_camera_pass_gbuffer_a].initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;
+        attachments[_main_camera_pass_gbuffer_a].finalLayout    = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        attachments[_main_camera_pass_gbuffer_b] = attachments[_main_camera_pass_gbuffer_a];
+        attachments[_main_camera_pass_gbuffer_b].format = m_framebuffer.attachments[_main_camera_pass_gbuffer_b].format;
+
+        attachments[_main_camera_pass_gbuffer_c] = attachments[_main_camera_pass_gbuffer_a];
+        attachments[_main_camera_pass_gbuffer_c].format = m_framebuffer.attachments[_main_camera_pass_gbuffer_c].format;
+
+        RHIAttachmentDescription& backup_odd = attachments[_main_camera_pass_backup_buffer_odd];
+        backup_odd.format         = m_framebuffer.attachments[_main_camera_pass_backup_buffer_odd].format;
+        backup_odd.samples        = RHI_SAMPLE_COUNT_1_BIT;
+        backup_odd.loadOp         = RHI_ATTACHMENT_LOAD_OP_LOAD;
+        backup_odd.storeOp        = RHI_ATTACHMENT_STORE_OP_STORE;
+        backup_odd.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        backup_odd.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        backup_odd.initialLayout  = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        backup_odd.finalLayout    = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIAttachmentDescription& backup_even = attachments[_main_camera_pass_backup_buffer_even];
+        backup_even.format         = m_framebuffer.attachments[_main_camera_pass_backup_buffer_even].format;
+        backup_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
+        backup_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        backup_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        backup_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        backup_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        backup_even.initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;
+        backup_even.finalLayout    = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIAttachmentDescription& post_odd = attachments[_main_camera_pass_post_process_buffer_odd];
+        post_odd.format         = m_framebuffer.attachments[_main_camera_pass_post_process_buffer_odd].format;
+        post_odd.samples        = RHI_SAMPLE_COUNT_1_BIT;
+        post_odd.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        post_odd.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        post_odd.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        post_odd.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        post_odd.initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;
+        post_odd.finalLayout    = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIAttachmentDescription& post_even = attachments[_main_camera_pass_post_process_buffer_even];
+        post_even.format         = m_framebuffer.attachments[_main_camera_pass_post_process_buffer_even].format;
+        post_even.samples        = RHI_SAMPLE_COUNT_1_BIT;
+        post_even.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        post_even.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        post_even.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        post_even.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        post_even.initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;
+        post_even.finalLayout    = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIAttachmentDescription& depth = attachments[_main_camera_pass_depth];
+        depth.format         = m_rhi->getDepthImageInfo().depth_image_format;
+        depth.samples        = RHI_SAMPLE_COUNT_1_BIT;
+        depth.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depth.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depth.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;
+        depth.finalLayout    = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        RHIAttachmentDescription& swapchain = attachments[_main_camera_pass_swap_chain_image];
+        swapchain.format         = m_rhi->getSwapchainInfo().image_format;
+        swapchain.samples        = RHI_SAMPLE_COUNT_1_BIT;
+        swapchain.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        swapchain.storeOp        = RHI_ATTACHMENT_STORE_OP_STORE;
+        swapchain.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
+        swapchain.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        swapchain.initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;
+        swapchain.finalLayout    = RHI_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        RHISubpassDescription subpasses[_main_camera_subpass_count] = {};
+        for (uint32_t i = 0; i < _main_camera_subpass_count; ++i)
+        {
+            subpasses[i].pipelineBindPoint = RHI_PIPELINE_BIND_POINT_GRAPHICS;
+        }
+
+        // Subpass 2 (forward_lighting): color output to backup_odd + depth.
+        // Particles blend onto the path tracing output.
+        RHIAttachmentReference forward_lighting_color {};
+        forward_lighting_color.attachment = _main_camera_pass_backup_buffer_odd;
+        forward_lighting_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_forward_lighting].colorAttachmentCount = 1;
+        subpasses[_main_camera_subpass_forward_lighting].pColorAttachments    = &forward_lighting_color;
+
+        RHIAttachmentReference forward_lighting_depth {};
+        forward_lighting_depth.attachment = _main_camera_pass_depth;
+        forward_lighting_depth.layout     = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_forward_lighting].pDepthStencilAttachment = &forward_lighting_depth;
+
+        RHIAttachmentReference tone_mapping_input {};
+        tone_mapping_input.attachment = _main_camera_pass_backup_buffer_odd;
+        tone_mapping_input.layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        RHIAttachmentReference tone_mapping_color {};
+        tone_mapping_color.attachment = _main_camera_pass_backup_buffer_even;
+        tone_mapping_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_tone_mapping].inputAttachmentCount = 1;
+        subpasses[_main_camera_subpass_tone_mapping].pInputAttachments    = &tone_mapping_input;
+        subpasses[_main_camera_subpass_tone_mapping].colorAttachmentCount = 1;
+        subpasses[_main_camera_subpass_tone_mapping].pColorAttachments    = &tone_mapping_color;
+
+        RHIAttachmentReference color_grading_input {};
+        color_grading_input.attachment = _main_camera_pass_backup_buffer_even;
+        color_grading_input.layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        RHIAttachmentReference color_grading_color {};
+        color_grading_color.attachment = m_enable_fxaa ? _main_camera_pass_post_process_buffer_odd :
+                                                          _main_camera_pass_backup_buffer_odd;
+        color_grading_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_color_grading].inputAttachmentCount = 1;
+        subpasses[_main_camera_subpass_color_grading].pInputAttachments    = &color_grading_input;
+        subpasses[_main_camera_subpass_color_grading].colorAttachmentCount = 1;
+        subpasses[_main_camera_subpass_color_grading].pColorAttachments    = &color_grading_color;
+
+        RHIAttachmentReference fxaa_input {};
+        fxaa_input.attachment = m_enable_fxaa ? _main_camera_pass_post_process_buffer_odd :
+                                                _main_camera_pass_backup_buffer_even;
+        fxaa_input.layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        RHIAttachmentReference fxaa_color {};
+        fxaa_color.attachment = _main_camera_pass_backup_buffer_odd;
+        fxaa_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_fxaa].inputAttachmentCount = 1;
+        subpasses[_main_camera_subpass_fxaa].pInputAttachments    = &fxaa_input;
+        subpasses[_main_camera_subpass_fxaa].colorAttachmentCount = 1;
+        subpasses[_main_camera_subpass_fxaa].pColorAttachments    = &fxaa_color;
+
+        RHIAttachmentReference ui_color {};
+        ui_color.attachment = _main_camera_pass_backup_buffer_even;
+        ui_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        uint32_t ui_preserve_attachment = _main_camera_pass_backup_buffer_odd;
+        subpasses[_main_camera_subpass_ui].colorAttachmentCount    = 1;
+        subpasses[_main_camera_subpass_ui].pColorAttachments       = &ui_color;
+        subpasses[_main_camera_subpass_ui].preserveAttachmentCount = 1;
+        subpasses[_main_camera_subpass_ui].pPreserveAttachments    = &ui_preserve_attachment;
+
+        RHIAttachmentReference combine_inputs[2] {};
+        combine_inputs[0].attachment = _main_camera_pass_backup_buffer_odd;
+        combine_inputs[0].layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        combine_inputs[1].attachment = _main_camera_pass_backup_buffer_even;
+        combine_inputs[1].layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        RHIAttachmentReference combine_color {};
+        combine_color.attachment = _main_camera_pass_swap_chain_image;
+        combine_color.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        subpasses[_main_camera_subpass_combine_ui].inputAttachmentCount = 2;
+        subpasses[_main_camera_subpass_combine_ui].pInputAttachments    = combine_inputs;
+        subpasses[_main_camera_subpass_combine_ui].colorAttachmentCount = 1;
+        subpasses[_main_camera_subpass_combine_ui].pColorAttachments    = &combine_color;
+
+        RHISubpassDependency dependencies[5] = {};
+        dependencies[0].srcSubpass    = _main_camera_subpass_forward_lighting;
+        dependencies[0].dstSubpass    = _main_camera_subpass_tone_mapping;
+        dependencies[0].srcStageMask  = RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+        dependencies[0].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].srcAccessMask = RHI_ACCESS_SHADER_WRITE_BIT;
+        dependencies[0].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        dependencies[1].srcSubpass    = _main_camera_subpass_tone_mapping;
+        dependencies[1].dstSubpass    = _main_camera_subpass_color_grading;
+        dependencies[1].srcStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        dependencies[2].srcSubpass    = _main_camera_subpass_color_grading;
+        dependencies[2].dstSubpass    = _main_camera_subpass_fxaa;
+        dependencies[2].srcStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[2].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[2].srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[2].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        dependencies[3].srcSubpass    = _main_camera_subpass_fxaa;
+        dependencies[3].dstSubpass    = _main_camera_subpass_ui;
+        dependencies[3].srcStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[3].dstStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[3].srcAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[3].dstAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        dependencies[4].srcSubpass    = _main_camera_subpass_ui;
+        dependencies[4].dstSubpass    = _main_camera_subpass_combine_ui;
+        dependencies[4].srcStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[4].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[4].srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[4].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        RHIRenderPassCreateInfo create_info {};
+        create_info.sType           = RHI_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        create_info.attachmentCount = _main_camera_pass_attachment_count;
+        create_info.pAttachments    = attachments;
+        create_info.subpassCount    = _main_camera_subpass_count;
+        create_info.pSubpasses      = subpasses;
+        create_info.dependencyCount = static_cast<uint32_t>(sizeof(dependencies) / sizeof(dependencies[0]));
+        create_info.pDependencies   = dependencies;
+
+        if (m_rhi->createRenderPass(&create_info, m_path_tracing_composite_render_pass) != RHI_SUCCESS)
+        {
+            throw std::runtime_error("failed to create path tracing composite render pass");
         }
     }
 
@@ -1885,6 +2102,43 @@ namespace Piccolo
         }
     }
 
+    void MainCameraPass::setupPathTracingCompositeSwapchainFramebuffers()
+    {
+        m_path_tracing_composite_swapchain_framebuffers.resize(m_rhi->getSwapchainInfo().imageViews.size());
+
+        for (size_t i = 0; i < m_rhi->getSwapchainInfo().imageViews.size(); i++)
+        {
+            RHIImageView* framebuffer_attachments_for_image_view[_main_camera_pass_attachment_count] = {
+                m_framebuffer.attachments[_main_camera_pass_gbuffer_a].view,
+                m_framebuffer.attachments[_main_camera_pass_gbuffer_b].view,
+                m_framebuffer.attachments[_main_camera_pass_gbuffer_c].view,
+                m_framebuffer.attachments[_main_camera_pass_backup_buffer_odd].view,
+                m_framebuffer.attachments[_main_camera_pass_backup_buffer_even].view,
+                m_framebuffer.attachments[_main_camera_pass_post_process_buffer_odd].view,
+                m_framebuffer.attachments[_main_camera_pass_post_process_buffer_even].view,
+                m_rhi->getDepthImageInfo().depth_image_view,
+                m_rhi->getSwapchainInfo().imageViews[i] };
+
+            RHIFramebufferCreateInfo framebuffer_create_info {};
+            framebuffer_create_info.sType      = RHI_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebuffer_create_info.flags      = 0U;
+            framebuffer_create_info.renderPass = m_path_tracing_composite_render_pass;
+            framebuffer_create_info.attachmentCount =
+                (sizeof(framebuffer_attachments_for_image_view) / sizeof(framebuffer_attachments_for_image_view[0]));
+            framebuffer_create_info.pAttachments = framebuffer_attachments_for_image_view;
+            framebuffer_create_info.width        = m_rhi->getSwapchainInfo().extent.width;
+            framebuffer_create_info.height       = m_rhi->getSwapchainInfo().extent.height;
+            framebuffer_create_info.layers       = 1;
+
+            if (RHI_SUCCESS !=
+                m_rhi->createFramebuffer(&framebuffer_create_info,
+                                         m_path_tracing_composite_swapchain_framebuffers[i]))
+            {
+                throw std::runtime_error("create path tracing composite framebuffer");
+            }
+        }
+    }
+
     void MainCameraPass::updateAfterFramebufferRecreate()
     {
         for (size_t i = 0; i < m_framebuffer.attachments.size(); i++)
@@ -1901,11 +2155,19 @@ namespace Piccolo
         }
         m_swapchain_framebuffers.clear();
 
+        for (auto& framebuffer : m_path_tracing_composite_swapchain_framebuffers)
+        {
+            m_rhi->destroyFramebuffer(framebuffer);
+            framebuffer = nullptr;
+        }
+        m_path_tracing_composite_swapchain_framebuffers.clear();
+
         setupAttachments();
 
         setupFramebufferDescriptorSet();
 
         setupSwapchainFramebuffers();
+        setupPathTracingCompositeSwapchainFramebuffers();
 
         setupParticlePass();
     }
@@ -1980,25 +2242,7 @@ namespace Piccolo
 
         m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
 
-        RHIClearAttachment clear_attachments[1];
-        clear_attachments[0].aspectMask                  = RHI_IMAGE_ASPECT_COLOR_BIT;
-        clear_attachments[0].colorAttachment             = 0;
-        clear_attachments[0].clearValue.color.float32[0] = 0.0;
-        clear_attachments[0].clearValue.color.float32[1] = 0.0;
-        clear_attachments[0].clearValue.color.float32[2] = 0.0;
-        clear_attachments[0].clearValue.color.float32[3] = 0.0;
-        RHIClearRect clear_rects[1];
-        clear_rects[0].baseArrayLayer     = 0;
-        clear_rects[0].layerCount         = 1;
-        clear_rects[0].rect.offset.x      = 0;
-        clear_rects[0].rect.offset.y      = 0;
-        clear_rects[0].rect.extent.width  = m_rhi->getSwapchainInfo().extent.width;
-        clear_rects[0].rect.extent.height = m_rhi->getSwapchainInfo().extent.height;
-        m_rhi->cmdClearAttachmentsPFN(m_rhi->getCurrentCommandBuffer(),
-                                      sizeof(clear_attachments) / sizeof(clear_attachments[0]),
-                                      clear_attachments,
-                                      sizeof(clear_rects) / sizeof(clear_rects[0]),
-                                      clear_rects);
+        clearUIAttachment();
 
         drawAxis();
 
@@ -2069,28 +2313,69 @@ namespace Piccolo
 
         m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
 
-        RHIClearAttachment clear_attachments[1];
-        clear_attachments[0].aspectMask                  = RHI_IMAGE_ASPECT_COLOR_BIT;
-        clear_attachments[0].colorAttachment             = 0;
-        clear_attachments[0].clearValue.color.float32[0] = 0.0;
-        clear_attachments[0].clearValue.color.float32[1] = 0.0;
-        clear_attachments[0].clearValue.color.float32[2] = 0.0;
-        clear_attachments[0].clearValue.color.float32[3] = 0.0;
-        RHIClearRect clear_rects[1];
-        clear_rects[0].baseArrayLayer     = 0;
-        clear_rects[0].layerCount         = 1;
-        clear_rects[0].rect.offset.x      = 0;
-        clear_rects[0].rect.offset.y      = 0;
-        clear_rects[0].rect.extent.width  = m_rhi->getSwapchainInfo().extent.width;
-        clear_rects[0].rect.extent.height = m_rhi->getSwapchainInfo().extent.height;
-        m_rhi->cmdClearAttachmentsPFN(m_rhi->getCurrentCommandBuffer(),
-                                      sizeof(clear_attachments) / sizeof(clear_attachments[0]),
-                                      clear_attachments,
-                                      sizeof(clear_rects) / sizeof(clear_rects[0]),
-                                      clear_rects);
+        clearUIAttachment();
 
         drawAxis();
 
+        ui_pass.draw();
+
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+
+        combine_ui_pass.draw();
+
+        m_rhi->cmdEndRenderPassPFN(m_rhi->getCurrentCommandBuffer());
+    }
+
+    void MainCameraPass::drawPathTracing(ParticlePass&  particle_pass,
+                                         UIPass&        ui_pass,
+                                         CombineUIPass& combine_ui_pass,
+                                         uint32_t       current_swapchain_image_index)
+    {
+        {
+            RHIRenderPassBeginInfo renderpass_begin_info {};
+            renderpass_begin_info.sType             = RHI_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderpass_begin_info.renderPass        = m_path_tracing_composite_render_pass;
+            renderpass_begin_info.framebuffer =
+                m_path_tracing_composite_swapchain_framebuffers[current_swapchain_image_index];
+            renderpass_begin_info.renderArea.offset = {0, 0};
+            renderpass_begin_info.renderArea.extent = m_rhi->getSwapchainInfo().extent;
+
+            RHIClearValue clear_values[_main_camera_pass_attachment_count];
+            clear_values[_main_camera_pass_gbuffer_a].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            clear_values[_main_camera_pass_gbuffer_b].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            clear_values[_main_camera_pass_gbuffer_c].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            clear_values[_main_camera_pass_backup_buffer_odd].color        = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clear_values[_main_camera_pass_backup_buffer_even].color       = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clear_values[_main_camera_pass_post_process_buffer_odd].color  = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clear_values[_main_camera_pass_post_process_buffer_even].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clear_values[_main_camera_pass_depth].depthStencil             = {1.0f, 0};
+            clear_values[_main_camera_pass_swap_chain_image].color         = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            renderpass_begin_info.clearValueCount = (sizeof(clear_values) / sizeof(clear_values[0]));
+            renderpass_begin_info.pClearValues    = clear_values;
+
+            m_rhi->cmdBeginRenderPassPFN(m_rhi->getCurrentCommandBuffer(),
+                                         &renderpass_begin_info,
+                                         RHI_SUBPASS_CONTENTS_INLINE);
+        }
+
+        // Skip subpass 0 (basepass) and subpass 1 (deferred_lighting)
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+
+        // Subpass 2 (forward_lighting): render particles on top of PT output (backup_odd).
+        particle_pass.setRenderCommandBufferHandle(m_rhi->getCurrentCommandBuffer());
+        particle_pass.draw();
+
+        // Skip subpasses 3-5 (tone_mapping→color_grading→fxaa).
+        // 4 cmdNextSubpass for subpass 2→3→4→5→6
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+        m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
+
+        // Subpass 6: UI
+        clearUIAttachment();
+        drawAxis();
         ui_pass.draw();
 
         m_rhi->cmdNextSubpassPFN(m_rhi->getCurrentCommandBuffer(), RHI_SUBPASS_CONTENTS_INLINE);
@@ -2713,6 +2998,39 @@ namespace Piccolo
     }
 
     RHICommandBuffer* MainCameraPass::getRenderCommandBuffer() { return m_rhi->getCurrentCommandBuffer(); }
+
+    RHIImage* MainCameraPass::getBackupOddImage() const
+    {
+        return m_framebuffer.attachments[_main_camera_pass_backup_buffer_odd].image;
+    }
+
+    RHIImageView* MainCameraPass::getBackupOddImageView() const
+    {
+        return m_framebuffer.attachments[_main_camera_pass_backup_buffer_odd].view;
+    }
+
+    void MainCameraPass::clearUIAttachment()
+    {
+        RHIClearAttachment clear_attachments[1];
+        clear_attachments[0].aspectMask                  = RHI_IMAGE_ASPECT_COLOR_BIT;
+        clear_attachments[0].colorAttachment             = 0;
+        clear_attachments[0].clearValue.color.float32[0] = 0.0;
+        clear_attachments[0].clearValue.color.float32[1] = 0.0;
+        clear_attachments[0].clearValue.color.float32[2] = 0.0;
+        clear_attachments[0].clearValue.color.float32[3] = 0.0;
+        RHIClearRect clear_rects[1];
+        clear_rects[0].baseArrayLayer     = 0;
+        clear_rects[0].layerCount         = 1;
+        clear_rects[0].rect.offset.x      = 0;
+        clear_rects[0].rect.offset.y      = 0;
+        clear_rects[0].rect.extent.width  = m_rhi->getSwapchainInfo().extent.width;
+        clear_rects[0].rect.extent.height = m_rhi->getSwapchainInfo().extent.height;
+        m_rhi->cmdClearAttachmentsPFN(m_rhi->getCurrentCommandBuffer(),
+                                      sizeof(clear_attachments) / sizeof(clear_attachments[0]),
+                                      clear_attachments,
+                                      sizeof(clear_rects) / sizeof(clear_rects[0]),
+                                      clear_rects);
+    }
 
     void MainCameraPass::setupParticlePass()
     {

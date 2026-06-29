@@ -3,20 +3,46 @@
 #include "runtime/function/render/passes/combine_ui_pass.h"
 #include "runtime/function/render/passes/directional_light_pass.h"
 #include "runtime/function/render/passes/main_camera_pass.h"
+#include "runtime/function/render/passes/path_tracing_pass.h"
 #include "runtime/function/render/passes/pick_pass.h"
 #include "runtime/function/render/passes/point_light_pass.h"
 #include "runtime/function/render/passes/tone_mapping_pass.h"
 #include "runtime/function/render/passes/ui_pass.h"
+#include "runtime/function/render/passes/gpu_skinning_pass.h"
 #include "runtime/function/render/passes/particle_pass.h"
 
 #include "runtime/function/render/debugdraw/debug_draw_manager.h"
 
 #include "runtime/core/base/macro.h"
+#include "runtime/function/global/global_context.h"
+#include "runtime/resource/config_manager/config_manager.h"
 
 namespace Piccolo
 {
+    namespace
+    {
+        RenderSceneRenderMode parseRenderSceneMode(const std::string& mode)
+        {
+            if (mode == "PathTracing")
+            {
+                return RenderSceneRenderMode::PathTracing;
+            }
+            if (mode != "Raster")
+            {
+                LOG_WARN("Unknown RenderSceneMode '{}'; falling back to Raster", mode);
+            }
+            return RenderSceneRenderMode::Raster;
+        }
+    } // namespace
+
     void RenderPipeline::initialize(RenderPipelineInitInfo init_info)
     {
+        if (g_runtime_global_context.m_config_manager)
+        {
+            m_requested_scene_render_mode =
+                parseRenderSceneMode(g_runtime_global_context.m_config_manager->getRenderSceneMode());
+        }
+
         m_point_light_shadow_pass = std::make_shared<PointLightShadowPass>();
         m_directional_light_pass  = std::make_shared<DirectionalLightShadowPass>();
         m_main_camera_pass        = std::make_shared<MainCameraPass>();
@@ -27,6 +53,8 @@ namespace Piccolo
         m_pick_pass               = std::make_shared<PickPass>();
         m_fxaa_pass               = std::make_shared<FXAAPass>();
         m_particle_pass           = std::make_shared<ParticlePass>();
+        m_path_tracing_pass       = std::make_shared<PathTracingPass>();
+        m_gpu_skinning_pass       = std::make_shared<GpuSkinningPass>();
 
         RenderPassCommonInfo pass_common_info;
         pass_common_info.rhi             = m_rhi;
@@ -42,6 +70,8 @@ namespace Piccolo
         m_pick_pass->setCommonInfo(pass_common_info);
         m_fxaa_pass->setCommonInfo(pass_common_info);
         m_particle_pass->setCommonInfo(pass_common_info);
+        m_path_tracing_pass->setCommonInfo(pass_common_info);
+        m_gpu_skinning_pass->setCommonInfo(pass_common_info);
 
         m_point_light_shadow_pass->initialize(nullptr);
         m_directional_light_pass->initialize(nullptr);
@@ -63,6 +93,14 @@ namespace Piccolo
         main_camera_init_info.enble_fxaa = init_info.enable_fxaa;
         main_camera_pass->setParticlePass(particle_pass);
         m_main_camera_pass->initialize(&main_camera_init_info);
+
+        PathTracingPassInitInfo path_tracing_init_info {};
+        path_tracing_init_info.scene_output_image      = main_camera_pass->getBackupOddImage();
+        path_tracing_init_info.scene_output_image_view = main_camera_pass->getBackupOddImageView();
+        m_path_tracing_pass->initialize(&path_tracing_init_info);
+
+        m_gpu_skinning_pass->initialize(nullptr);
+        std::static_pointer_cast<GpuSkinningPass>(m_gpu_skinning_pass)->setup();
 
         std::static_pointer_cast<ParticlePass>(m_particle_pass)->setupParticlePass();
 
@@ -140,11 +178,12 @@ namespace Piccolo
         CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
         ParticlePass&     particle_pass      = *(static_cast<ParticlePass*>(m_particle_pass.get()));
 
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
+
         static_cast<ParticlePass*>(m_particle_pass.get())
             ->setRenderCommandBufferHandle(
                 static_cast<MainCameraPass*>(m_main_camera_pass.get())->getRenderCommandBuffer());
 
-        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
             ->drawForward(color_grading_pass,
                           fxaa_pass,
@@ -199,11 +238,12 @@ namespace Piccolo
         CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
         ParticlePass&     particle_pass      = *(static_cast<ParticlePass*>(m_particle_pass.get()));
 
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
+
         static_cast<ParticlePass*>(m_particle_pass.get())
             ->setRenderCommandBufferHandle(
                 static_cast<MainCameraPass*>(m_main_camera_pass.get())->getRenderCommandBuffer());
 
-        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
         static_cast<MainCameraPass*>(m_main_camera_pass.get())
             ->draw(color_grading_pass,
                    fxaa_pass,
@@ -237,6 +277,7 @@ namespace Piccolo
         CombineUIPass&    combine_ui_pass    = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
         PickPass&         pick_pass          = *(static_cast<PickPass*>(m_pick_pass.get()));
         ParticlePass&     particle_pass      = *(static_cast<ParticlePass*>(m_particle_pass.get()));
+        PathTracingPass&  path_tracing_pass  = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
 
         main_camera_pass.updateAfterFramebufferRecreate();
         tone_mapping_pass.updateAfterFramebufferRecreate(
@@ -248,6 +289,8 @@ namespace Piccolo
         combine_ui_pass.updateAfterFramebufferRecreate(
             main_camera_pass.getFramebufferImageViews()[_main_camera_pass_backup_buffer_odd],
             main_camera_pass.getFramebufferImageViews()[_main_camera_pass_backup_buffer_even]);
+        path_tracing_pass.updateAfterFramebufferRecreate(main_camera_pass.getBackupOddImage(),
+                                                         main_camera_pass.getBackupOddImageView());
         pick_pass.recreateFramebuffer();
         particle_pass.updateAfterFramebufferRecreate();
         g_runtime_global_context.m_debugdraw_manager->updateAfterRecreateSwapchain();
@@ -268,5 +311,72 @@ namespace Piccolo
     {
         MainCameraPass& main_camera_pass = *(static_cast<MainCameraPass*>(m_main_camera_pass.get()));
         main_camera_pass.m_selected_axis = selected_axis;
+    }
+
+    bool RenderPipeline::pathTracingRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
+    {
+        RHI*            render_rhi          = rhi.get();
+        RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
+
+        render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
+        updateSceneRenderMode(*render_rhi);
+
+        if (m_effective_scene_render_mode != RenderSceneRenderMode::PathTracing)
+        {
+            return false;
+        }
+
+        render_rhi->waitForFences();
+        render_rhi->resetCommandPool();
+
+        bool recreate_swapchain =
+            render_rhi->prepareBeforePass(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+        if (recreate_swapchain)
+        {
+            return true;
+        }
+
+        static_cast<GpuSkinningPass*>(m_gpu_skinning_pass.get())->dispatch();
+
+        PathTracingPass& path_tracing_pass = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
+        if (!path_tracing_pass.dispatch())
+        {
+            return false;
+        }
+
+        ParticlePass&    particle_pass   = *(static_cast<ParticlePass*>(m_particle_pass.get()));
+        UIPass&           ui_pass         = *(static_cast<UIPass*>(m_ui_pass.get()));
+        CombineUIPass&    combine_ui_pass = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
+
+        const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
+        static_cast<MainCameraPass*>(m_main_camera_pass.get())
+            ->drawPathTracing(particle_pass,
+                              ui_pass,
+                              combine_ui_pass,
+                              current_swapchain_image_index);
+
+        g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
+        render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
+        static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
+        return true;
+    }
+
+    void RenderPipeline::updateSceneRenderMode(RHI& rhi)
+    {
+        if (m_requested_scene_render_mode != RenderSceneRenderMode::PathTracing)
+        {
+            m_effective_scene_render_mode = RenderSceneRenderMode::Raster;
+            return;
+        }
+
+        const RHIRayTracingCapabilities capabilities = rhi.getRayTracingCapabilities();
+        if (rhi.getBackendType() == RHIBackendType::D3D12 &&
+            capabilities.support_level == RHIRayTracingSupportLevel::Supported)
+        {
+            m_effective_scene_render_mode = RenderSceneRenderMode::PathTracing;
+            return;
+        }
+
+        m_effective_scene_render_mode = RenderSceneRenderMode::Raster;
     }
 } // namespace Piccolo

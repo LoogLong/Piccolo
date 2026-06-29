@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cwchar>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -16,6 +17,11 @@
 #include <d3dcompiler.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+#ifdef D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT
+#define PICCOLO_D3D12_HAS_DXR 1
+#else
+#define PICCOLO_D3D12_HAS_DXR 0
+#endif
 #endif
 
 namespace Piccolo
@@ -157,6 +163,38 @@ namespace Piccolo
         };
 #endif
 
+        struct D3D12RHIAccelerationStructure final : RHIAccelerationStructure
+        {
+#ifdef _WIN32
+            ComPtr<ID3D12Resource> result;
+            ComPtr<ID3D12Resource> scratch;
+            ComPtr<ID3D12Resource> instance_upload;
+            D3D12_GPU_VIRTUAL_ADDRESS gpu_address {0};
+#else
+            uint64_t gpu_address {0};
+#endif
+            RHIAccelerationStructureType type {RHIAccelerationStructureType::BottomLevel};
+            bool                         allow_update {false};
+            uint64_t                     result_size {0};
+            uint64_t                     scratch_size {0};
+            uint64_t                     update_scratch_size {0};
+        };
+
+        struct D3D12RHIShaderBindingTable final : RHIShaderBindingTable
+        {
+#ifdef _WIN32
+            ComPtr<ID3D12Resource> resource;
+            D3D12_GPU_VIRTUAL_ADDRESS raygen_start {0};
+            uint64_t raygen_size {0};
+            D3D12_GPU_VIRTUAL_ADDRESS miss_start {0};
+            uint64_t miss_size {0};
+            uint64_t miss_stride {0};
+            D3D12_GPU_VIRTUAL_ADDRESS hit_group_start {0};
+            uint64_t hit_group_size {0};
+            uint64_t hit_group_stride {0};
+#endif
+        };
+
         struct D3D12RHICommandBuffer final : RHICommandBuffer
         {
 #ifdef _WIN32
@@ -177,10 +215,13 @@ namespace Piccolo
             RHIPipeline*                      bound_graphics_pipeline {nullptr};
             D3D12RHIPipelineLayout*           bound_graphics_pipeline_layout {nullptr};
             D3D12RHIPipelineLayout*           bound_compute_pipeline_layout {nullptr};
+            D3D12RHIPipelineLayout*           bound_ray_tracing_pipeline_layout {nullptr};
             ID3D12RootSignature*              bound_graphics_root_signature {nullptr};
             ID3D12RootSignature*              bound_compute_root_signature {nullptr};
+            ID3D12RootSignature*              bound_ray_tracing_root_signature {nullptr};
             bool                              graphics_root_signature_dirty {true};
             bool                              compute_root_signature_dirty {true};
+            bool                              ray_tracing_root_signature_dirty {true};
             RHIRenderPass*                    active_render_pass {nullptr};
             RHIFramebuffer*                   active_framebuffer {nullptr};
             RHIRenderPassBeginInfo            active_render_pass_begin_info {};
@@ -195,6 +236,8 @@ namespace Piccolo
             std::vector<bool>                 graphics_root_descriptor_table_valid;
             std::vector<D3D12_GPU_DESCRIPTOR_HANDLE> compute_root_descriptor_tables;
             std::vector<bool>                 compute_root_descriptor_table_valid;
+            std::vector<D3D12_GPU_DESCRIPTOR_HANDLE> ray_tracing_root_descriptor_tables;
+            std::vector<bool>                 ray_tracing_root_descriptor_table_valid;
             std::vector<DynamicDescriptorTableCacheEntry> dynamic_descriptor_table_cache;
             ComPtr<ID3D12Resource>            dispatch_argument_buffer;
             D3D12_RESOURCE_STATES             dispatch_argument_buffer_state {D3D12_RESOURCE_STATE_COPY_DEST};
@@ -308,8 +351,8 @@ namespace Piccolo
             bool enforce_limits {false};
             uint32_t max_sets {0};
             uint32_t allocated_sets {0};
-            std::array<uint32_t, 11> descriptor_type_counts {};
-            std::array<uint32_t, 11> allocated_descriptor_type_counts {};
+            std::array<uint32_t, 12> descriptor_type_counts {};
+            std::array<uint32_t, 12> allocated_descriptor_type_counts {};
             uint32_t cbv_srv_uav_descriptor_count {0};
             uint32_t allocated_cbv_srv_uav_descriptors {0};
             uint32_t sampler_descriptor_count {0};
@@ -329,7 +372,7 @@ namespace Piccolo
             };
 
             std::vector<BindingRange> ranges;
-            std::array<uint32_t, 11> descriptor_type_counts {};
+            std::array<uint32_t, 12> descriptor_type_counts {};
             uint32_t cbv_srv_uav_descriptor_count {0};
             uint32_t sampler_descriptor_count {0};
 
@@ -361,6 +404,17 @@ namespace Piccolo
 #endif
             };
 
+            struct AccelerationStructureDescriptor
+            {
+                uint32_t binding {0};
+                uint32_t array_element {0};
+                RHIDescriptorType descriptor_type {RHI_DESCRIPTOR_TYPE_MAX_ENUM};
+                D3D12RHIAccelerationStructure* acceleration_structure {nullptr};
+#ifdef _WIN32
+                D3D12_GPU_VIRTUAL_ADDRESS gpu_address {0};
+#endif
+            };
+
             D3D12RHIDescriptorSetLayout* layout {nullptr};
             uint32_t cbv_srv_uav_base {0};
             uint32_t sampler_base {0};
@@ -378,6 +432,7 @@ namespace Piccolo
             std::vector<D3D12RHIBuffer*> storage_buffers;
             std::vector<D3D12RHIBuffer*> host_visible_default_buffers;
             std::vector<BufferDescriptor> buffer_descriptors;
+            std::vector<AccelerationStructureDescriptor> acceleration_structure_descriptors;
 
             BufferDescriptor* findBufferDescriptor(uint32_t binding, uint32_t array_element)
             {
@@ -394,6 +449,32 @@ namespace Piccolo
             const BufferDescriptor* findBufferDescriptor(uint32_t binding, uint32_t array_element) const
             {
                 for (const auto& descriptor : buffer_descriptors)
+                {
+                    if (descriptor.binding == binding && descriptor.array_element == array_element)
+                    {
+                        return &descriptor;
+                    }
+                }
+                return nullptr;
+            }
+
+            AccelerationStructureDescriptor* findAccelerationStructureDescriptor(uint32_t binding,
+                                                                                 uint32_t array_element)
+            {
+                for (auto& descriptor : acceleration_structure_descriptors)
+                {
+                    if (descriptor.binding == binding && descriptor.array_element == array_element)
+                    {
+                        return &descriptor;
+                    }
+                }
+                return nullptr;
+            }
+
+            const AccelerationStructureDescriptor*
+            findAccelerationStructureDescriptor(uint32_t binding, uint32_t array_element) const
+            {
+                for (const auto& descriptor : acceleration_structure_descriptors)
                 {
                     if (descriptor.binding == binding && descriptor.array_element == array_element)
                     {
@@ -452,6 +533,10 @@ namespace Piccolo
             std::vector<uint32_t> vertex_strides;
 #ifdef _WIN32
             ComPtr<ID3D12PipelineState> pipeline_state;
+#if PICCOLO_D3D12_HAS_DXR
+            ComPtr<ID3D12StateObject> state_object;
+            ComPtr<ID3D12StateObjectProperties> state_object_properties;
+#endif
             D3D_PRIMITIVE_TOPOLOGY primitive_topology {D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
 #endif
         };
@@ -485,7 +570,8 @@ namespace Piccolo
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
                    type == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC ||
-                   type == RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+                   type == RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT ||
+                   type == RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         }
 
         bool descriptorUsesBufferInfo(RHIDescriptorType type)
@@ -496,7 +582,7 @@ namespace Piccolo
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         }
 
-        constexpr uint32_t kTrackedDescriptorTypeCount = 11;
+        constexpr uint32_t kTrackedDescriptorTypeCount = 12;
 
         bool isTrackedDescriptorType(RHIDescriptorType type)
         {
@@ -513,6 +599,7 @@ namespace Piccolo
                 case RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
                 case RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
                 case RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+                case RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
                     return true;
                 default:
                     return false;
@@ -526,7 +613,35 @@ namespace Piccolo
 
         uint32_t descriptorTypeIndex(RHIDescriptorType type)
         {
-            return static_cast<uint32_t>(type);
+            switch (type)
+            {
+                case RHI_DESCRIPTOR_TYPE_SAMPLER:
+                    return 0;
+                case RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                    return 1;
+                case RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                    return 2;
+                case RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                    return 3;
+                case RHI_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+                    return 4;
+                case RHI_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                    return 5;
+                case RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                    return 6;
+                case RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                    return 7;
+                case RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+                    return 8;
+                case RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+                    return 9;
+                case RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+                    return 10;
+                case RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                    return 11;
+                default:
+                    return kTrackedDescriptorTypeCount;
+            }
         }
 
         bool hasDescriptorCapacity(uint32_t required, uint32_t used, uint32_t capacity)
@@ -569,7 +684,8 @@ namespace Piccolo
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
                    type == RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC ||
-                   type == RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+                   type == RHI_DESCRIPTOR_TYPE_INPUT_ATTACHMENT ||
+                   type == RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         }
 
         bool hasComputeStage(RHIShaderStageFlags stage_flags)
@@ -594,6 +710,11 @@ namespace Piccolo
                    type == RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         }
 
+        bool isAccelerationStructureDescriptor(RHIDescriptorType type)
+        {
+            return type == RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        }
+
         D3D12_DESCRIPTOR_RANGE_TYPE toDescriptorRangeType(const RHIDescriptorSetLayoutBinding& binding)
         {
             switch (binding.descriptorType)
@@ -603,6 +724,8 @@ namespace Piccolo
                     return D3D12_DESCRIPTOR_RANGE_TYPE_CBV;
                 case RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE:
                     return D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+                case RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                    return D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
                 case RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER:
                     return hasComputeStage(binding.stageFlags) && !hasGraphicsStage(binding.stageFlags) ?
                         D3D12_DESCRIPTOR_RANGE_TYPE_UAV :
@@ -864,6 +987,23 @@ namespace Piccolo
                         return false;
                     }
                 }
+                else if (isAccelerationStructureDescriptor(write.descriptorType))
+                {
+                    if (write.pAccelerationStructureInfo == nullptr ||
+                        write.pAccelerationStructureInfo->pAccelerationStructures == nullptr ||
+                        write.pAccelerationStructureInfo->accelerationStructureCount <= descriptor_index)
+                    {
+                        return false;
+                    }
+
+                    const auto* acceleration_structure = static_cast<D3D12RHIAccelerationStructure*>(
+                        write.pAccelerationStructureInfo->pAccelerationStructures[descriptor_index]);
+                    if (acceleration_structure == nullptr ||
+                        acceleration_structure->gpu_address == 0)
+                    {
+                        return false;
+                    }
+                }
                 else if (descriptorUsesResourceHeap(write.descriptorType))
                 {
                     if (write.pImageInfo == nullptr)
@@ -914,13 +1054,28 @@ namespace Piccolo
                                                      const D3D12RHIDescriptorSet& src_set,
                                                      const D3D12RHIDescriptorSetLayout::BindingRange& src_binding)
         {
-            if (!descriptorUsesBufferInfo(src_binding.binding.descriptorType))
+            if (!descriptorUsesBufferInfo(src_binding.binding.descriptorType) &&
+                !isAccelerationStructureDescriptor(src_binding.binding.descriptorType))
             {
                 return true;
             }
 
             for (uint32_t descriptor_index = 0; descriptor_index < copy.descriptorCount; ++descriptor_index)
             {
+                if (isAccelerationStructureDescriptor(src_binding.binding.descriptorType))
+                {
+                    const auto* src_descriptor = src_set.findAccelerationStructureDescriptor(
+                        copy.srcBinding, copy.srcArrayElement + descriptor_index);
+                    if (src_descriptor == nullptr ||
+                        src_descriptor->descriptor_type != src_binding.binding.descriptorType ||
+                        src_descriptor->acceleration_structure == nullptr ||
+                        src_descriptor->gpu_address == 0)
+                    {
+                        return false;
+                    }
+                    continue;
+                }
+
                 const auto* src_descriptor =
                     src_set.findBufferDescriptor(copy.srcBinding, copy.srcArrayElement + descriptor_index);
                 if (src_descriptor == nullptr ||
@@ -1111,7 +1266,9 @@ namespace Piccolo
 
         D3D12_RESOURCE_FLAGS bufferResourceFlags(RHIBufferUsageFlags usage, D3D12_HEAP_TYPE heap_type)
         {
-            if (heap_type == D3D12_HEAP_TYPE_DEFAULT && hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+            if (heap_type == D3D12_HEAP_TYPE_DEFAULT &&
+                (hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) ||
+                 hasFlag(usage, RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR)))
             {
                 return D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             }
@@ -1706,6 +1863,21 @@ namespace Piccolo
             rebuildDescriptorSetBufferLists(descriptor_set);
         }
 
+        void upsertAccelerationStructureDescriptor(
+            D3D12RHIDescriptorSet& descriptor_set,
+            const D3D12RHIDescriptorSet::AccelerationStructureDescriptor& descriptor)
+        {
+            if (auto* existing_descriptor =
+                    descriptor_set.findAccelerationStructureDescriptor(descriptor.binding, descriptor.array_element))
+            {
+                *existing_descriptor = descriptor;
+            }
+            else
+            {
+                descriptor_set.acceleration_structure_descriptors.push_back(descriptor);
+            }
+        }
+
         bool formatHasStencil(RHIFormat format)
         {
             return format == RHI_FORMAT_D24_UNORM_S8_UINT ||
@@ -2117,7 +2289,12 @@ namespace Piccolo
         void clearRootDescriptorTableCache(D3D12RHICommandBuffer& command_buffer,
                                            RHIPipelineBindPoint bind_point)
         {
-            if (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE)
+            if (bind_point == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            {
+                clearRootDescriptorTableCache(command_buffer.ray_tracing_root_descriptor_tables,
+                                              command_buffer.ray_tracing_root_descriptor_table_valid);
+            }
+            else if (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE)
             {
                 clearRootDescriptorTableCache(command_buffer.compute_root_descriptor_tables,
                                               command_buffer.compute_root_descriptor_table_valid);
@@ -2141,6 +2318,7 @@ namespace Piccolo
             markCommandBufferDescriptorHeapsDirty(command_buffer);
             command_buffer.graphics_root_signature_dirty = true;
             command_buffer.compute_root_signature_dirty  = true;
+            command_buffer.ray_tracing_root_signature_dirty = true;
         }
 
         void resetCommandBufferDescriptorHeapState(D3D12RHICommandBuffer& command_buffer)
@@ -2148,8 +2326,10 @@ namespace Piccolo
             markCommandBufferDescriptorHeapsDirty(command_buffer);
             command_buffer.graphics_root_signature_dirty = true;
             command_buffer.compute_root_signature_dirty  = true;
+            command_buffer.ray_tracing_root_signature_dirty = true;
             clearRootDescriptorTableCache(command_buffer, RHI_PIPELINE_BIND_POINT_GRAPHICS);
             clearRootDescriptorTableCache(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE);
+            clearRootDescriptorTableCache(command_buffer, RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
         }
 
         void rememberRootDescriptorTable(D3D12RHICommandBuffer& command_buffer,
@@ -2157,12 +2337,16 @@ namespace Piccolo
                                          uint32_t root_index,
                                          D3D12_GPU_DESCRIPTOR_HANDLE descriptor)
         {
-            auto& tables = bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
-                               command_buffer.compute_root_descriptor_tables :
-                               command_buffer.graphics_root_descriptor_tables;
-            auto& valid = bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
-                              command_buffer.compute_root_descriptor_table_valid :
-                              command_buffer.graphics_root_descriptor_table_valid;
+            auto& tables = bind_point == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR ?
+                               command_buffer.ray_tracing_root_descriptor_tables :
+                               (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
+                                    command_buffer.compute_root_descriptor_tables :
+                                    command_buffer.graphics_root_descriptor_tables);
+            auto& valid = bind_point == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR ?
+                              command_buffer.ray_tracing_root_descriptor_table_valid :
+                              (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
+                                   command_buffer.compute_root_descriptor_table_valid :
+                                   command_buffer.graphics_root_descriptor_table_valid);
             if (root_index >= tables.size())
             {
                 tables.resize(root_index + 1, {});
@@ -2175,6 +2359,10 @@ namespace Piccolo
         bool rootSignatureDirtyForBindPoint(const D3D12RHICommandBuffer& command_buffer,
                                             RHIPipelineBindPoint bind_point)
         {
+            if (bind_point == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            {
+                return command_buffer.ray_tracing_root_signature_dirty;
+            }
             return bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE ?
                        command_buffer.compute_root_signature_dirty :
                        command_buffer.graphics_root_signature_dirty;
@@ -2187,6 +2375,20 @@ namespace Piccolo
             if (command_list == nullptr)
             {
                 return false;
+            }
+
+            if (bind_point == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            {
+                if (command_buffer.bound_ray_tracing_root_signature == nullptr)
+                {
+                    return false;
+                }
+                if (command_buffer.ray_tracing_root_signature_dirty)
+                {
+                    command_list->SetComputeRootSignature(command_buffer.bound_ray_tracing_root_signature);
+                    command_buffer.ray_tracing_root_signature_dirty = false;
+                }
+                return true;
             }
 
             if (bind_point == RHI_PIPELINE_BIND_POINT_COMPUTE)
@@ -2221,6 +2423,23 @@ namespace Piccolo
         {
             if (!restoreRootSignatureForDescriptorReplay(command_list, command_buffer, bind_point))
             {
+                return;
+            }
+
+            if (bind_point == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            {
+                for (uint32_t root_index = 0;
+                     root_index < command_buffer.ray_tracing_root_descriptor_table_valid.size() &&
+                     root_index < command_buffer.ray_tracing_root_descriptor_tables.size();
+                     ++root_index)
+                {
+                    if (command_buffer.ray_tracing_root_descriptor_table_valid[root_index])
+                    {
+                        command_list->SetComputeRootDescriptorTable(
+                            root_index,
+                            command_buffer.ray_tracing_root_descriptor_tables[root_index]);
+                    }
+                }
                 return;
             }
 
@@ -3257,6 +3476,174 @@ namespace Piccolo
         {
             return index_type == RHI_INDEX_TYPE_UINT16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
         }
+
+#if PICCOLO_D3D12_HAS_DXR
+        const wchar_t* rayTracingExportOrDefault(const wchar_t* export_name, const wchar_t* default_export)
+        {
+            return export_name != nullptr ? export_name : default_export;
+        }
+
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS
+        rayTracingBuildFlags(const RHIAccelerationStructureBuildDesc& build_desc)
+        {
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS flags =
+                build_desc.prefer_fast_trace ?
+                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE :
+                    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE;
+            if (build_desc.allow_update)
+            {
+                flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+            }
+            if (build_desc.perform_update)
+            {
+                flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+            }
+            return flags;
+        }
+
+        bool fillRayTracingBuildInputs(const RHIAccelerationStructureBuildDesc& build_desc,
+                                       std::vector<D3D12_RAYTRACING_GEOMETRY_DESC>& geometries,
+                                       D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS& inputs)
+        {
+            inputs = {};
+            inputs.Type = build_desc.type == RHIAccelerationStructureType::BottomLevel ?
+                              D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL :
+                              D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+            inputs.Flags = rayTracingBuildFlags(build_desc);
+
+            if (build_desc.type == RHIAccelerationStructureType::BottomLevel)
+            {
+                if (build_desc.geometry_count == 0 || build_desc.geometries == nullptr)
+                {
+                    return false;
+                }
+
+                geometries.resize(build_desc.geometry_count);
+                for (uint32_t geometry_index = 0; geometry_index < build_desc.geometry_count; ++geometry_index)
+                {
+                    const auto& rhi_geometry = build_desc.geometries[geometry_index];
+                    auto* vertex_buffer = static_cast<D3D12RHIBuffer*>(rhi_geometry.vertex_position_buffer);
+                    auto* index_buffer = static_cast<D3D12RHIBuffer*>(rhi_geometry.index_buffer);
+                    if (vertex_buffer == nullptr ||
+                        vertex_buffer->resource == nullptr ||
+                        rhi_geometry.vertex_count == 0 ||
+                        rhi_geometry.vertex_stride == 0)
+                    {
+                        return false;
+                    }
+                    if (rhi_geometry.index_count > 0 && (index_buffer == nullptr || index_buffer->resource == nullptr))
+                    {
+                        return false;
+                    }
+
+                    D3D12_RAYTRACING_GEOMETRY_DESC& geometry = geometries[geometry_index];
+                    geometry.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+                    geometry.Flags = rhi_geometry.opaque ?
+                                         D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE :
+                                         D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
+                    geometry.Triangles.Transform3x4 = 0;
+                    geometry.Triangles.IndexFormat = rhi_geometry.index_count > 0 ?
+                                                         indexFormat(rhi_geometry.index_type) :
+                                                         DXGI_FORMAT_UNKNOWN;
+                    geometry.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+                    geometry.Triangles.IndexCount = rhi_geometry.index_count;
+                    geometry.Triangles.VertexCount = rhi_geometry.vertex_count;
+                    geometry.Triangles.IndexBuffer = rhi_geometry.index_count > 0 ?
+                                                         index_buffer->resource->GetGPUVirtualAddress() +
+                                                             rhi_geometry.index_offset :
+                                                         0;
+                    geometry.Triangles.VertexBuffer.StartAddress =
+                        vertex_buffer->resource->GetGPUVirtualAddress() + rhi_geometry.vertex_position_offset;
+                    geometry.Triangles.VertexBuffer.StrideInBytes = rhi_geometry.vertex_stride;
+                }
+
+                inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+                inputs.NumDescs = static_cast<UINT>(geometries.size());
+                inputs.pGeometryDescs = geometries.data();
+                return true;
+            }
+
+            if (build_desc.instance_count == 0)
+            {
+                return false;
+            }
+
+            inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            inputs.NumDescs = build_desc.instance_count;
+            inputs.InstanceDescs = 0;
+            return true;
+        }
+
+        bool createRayTracingBuffer(ID3D12Device* device,
+                                    uint64_t size,
+                                    D3D12_RESOURCE_STATES initial_state,
+                                    D3D12_RESOURCE_FLAGS flags,
+                                    ID3D12Resource** resource)
+        {
+            if (device == nullptr || resource == nullptr || size == 0)
+            {
+                return false;
+            }
+
+            D3D12_HEAP_PROPERTIES heap_properties {};
+            heap_properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+            heap_properties.CreationNodeMask = 1;
+            heap_properties.VisibleNodeMask = 1;
+
+            D3D12_RESOURCE_DESC resource_desc {};
+            resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            resource_desc.Width = alignUp(size, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+            resource_desc.Height = 1;
+            resource_desc.DepthOrArraySize = 1;
+            resource_desc.MipLevels = 1;
+            resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+            resource_desc.SampleDesc.Count = 1;
+            resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            resource_desc.Flags = flags;
+
+            return SUCCEEDED(device->CreateCommittedResource(&heap_properties,
+                                                             D3D12_HEAP_FLAG_NONE,
+                                                             &resource_desc,
+                                                             initial_state,
+                                                             nullptr,
+                                                             __uuidof(ID3D12Resource),
+                                                             reinterpret_cast<void**>(resource)));
+        }
+
+        bool createUploadBuffer(ID3D12Device* device,
+                                uint64_t size,
+                                ID3D12Resource** resource)
+        {
+            if (device == nullptr || resource == nullptr || size == 0)
+            {
+                return false;
+            }
+
+            D3D12_HEAP_PROPERTIES heap_properties {};
+            heap_properties.Type = D3D12_HEAP_TYPE_UPLOAD;
+            heap_properties.CreationNodeMask = 1;
+            heap_properties.VisibleNodeMask = 1;
+
+            D3D12_RESOURCE_DESC resource_desc {};
+            resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            resource_desc.Width = size;
+            resource_desc.Height = 1;
+            resource_desc.DepthOrArraySize = 1;
+            resource_desc.MipLevels = 1;
+            resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+            resource_desc.SampleDesc.Count = 1;
+            resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+            return SUCCEEDED(device->CreateCommittedResource(&heap_properties,
+                                                             D3D12_HEAP_FLAG_NONE,
+                                                             &resource_desc,
+                                                             D3D12_RESOURCE_STATE_GENERIC_READ,
+                                                             nullptr,
+                                                             __uuidof(ID3D12Resource),
+                                                             reinterpret_cast<void**>(resource)));
+        }
+#endif
 
         DXGI_FORMAT toVertexDXGIFormat(RHIFormat format)
         {
@@ -5570,8 +5957,10 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
     d3d_command_buffer->bound_graphics_pipeline = nullptr;
     d3d_command_buffer->bound_graphics_pipeline_layout = nullptr;
     d3d_command_buffer->bound_compute_pipeline_layout = nullptr;
+    d3d_command_buffer->bound_ray_tracing_pipeline_layout = nullptr;
     d3d_command_buffer->bound_graphics_root_signature = nullptr;
     d3d_command_buffer->bound_compute_root_signature = nullptr;
+    d3d_command_buffer->bound_ray_tracing_root_signature = nullptr;
     d3d_command_buffer->active_render_pass = nullptr;
     d3d_command_buffer->active_framebuffer = nullptr;
     d3d_command_buffer->active_render_pass_begin_info = {};
@@ -5812,6 +6201,38 @@ void D3D12RHI::cmdBindPipelinePFN(RHICommandBuffer* commandBuffer, RHIPipelineBi
     auto* d3d_pipeline = static_cast<D3D12RHIPipeline*>(pipeline);
     if (d3d_command_buffer == nullptr || command_list == nullptr || d3d_pipeline == nullptr)
     {
+        return;
+    }
+
+    if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+    {
+#if PICCOLO_D3D12_HAS_DXR
+        ComPtr<ID3D12GraphicsCommandList4> command_list4;
+        if (FAILED(command_list->QueryInterface(IID_PPV_ARGS(&command_list4))) || command_list4 == nullptr)
+        {
+            LOG_WARN("D3D12 cmdBindPipeline skipped ray tracing pipeline because command list4 is unavailable");
+            return;
+        }
+        if (d3d_pipeline->state_object != nullptr)
+        {
+            command_list4->SetPipelineState1(d3d_pipeline->state_object.Get());
+        }
+        if (d3d_pipeline->layout != nullptr && d3d_pipeline->layout->root_signature != nullptr)
+        {
+            auto* root_signature = d3d_pipeline->layout->root_signature.Get();
+            if (d3d_command_buffer->bound_ray_tracing_pipeline_layout != d3d_pipeline->layout ||
+                d3d_command_buffer->bound_ray_tracing_root_signature != root_signature)
+            {
+                clearRootDescriptorTableCache(*d3d_command_buffer, RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
+            }
+            d3d_command_buffer->bound_ray_tracing_pipeline_layout = d3d_pipeline->layout;
+            d3d_command_buffer->bound_ray_tracing_root_signature = root_signature;
+            command_list->SetComputeRootSignature(root_signature);
+            d3d_command_buffer->ray_tracing_root_signature_dirty = false;
+        }
+#else
+        LOG_WARN("D3D12 cmdBindPipeline skipped ray tracing pipeline because this SDK does not expose DXR");
+#endif
         return;
     }
 
@@ -6250,7 +6671,11 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             d3d_layout->cbv_srv_uav_root_parameter_indices[set_index] != kInvalidRootParameterIndex)
         {
             const uint32_t root_index = d3d_layout->cbv_srv_uav_root_parameter_indices[set_index];
-            if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
+            if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            {
+                command_list->SetComputeRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
+            }
+            else if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
             {
                 command_list->SetComputeRootDescriptorTable(root_index, cbv_srv_uav_gpu_base);
             }
@@ -6265,7 +6690,11 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             d3d_layout->sampler_root_parameter_indices[set_index] != kInvalidRootParameterIndex)
         {
             const uint32_t root_index = d3d_layout->sampler_root_parameter_indices[set_index];
-            if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
+            if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+            {
+                command_list->SetComputeRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
+            }
+            else if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_COMPUTE)
             {
                 command_list->SetComputeRootDescriptorTable(root_index, descriptor_set->sampler_gpu_base);
             }
@@ -7030,6 +7459,531 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
     return;
 }
 
+RHIRayTracingCapabilities D3D12RHI::getRayTracingCapabilities() const
+{
+    RHIRayTracingCapabilities capabilities {};
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    ComPtr<ID3D12Device5> device5;
+    if (m_d3d12_device == nullptr ||
+        FAILED(m_d3d12_device.As(&device5)) ||
+        device5 == nullptr)
+    {
+        return capabilities;
+    }
+
+    D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5 {};
+    if (FAILED(device5->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5))) ||
+        options5.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED)
+    {
+        return capabilities;
+    }
+
+    capabilities.support_level = RHIRayTracingSupportLevel::Supported;
+    capabilities.max_recursion_depth = D3D12_RAYTRACING_MAX_DECLARABLE_TRACE_RECURSION_DEPTH;
+    capabilities.shader_group_handle_size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+    capabilities.shader_group_handle_alignment = D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT;
+    capabilities.shader_binding_table_alignment = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+    capabilities.supports_inline_ray_tracing = options5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1;
+#endif
+    return capabilities;
+}
+
+bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
+                                           RHIAccelerationStructure*& acceleration_structure)
+{
+    acceleration_structure = nullptr;
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    if (build_desc == nullptr)
+    {
+        return false;
+    }
+
+    ComPtr<ID3D12Device5> device5;
+    if (m_d3d12_device == nullptr ||
+        FAILED(m_d3d12_device.As(&device5)) ||
+        device5 == nullptr ||
+        getRayTracingCapabilities().support_level != RHIRayTracingSupportLevel::Supported)
+    {
+        return false;
+    }
+
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometries;
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs {};
+    if (!fillRayTracingBuildInputs(*build_desc, geometries, inputs))
+    {
+        return false;
+    }
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuild_info {};
+    device5->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuild_info);
+    if (prebuild_info.ResultDataMaxSizeInBytes == 0 || prebuild_info.ScratchDataSizeInBytes == 0)
+    {
+        return false;
+    }
+
+    auto* acceleration_structure_impl = new D3D12RHIAccelerationStructure();
+    acceleration_structure_impl->type = build_desc->type;
+    acceleration_structure_impl->allow_update = build_desc->allow_update;
+    acceleration_structure_impl->result_size = prebuild_info.ResultDataMaxSizeInBytes;
+    acceleration_structure_impl->scratch_size = prebuild_info.ScratchDataSizeInBytes;
+    acceleration_structure_impl->update_scratch_size = prebuild_info.UpdateScratchDataSizeInBytes;
+
+    const bool result_created =
+        createRayTracingBuffer(m_d3d12_device.Get(),
+                               prebuild_info.ResultDataMaxSizeInBytes,
+                               D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                               acceleration_structure_impl->result.ReleaseAndGetAddressOf());
+    const bool scratch_created =
+        createRayTracingBuffer(m_d3d12_device.Get(),
+                               prebuild_info.ScratchDataSizeInBytes,
+                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                               acceleration_structure_impl->scratch.ReleaseAndGetAddressOf());
+    if (!result_created || !scratch_created)
+    {
+        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "ray tracing acceleration structure allocation failure");
+        delete acceleration_structure_impl;
+        return false;
+    }
+
+    acceleration_structure_impl->gpu_address =
+        acceleration_structure_impl->result->GetGPUVirtualAddress();
+    acceleration_structure = acceleration_structure_impl;
+    return true;
+#else
+    (void)build_desc;
+    return false;
+#endif
+}
+
+bool D3D12RHI::buildAccelerationStructure(RHICommandBuffer* command_buffer,
+                                          const RHIAccelerationStructureBuildDesc* build_desc,
+                                          RHIAccelerationStructure* acceleration_structure)
+{
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    auto* acceleration_structure_impl = static_cast<D3D12RHIAccelerationStructure*>(acceleration_structure);
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(command_buffer);
+    auto* command_list = d3d12CommandListFor(command_buffer);
+    if (build_desc == nullptr ||
+        acceleration_structure_impl == nullptr ||
+        acceleration_structure_impl->result == nullptr ||
+        acceleration_structure_impl->scratch == nullptr ||
+        command_list == nullptr)
+    {
+        return false;
+    }
+
+    ComPtr<ID3D12GraphicsCommandList4> command_list4;
+    if (FAILED(command_list->QueryInterface(IID_PPV_ARGS(&command_list4))) || command_list4 == nullptr)
+    {
+        return false;
+    }
+
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometries;
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs {};
+    if (!fillRayTracingBuildInputs(*build_desc, geometries, inputs))
+    {
+        return false;
+    }
+
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instance_descs;
+    if (build_desc->type == RHIAccelerationStructureType::BottomLevel)
+    {
+        for (uint32_t geometry_index = 0; geometry_index < build_desc->geometry_count; ++geometry_index)
+        {
+            auto* vertex_buffer = static_cast<D3D12RHIBuffer*>(build_desc->geometries[geometry_index].vertex_position_buffer);
+            auto* index_buffer = static_cast<D3D12RHIBuffer*>(build_desc->geometries[geometry_index].index_buffer);
+            if (vertex_buffer != nullptr && vertex_buffer->resource != nullptr && vertex_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+            {
+                transitionResource(command_list,
+                                   vertex_buffer->resource.Get(),
+                                   vertex_buffer->current_state,
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            if (index_buffer != nullptr && index_buffer->resource != nullptr && index_buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
+            {
+                transitionResource(command_list,
+                                   index_buffer->resource.Get(),
+                                   index_buffer->current_state,
+                                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+        }
+    }
+    else
+    {
+        if (build_desc->instances == nullptr || build_desc->instance_count == 0)
+        {
+            return false;
+        }
+
+        instance_descs.resize(build_desc->instance_count);
+        for (uint32_t instance_index = 0; instance_index < build_desc->instance_count; ++instance_index)
+        {
+            const auto& rhi_instance = build_desc->instances[instance_index];
+            auto* bottom_level_as = static_cast<D3D12RHIAccelerationStructure*>(rhi_instance.bottom_level_as);
+            if (bottom_level_as == nullptr || bottom_level_as->gpu_address == 0)
+            {
+                return false;
+            }
+
+            D3D12_RAYTRACING_INSTANCE_DESC& instance_desc = instance_descs[instance_index];
+            if (rhi_instance.row_major_3x4_transform != nullptr)
+            {
+                std::memcpy(instance_desc.Transform,
+                            rhi_instance.row_major_3x4_transform,
+                            sizeof(instance_desc.Transform));
+            }
+            else
+            {
+                instance_desc.Transform[0][0] = 1.0f;
+                instance_desc.Transform[1][1] = 1.0f;
+                instance_desc.Transform[2][2] = 1.0f;
+            }
+            instance_desc.InstanceID = rhi_instance.instance_id & 0xFFFFFFu;
+            instance_desc.InstanceMask = rhi_instance.instance_mask;
+            instance_desc.InstanceContributionToHitGroupIndex = rhi_instance.hit_group_index & 0xFFFFFFu;
+            instance_desc.Flags = rhi_instance.force_opaque ?
+                                      D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE :
+                                      D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+            instance_desc.AccelerationStructure = bottom_level_as->gpu_address;
+        }
+
+        const uint64_t instance_buffer_size =
+            alignUp(sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instance_descs.size(),
+                    D3D12_RAYTRACING_INSTANCE_DESCS_BYTE_ALIGNMENT);
+        if (!createUploadBuffer(m_d3d12_device.Get(),
+                                instance_buffer_size,
+                                acceleration_structure_impl->instance_upload.ReleaseAndGetAddressOf()))
+        {
+            return false;
+        }
+
+        void* mapped_instances = nullptr;
+        D3D12_RANGE read_range {0, 0};
+        if (FAILED(acceleration_structure_impl->instance_upload->Map(0, &read_range, &mapped_instances)) ||
+            mapped_instances == nullptr)
+        {
+            return false;
+        }
+        std::memcpy(mapped_instances,
+                    instance_descs.data(),
+                    sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instance_descs.size());
+        acceleration_structure_impl->instance_upload->Unmap(0, nullptr);
+        inputs.InstanceDescs = acceleration_structure_impl->instance_upload->GetGPUVirtualAddress();
+    }
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build_as_desc {};
+    build_as_desc.Inputs = inputs;
+    build_as_desc.DestAccelerationStructureData =
+        acceleration_structure_impl->result->GetGPUVirtualAddress();
+    build_as_desc.ScratchAccelerationStructureData =
+        acceleration_structure_impl->scratch->GetGPUVirtualAddress();
+    if (build_desc->perform_update && build_desc->source != nullptr)
+    {
+        auto* source = static_cast<D3D12RHIAccelerationStructure*>(build_desc->source);
+        if (source != nullptr && source->result != nullptr)
+        {
+            build_as_desc.SourceAccelerationStructureData = source->result->GetGPUVirtualAddress();
+        }
+    }
+
+    command_list4->BuildRaytracingAccelerationStructure(&build_as_desc, 0, nullptr);
+
+    D3D12_RESOURCE_BARRIER barrier {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barrier.UAV.pResource = acceleration_structure_impl->result.Get();
+    command_list->ResourceBarrier(1, &barrier);
+    if (d3d_command_buffer != nullptr)
+    {
+        d3d_command_buffer->has_recorded_commands = true;
+    }
+    return true;
+#else
+    (void)command_buffer;
+    (void)build_desc;
+    (void)acceleration_structure;
+    return false;
+#endif
+}
+
+bool D3D12RHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
+                                        RHIPipeline*& pipeline)
+{
+    pipeline = nullptr;
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    if (create_info == nullptr ||
+        create_info->shader_library.bytecode == nullptr ||
+        create_info->shader_library.bytecode_size == 0 ||
+        create_info->layout == nullptr)
+    {
+        return false;
+    }
+
+    ComPtr<ID3D12Device5> device5;
+    if (m_d3d12_device == nullptr ||
+        FAILED(m_d3d12_device.As(&device5)) ||
+        device5 == nullptr ||
+        getRayTracingCapabilities().support_level != RHIRayTracingSupportLevel::Supported)
+    {
+        return false;
+    }
+
+    auto* d3d_layout = static_cast<D3D12RHIPipelineLayout*>(create_info->layout);
+    if (d3d_layout == nullptr || d3d_layout->root_signature == nullptr)
+    {
+        return false;
+    }
+
+    auto* pipeline_impl = new D3D12RHIPipeline();
+    pipeline_impl->bind_point = RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+    pipeline_impl->layout = d3d_layout;
+
+    const wchar_t* raygen_export =
+        rayTracingExportOrDefault(create_info->shader_library.raygen_export, kPathTracingRayGenExport);
+    const wchar_t* miss_export =
+        rayTracingExportOrDefault(create_info->shader_library.miss_export, kPathTracingMissExport);
+    const wchar_t* closest_hit_export =
+        rayTracingExportOrDefault(create_info->shader_library.closest_hit_export, kPathTracingClosestHitExport);
+    const wchar_t* hit_group_export =
+        rayTracingExportOrDefault(create_info->shader_library.hit_group_export, kPathTracingHitGroupExport);
+
+    D3D12_EXPORT_DESC exports[3] {};
+    exports[0].Name = raygen_export;
+    exports[1].Name = miss_export;
+    exports[2].Name = closest_hit_export;
+
+    D3D12_DXIL_LIBRARY_DESC library_desc {};
+    library_desc.DXILLibrary.pShaderBytecode = create_info->shader_library.bytecode;
+    library_desc.DXILLibrary.BytecodeLength = create_info->shader_library.bytecode_size;
+    library_desc.NumExports = 3;
+    library_desc.pExports = exports;
+
+    D3D12_HIT_GROUP_DESC hit_group_desc {};
+    hit_group_desc.HitGroupExport = hit_group_export;
+    hit_group_desc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hit_group_desc.ClosestHitShaderImport = closest_hit_export;
+
+    D3D12_RAYTRACING_SHADER_CONFIG shader_config {};
+    shader_config.MaxPayloadSizeInBytes = 32;
+    shader_config.MaxAttributeSizeInBytes = 8;
+
+    D3D12_GLOBAL_ROOT_SIGNATURE global_root_signature {};
+    global_root_signature.pGlobalRootSignature = d3d_layout->root_signature.Get();
+
+    D3D12_RAYTRACING_PIPELINE_CONFIG pipeline_config {};
+    pipeline_config.MaxTraceRecursionDepth =
+        (std::max)(1U, create_info->max_recursion_depth);
+
+    D3D12_STATE_SUBOBJECT subobjects[5] {};
+    subobjects[0].Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
+    subobjects[0].pDesc = &library_desc;
+    subobjects[1].Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+    subobjects[1].pDesc = &hit_group_desc;
+    subobjects[2].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
+    subobjects[2].pDesc = &shader_config;
+    subobjects[3].Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
+    subobjects[3].pDesc = &global_root_signature;
+    subobjects[4].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+    subobjects[4].pDesc = &pipeline_config;
+
+    D3D12_STATE_OBJECT_DESC state_object_desc {};
+    state_object_desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+    state_object_desc.NumSubobjects = static_cast<UINT>(std::size(subobjects));
+    state_object_desc.pSubobjects = subobjects;
+
+    const HRESULT state_object_result =
+        device5->CreateStateObject(&state_object_desc, IID_PPV_ARGS(&pipeline_impl->state_object));
+    if (FAILED(state_object_result) ||
+        pipeline_impl->state_object == nullptr ||
+        FAILED(pipeline_impl->state_object.As(&pipeline_impl->state_object_properties)) ||
+        pipeline_impl->state_object_properties == nullptr)
+    {
+        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "ray tracing pipeline creation failure");
+        LOG_ERROR("D3D12 ray tracing pipeline creation failed (HRESULT=0x{:08X})",
+                  static_cast<unsigned int>(state_object_result));
+        delete pipeline_impl;
+        return false;
+    }
+
+    pipeline = pipeline_impl;
+    return true;
+#else
+    (void)create_info;
+    return false;
+#endif
+}
+
+bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
+                                        RHIShaderBindingTable*& shader_binding_table)
+{
+    shader_binding_table = nullptr;
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    if (create_info == nullptr || create_info->ray_tracing_pipeline == nullptr)
+    {
+        return false;
+    }
+
+    auto* pipeline_impl = static_cast<D3D12RHIPipeline*>(create_info->ray_tracing_pipeline);
+    if (pipeline_impl == nullptr ||
+        pipeline_impl->state_object_properties == nullptr ||
+        pipeline_impl->bind_point != RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+    {
+        return false;
+    }
+
+    const wchar_t* raygen_export =
+        rayTracingExportOrDefault(create_info->raygen_export, kPathTracingRayGenExport);
+    const wchar_t* miss_export =
+        rayTracingExportOrDefault(create_info->miss_export, kPathTracingMissExport);
+    const wchar_t* hit_group_export =
+        rayTracingExportOrDefault(create_info->hit_group_export, kPathTracingHitGroupExport);
+    const void* raygen_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(raygen_export);
+    const void* miss_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(miss_export);
+    const void* hit_group_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(hit_group_export);
+    if (raygen_identifier == nullptr || miss_identifier == nullptr || hit_group_identifier == nullptr)
+    {
+        return false;
+    }
+
+    const uint64_t record_size = alignUp(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
+                                         D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
+    const uint64_t table_size = alignUp(record_size * 3,
+                                        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+    auto* shader_binding_table_impl = new D3D12RHIShaderBindingTable();
+    if (!createUploadBuffer(m_d3d12_device.Get(),
+                            table_size,
+                            shader_binding_table_impl->resource.ReleaseAndGetAddressOf()))
+    {
+        delete shader_binding_table_impl;
+        return false;
+    }
+
+    uint8_t* mapped_records = nullptr;
+    D3D12_RANGE read_range {0, 0};
+    if (FAILED(shader_binding_table_impl->resource->Map(0,
+                                                        &read_range,
+                                                        reinterpret_cast<void**>(&mapped_records))) ||
+        mapped_records == nullptr)
+    {
+        delete shader_binding_table_impl;
+        return false;
+    }
+    std::memcpy(mapped_records + record_size * 0, raygen_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    std::memcpy(mapped_records + record_size * 1, miss_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    std::memcpy(mapped_records + record_size * 2, hit_group_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    shader_binding_table_impl->resource->Unmap(0, nullptr);
+
+    const D3D12_GPU_VIRTUAL_ADDRESS table_start =
+        shader_binding_table_impl->resource->GetGPUVirtualAddress();
+    shader_binding_table_impl->raygen_start = table_start;
+    shader_binding_table_impl->raygen_size = record_size;
+    shader_binding_table_impl->miss_start = table_start + record_size;
+    shader_binding_table_impl->miss_size = record_size;
+    shader_binding_table_impl->miss_stride = record_size;
+    shader_binding_table_impl->hit_group_start = table_start + record_size * 2;
+    shader_binding_table_impl->hit_group_size = record_size;
+    shader_binding_table_impl->hit_group_stride = record_size;
+    shader_binding_table = shader_binding_table_impl;
+    return true;
+#else
+    (void)create_info;
+    return false;
+#endif
+}
+
+void D3D12RHI::cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracingDispatchDesc* dispatch_desc)
+{
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(command_buffer);
+    auto* pipeline_impl = dispatch_desc != nullptr ?
+                              static_cast<D3D12RHIPipeline*>(dispatch_desc->ray_tracing_pipeline) :
+                              nullptr;
+    auto* shader_binding_table = dispatch_desc != nullptr ?
+                                     static_cast<D3D12RHIShaderBindingTable*>(dispatch_desc->shader_binding_table) :
+                                     nullptr;
+    auto* command_list = d3d12CommandListFor(command_buffer);
+    if (d3d_command_buffer == nullptr ||
+        pipeline_impl == nullptr ||
+        shader_binding_table == nullptr ||
+        command_list == nullptr ||
+        dispatch_desc->width == 0 ||
+        dispatch_desc->height == 0)
+    {
+        return;
+    }
+    if (d3d_command_buffer->in_render_pass)
+    {
+        LOG_WARN("D3D12 cmdTraceRays skipped because DXR dispatch cannot run inside a render pass");
+        return;
+    }
+
+    ComPtr<ID3D12GraphicsCommandList4> command_list4;
+    if (FAILED(command_list->QueryInterface(IID_PPV_ARGS(&command_list4))) || command_list4 == nullptr)
+    {
+        return;
+    }
+
+    if (pipeline_impl->state_object != nullptr)
+    {
+        command_list4->SetPipelineState1(pipeline_impl->state_object.Get());
+    }
+    if (dispatch_desc->layout != nullptr && dispatch_desc->layout != pipeline_impl->layout)
+    {
+        pipeline_impl->layout = static_cast<D3D12RHIPipelineLayout*>(dispatch_desc->layout);
+    }
+    if (pipeline_impl->layout != nullptr && pipeline_impl->layout->root_signature != nullptr)
+    {
+        d3d_command_buffer->bound_ray_tracing_pipeline_layout = pipeline_impl->layout;
+        d3d_command_buffer->bound_ray_tracing_root_signature = pipeline_impl->layout->root_signature.Get();
+        command_list->SetComputeRootSignature(d3d_command_buffer->bound_ray_tracing_root_signature);
+        d3d_command_buffer->ray_tracing_root_signature_dirty = false;
+    }
+
+    bindEngineDescriptorHeaps(command_list,
+                              *d3d_command_buffer,
+                              m_d3d12_cbv_srv_uav_heap.Get(),
+                              m_d3d12_sampler_heap.Get(),
+                              true,
+                              RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
+    replayRootDescriptorTables(command_list, *d3d_command_buffer, RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
+
+    D3D12_DISPATCH_RAYS_DESC d3d_dispatch_desc {};
+    d3d_dispatch_desc.RayGenerationShaderRecord.StartAddress = shader_binding_table->raygen_start;
+    d3d_dispatch_desc.RayGenerationShaderRecord.SizeInBytes = shader_binding_table->raygen_size;
+    d3d_dispatch_desc.MissShaderTable.StartAddress = shader_binding_table->miss_start;
+    d3d_dispatch_desc.MissShaderTable.SizeInBytes = shader_binding_table->miss_size;
+    d3d_dispatch_desc.MissShaderTable.StrideInBytes = shader_binding_table->miss_stride;
+    d3d_dispatch_desc.HitGroupTable.StartAddress = shader_binding_table->hit_group_start;
+    d3d_dispatch_desc.HitGroupTable.SizeInBytes = shader_binding_table->hit_group_size;
+    d3d_dispatch_desc.HitGroupTable.StrideInBytes = shader_binding_table->hit_group_stride;
+    d3d_dispatch_desc.Width = dispatch_desc->width;
+    d3d_dispatch_desc.Height = dispatch_desc->height;
+    d3d_dispatch_desc.Depth = dispatch_desc->depth == 0 ? 1 : dispatch_desc->depth;
+    command_list4->DispatchRays(&d3d_dispatch_desc);
+    d3d_command_buffer->has_recorded_commands = true;
+#else
+    (void)command_buffer;
+    (void)dispatch_desc;
+#endif
+}
+
+void D3D12RHI::destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure)
+{
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    delete static_cast<D3D12RHIAccelerationStructure*>(acceleration_structure);
+#endif
+    acceleration_structure = nullptr;
+}
+
+void D3D12RHI::destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table)
+{
+#if defined(_WIN32) && PICCOLO_D3D12_HAS_DXR
+    delete static_cast<D3D12RHIShaderBindingTable*>(shader_binding_table);
+#endif
+    shader_binding_table = nullptr;
+}
+
 void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers)
 {
     (void)srcStageMask;
@@ -7243,6 +8197,26 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                         writeBufferDescriptor(m_d3d12_device.Get(), staging_handle, *binding, *descriptor_to_write, 0);
                     }
                 }
+                else if (write.descriptorType == RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+                {
+                    auto* acceleration_structure = static_cast<D3D12RHIAccelerationStructure*>(
+                        write.pAccelerationStructureInfo->pAccelerationStructures[descriptor_index]);
+
+                    D3D12RHIDescriptorSet::AccelerationStructureDescriptor descriptor {};
+                    descriptor.binding = write.dstBinding;
+                    descriptor.array_element = array_index;
+                    descriptor.descriptor_type = write.descriptorType;
+                    descriptor.acceleration_structure = acceleration_structure;
+                    descriptor.gpu_address = acceleration_structure->gpu_address;
+                    upsertAccelerationStructureDescriptor(*descriptor_set, descriptor);
+
+                    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc {};
+                    srv_desc.Format = DXGI_FORMAT_UNKNOWN;
+                    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+                    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                    srv_desc.RaytracingAccelerationStructure.Location = acceleration_structure->gpu_address;
+                    m_d3d12_device->CreateShaderResourceView(nullptr, &srv_desc, staging_handle);
+                }
                 else if (write.descriptorType == RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                 {
                     const RHIDescriptorImageInfo* image_info = &write.pImageInfo[descriptor_index];
@@ -7368,6 +8342,26 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                     dst_descriptor.descriptor_type = dst_binding->binding.descriptorType;
                     dst_descriptor.range_type      = dst_binding->cbv_srv_uav_range_type;
                     upsertBufferDescriptor(*dst_set, dst_descriptor);
+                }
+            }
+            else if (isAccelerationStructureDescriptor(src_binding->binding.descriptorType) &&
+                     isAccelerationStructureDescriptor(dst_binding->binding.descriptorType))
+            {
+                for (uint32_t descriptor_index = 0; descriptor_index < copy.descriptorCount; ++descriptor_index)
+                {
+                    const auto* src_descriptor =
+                        src_set->findAccelerationStructureDescriptor(copy.srcBinding,
+                                                                     copy.srcArrayElement + descriptor_index);
+                    if (src_descriptor == nullptr)
+                    {
+                        continue;
+                    }
+
+                    D3D12RHIDescriptorSet::AccelerationStructureDescriptor dst_descriptor = *src_descriptor;
+                    dst_descriptor.binding         = copy.dstBinding;
+                    dst_descriptor.array_element   = copy.dstArrayElement + descriptor_index;
+                    dst_descriptor.descriptor_type = dst_binding->binding.descriptorType;
+                    upsertAccelerationStructureDescriptor(*dst_set, dst_descriptor);
                 }
             }
         }
@@ -7791,8 +8785,10 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
             d3d_command_buffer->bound_graphics_pipeline = nullptr;
             d3d_command_buffer->bound_graphics_pipeline_layout = nullptr;
             d3d_command_buffer->bound_compute_pipeline_layout = nullptr;
+            d3d_command_buffer->bound_ray_tracing_pipeline_layout = nullptr;
             d3d_command_buffer->bound_graphics_root_signature = nullptr;
             d3d_command_buffer->bound_compute_root_signature = nullptr;
+            d3d_command_buffer->bound_ray_tracing_root_signature = nullptr;
             d3d_command_buffer->active_render_pass = nullptr;
             d3d_command_buffer->active_framebuffer = nullptr;
             d3d_command_buffer->active_subpass_index = 0;

@@ -75,6 +75,14 @@ namespace Piccolo
             ParticlePass& particle_pass,
             uint32_t          current_swapchain_image_index);
 
+        void drawPathTracing(ParticlePass&  particle_pass,
+                             UIPass& ui_pass,
+                             CombineUIPass& combine_ui_pass,
+                             uint32_t       current_swapchain_image_index);
+
+        RHIImage* getBackupOddImage() const;
+        RHIImageView* getBackupOddImageView() const;
+
         void copyNormalAndDepthImage();
 
         RHIImageView* m_point_light_shadow_color_image_view;
@@ -96,11 +104,13 @@ namespace Piccolo
         void setupParticlePass();
         void setupAttachments();
         void setupRenderPass();
+        void setupPathTracingCompositeRenderPass();
         void setupDescriptorSetLayout();
         void setupPipelines();
         void setupDescriptorSet();
         void setupFramebufferDescriptorSet();
         void setupSwapchainFramebuffers();
+        void setupPathTracingCompositeSwapchainFramebuffers();
 
         void setupModelGlobalDescriptorSet();
         void setupSkyboxDescriptorSet();
@@ -113,11 +123,14 @@ namespace Piccolo
         void drawMeshLighting();
         void drawSkybox();
         void drawAxis();
+        void clearUIAttachment();
 
 
 
     private:
         std::vector<RHIFramebuffer*> m_swapchain_framebuffers;
+        RHIRenderPass*               m_path_tracing_composite_render_pass {nullptr};
+        std::vector<RHIFramebuffer*> m_path_tracing_composite_swapchain_framebuffers;
         std::shared_ptr<ParticlePass> m_particle_pass;
     };
 } // namespace Piccolo

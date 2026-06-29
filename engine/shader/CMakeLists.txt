@@ -16,7 +16,8 @@ file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gl
 file(GLOB_RECURSE HLSL_SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.vert.hlsl"
                                                        "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.frag.hlsl"
                                                        "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.comp.hlsl"
-                                                       "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.geom.hlsl")
+                                                       "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.geom.hlsl"
+                                                       "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.lib.hlsl")
 file(GLOB_RECURSE HLSL_SHADER_INCLUDE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.hlsli")
 
 SOURCE_GROUP("shaders" FILES ${SHADER_FILES})

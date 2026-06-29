@@ -16,6 +16,14 @@ set_target_properties(json11 PROPERTIES FOLDER "ThirdParty/json11")
 file(GLOB_RECURSE HEADER_FILES "*.h")
 file(GLOB_RECURSE SOURCE_FILES "*.cpp")
 
+list(APPEND HEADER_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/path_tracing_pass.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/gpu_skinning_pass.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/interface/rhi_ray_tracing.h")
+
+list(APPEND SOURCE_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/path_tracing_pass.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/gpu_skinning_pass.cpp")
 if(NOT PICCOLO_ENABLE_D3D12_BACKEND)
   list(FILTER HEADER_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.h$")
   list(FILTER SOURCE_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.cpp$")
@@ -130,3 +138,4 @@ string(TOLOWER ${TARGET_NAME}/version.h VERSION_HEADER_LOCATION)
 ### precompile
 # set global vari used by precompile
 set(PICCOLO_RUNTIME_HEADS "${HEADER_FILES}" PARENT_SCOPE)
+

@@ -85,6 +85,10 @@ namespace Piccolo
                 {
                     m_render_backend = value;
                 }
+                else if (name == "RenderSceneMode")
+                {
+                    m_render_scene_mode = value;
+                }
                 else if (name == "RenderBackendAllowFallback")
                 {
                     m_render_backend_allow_fallback = toBoolWithDefault(value, true);
@@ -118,6 +122,8 @@ namespace Piccolo
     const std::string& ConfigManager::getGlobalParticleResUrl() const { return m_global_particle_res_url; }
 
     const std::string& ConfigManager::getRenderBackend() const { return m_render_backend; }
+
+    const std::string& ConfigManager::getRenderSceneMode() const { return m_render_scene_mode; }
 
     bool ConfigManager::getRenderBackendAllowFallback() const { return m_render_backend_allow_fallback; }
 
