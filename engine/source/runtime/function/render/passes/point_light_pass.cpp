@@ -1,13 +1,9 @@
 #include "runtime/function/render/passes/point_light_pass.h"
 
 #include "runtime/function/render/render_helper.h"
+#include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
-
-#include <mesh_point_light_shadow_frag.h>
-#include <mesh_point_light_shadow_geom.h>
-#include <mesh_point_light_shadow_vert.h>
+#include "runtime/function/render/render_shader_bytecode.h"
 
 #include <map>
 #include <stdexcept>
@@ -31,11 +27,11 @@ namespace Piccolo
     }
     void PointLightShadowPass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
-        const RenderResource* vulkan_resource = static_cast<const RenderResource*>(render_resource.get());
-        if (vulkan_resource)
+        const RenderResource* render_resource_ptr = static_cast<const RenderResource*>(render_resource.get());
+        if (render_resource_ptr)
         {
             m_mesh_point_light_shadow_perframe_storage_buffer_object =
-                vulkan_resource->m_mesh_point_light_shadow_perframe_storage_buffer_object;
+                render_resource_ptr->m_mesh_point_light_shadow_perframe_storage_buffer_object;
         }
     }
     void PointLightShadowPass::draw()
@@ -245,11 +241,11 @@ namespace Piccolo
         }
 
         RHIShader* vert_shader_module =
-            m_rhi->createShaderModule(MESH_POINT_LIGHT_SHADOW_VERT);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_POINT_LIGHT_SHADOW_VERT));
         RHIShader* geom_shader_module =
-            m_rhi->createShaderModule(MESH_POINT_LIGHT_SHADOW_GEOM);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_POINT_LIGHT_SHADOW_GEOM));
         RHIShader* frag_shader_module =
-            m_rhi->createShaderModule(MESH_POINT_LIGHT_SHADOW_FRAG);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_POINT_LIGHT_SHADOW_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -293,9 +289,9 @@ namespace Piccolo
         RHIPipelineViewportStateCreateInfo viewport_state_create_info {};
         viewport_state_create_info.sType         = RHI_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewport_state_create_info.viewportCount = 1;
-        viewport_state_create_info.pViewports    = m_rhi->getSwapchainInfo().viewport;
+        viewport_state_create_info.pViewports    = &viewport;
         viewport_state_create_info.scissorCount  = 1;
-        viewport_state_create_info.pScissors     = m_rhi->getSwapchainInfo().scissor;
+        viewport_state_create_info.pScissors     = &scissor;
 
         RHIPipelineRasterizationStateCreateInfo rasterization_state_create_info {};
         rasterization_state_create_info.sType                   = RHI_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -476,7 +472,7 @@ namespace Piccolo
             uint32_t         joint_count {0};
         };
 
-        std::map<VulkanPBRMaterial*, std::map<VulkanMesh*, std::vector<MeshNode>>> point_lights_mesh_drawcall_batch;
+        std::map<RenderPBRMaterialGPUResource*, std::map<RenderMeshGPUResource*, std::vector<MeshNode>>> point_lights_mesh_drawcall_batch;
 
         // reorganize mesh
         for (RenderMeshNode& node : *(m_visiable_nodes.p_point_lights_visible_mesh_nodes))
@@ -540,14 +536,14 @@ namespace Piccolo
 
             for (auto& pair1 : point_lights_mesh_drawcall_batch)
             {
-                VulkanPBRMaterial& material       = (*pair1.first);
+                RenderPBRMaterialGPUResource& material       = (*pair1.first);
                 auto&              mesh_instanced = pair1.second;
 
                 // TODO: render from near to far
 
                 for (auto& pair2 : mesh_instanced)
                 {
-                    VulkanMesh& mesh       = (*pair2.first);
+                    RenderMeshGPUResource& mesh       = (*pair2.first);
                     auto&       mesh_nodes = pair2.second;
 
                     uint32_t total_instance_count = static_cast<uint32_t>(mesh_nodes.size());

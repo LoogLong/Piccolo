@@ -20,6 +20,8 @@ namespace Piccolo
         RHIBuffer* m_position_host_buffer = nullptr;
         RHIBuffer* m_counter_device_buffer = nullptr;
         RHIBuffer* m_counter_host_buffer = nullptr;
+        RHIBuffer* m_counter_readback_buffer = nullptr;
+        std::vector<RHIBuffer*> m_counter_readback_buffers;
         RHIBuffer* m_indirect_dispatch_argument_buffer = nullptr;
         RHIBuffer* m_alive_list_buffer = nullptr;
         RHIBuffer* m_alive_list_next_buffer = nullptr;
@@ -27,6 +29,8 @@ namespace Piccolo
         RHIBuffer* m_particle_component_res_buffer = nullptr;
 
         RHIDeviceMemory* m_counter_host_memory = nullptr;
+        RHIDeviceMemory* m_counter_readback_memory = nullptr;
+        std::vector<RHIDeviceMemory*> m_counter_readback_memories;
         RHIDeviceMemory* m_position_host_memory = nullptr;
         RHIDeviceMemory* m_position_device_memory = nullptr;
         RHIDeviceMemory* m_counter_device_memory = nullptr;
@@ -103,7 +107,8 @@ namespace Piccolo
 
         RHICommandBuffer* m_compute_command_buffer = nullptr;
         RHICommandBuffer* m_render_command_buffer = nullptr;
-        RHICommandBuffer* m_copy_command_buffer = nullptr;
+        std::vector<RHICommandBuffer*> m_compute_command_buffers;
+        std::vector<RHICommandBuffer*> m_copy_command_buffers;
 
         RHIBuffer* m_scene_uniform_buffer = nullptr;
         RHIBuffer* m_compute_uniform_buffer = nullptr;
@@ -112,6 +117,9 @@ namespace Piccolo
         RHIViewport m_viewport_params;
 
         RHIFence* m_fence = nullptr;
+        std::vector<RHIFence*> m_compute_fences;
+        std::vector<bool> m_compute_readback_pending;
+        std::vector<std::vector<ParticleEmitterID>> m_compute_readback_emitters;
 
         RHIImage*        m_src_depth_image = nullptr;
         RHIImage*        m_dst_normal_image = nullptr;
@@ -127,11 +135,11 @@ namespace Piccolo
          */
         RHIImage*       m_particle_billboard_texture_image = nullptr;
         RHIImageView*   m_particle_billboard_texture_image_view = nullptr;
-        VmaAllocation m_particle_billboard_texture_vma_allocation;
+        RHIAllocation* m_particle_billboard_texture_allocation = nullptr;
 
         RHIImage*       m_piccolo_logo_texture_image = nullptr;
         RHIImageView*   m_piccolo_logo_texture_image_view = nullptr;
-        VmaAllocation m_piccolo_logo_texture_vma_allocation;
+        RHIAllocation* m_piccolo_logo_texture_allocation = nullptr;
 
         RHIRenderPass* m_render_pass = nullptr;
 

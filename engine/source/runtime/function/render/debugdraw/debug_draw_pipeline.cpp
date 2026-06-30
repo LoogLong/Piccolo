@@ -1,7 +1,7 @@
 #include "debug_draw_pipeline.h"
+#include "runtime/function/render/render_shader_bytecode.h"
+
 #include <fstream>
-#include <debugdraw_vert.h>
-#include <debugdraw_frag.h>
 #include "runtime/function/global/global_context.h"
 #include "runtime/function/render/render_system.h"
 namespace Piccolo
@@ -18,10 +18,12 @@ namespace Piccolo
     
     void DebugDrawPipeline::recreateAfterSwapchain()
     {
-        for (auto framebuffer : m_framebuffer.framebuffers)
+        for (auto& framebuffer : m_framebuffer.framebuffers)
         {
             m_rhi->destroyFramebuffer(framebuffer);
+            framebuffer = nullptr;
         }
+        m_framebuffer.framebuffers.clear();
 
         setupFramebuffer();
     }
@@ -164,8 +166,10 @@ namespace Piccolo
             throw std::runtime_error("create mesh inefficient pick pipeline layout");
         }
 
-        RHIShader* vert_shader_module = m_rhi->createShaderModule(DEBUGDRAW_VERT);
-        RHIShader* frag_shader_module = m_rhi->createShaderModule(DEBUGDRAW_FRAG);
+        RHIShader* vert_shader_module =
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEBUGDRAW_VERT));
+        RHIShader* frag_shader_module =
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEBUGDRAW_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info{};
         vert_pipeline_shader_stage_create_info.sType = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

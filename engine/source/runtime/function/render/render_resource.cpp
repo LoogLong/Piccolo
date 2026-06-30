@@ -4,17 +4,40 @@
 #include "runtime/function/render/render_helper.h"
 
 #include "runtime/function/render/render_mesh.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
+#include "runtime/function/render/render_scene.h"
 
 #include "runtime/function/render/passes/main_camera_pass.h"
 
 #include "runtime/core/base/macro.h"
 
 #include <stdexcept>
+#include <cstring>
 
 namespace Piccolo
 {
+    namespace
+    {
+        bool supportsD3D12PathTracingMeshInputs(const std::shared_ptr<RHI>& rhi, bool static_geometry)
+        {
+            return static_geometry &&
+                   rhi != nullptr &&
+                   rhi->getBackendType() == RHIBackendType::D3D12 &&
+                   rhi->getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Supported;
+        }
+
+        RHIBufferUsageFlags withPathTracingBuildInputUsage(RHIBufferUsageFlags usage,
+                                                           const std::shared_ptr<RHI>& rhi,
+                                                           bool static_geometry)
+        {
+            if (supportsD3D12PathTracingMeshInputs(rhi, static_geometry))
+            {
+                usage |= RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                         RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            }
+            return usage;
+        }
+    } // namespace
+
     void RenderResource::clear()
     {
     }
@@ -93,29 +116,32 @@ namespace Piccolo
         RenderMeshData       mesh_data,
         RenderMaterialData   material_data)
     {
-        getOrCreateVulkanMesh(rhi, render_entity, mesh_data);
-        getOrCreateVulkanMaterial(rhi, render_entity, material_data);
+        getOrCreateMesh(rhi, render_entity, mesh_data);
+        getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
         RenderEntity         render_entity,
         RenderMeshData       mesh_data)
     {
-        getOrCreateVulkanMesh(rhi, render_entity, mesh_data);
+        getOrCreateMesh(rhi, render_entity, mesh_data);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
         RenderEntity         render_entity,
         RenderMaterialData   material_data)
     {
-        getOrCreateVulkanMaterial(rhi, render_entity, material_data);
+        getOrCreateMaterial(rhi, render_entity, material_data);
     }
 
-    void RenderResource::updatePerFrameBuffer(std::shared_ptr<RenderScene>  render_scene,
+    void RenderResource::updatePerFrameBuffer(std::shared_ptr<RHI>          rhi,
+        std::shared_ptr<RenderScene>  render_scene,
         std::shared_ptr<RenderCamera> camera)
     {
+        m_current_render_scene = render_scene;
+
         Matrix4x4 view_matrix = camera->getViewMatrix();
-        Matrix4x4 proj_matrix = camera->getPersProjMatrix();
+        Matrix4x4 proj_matrix = camera->getPersProjMatrix(rhi->getBackendType() == RHIBackendType::Vulkan);
         Vector3   camera_position = camera->position();
         Matrix4x4 proj_view_matrix = proj_matrix * view_matrix;
 
@@ -129,6 +155,7 @@ namespace Piccolo
         m_particle_collision_perframe_storage_buffer_object.proj_inv_matrix  = proj_matrix.inverse();
 
         m_mesh_perframe_storage_buffer_object.proj_view_matrix = proj_view_matrix;
+        m_mesh_perframe_storage_buffer_object.proj_view_matrix_inv = proj_view_matrix.inverse();
         m_mesh_perframe_storage_buffer_object.camera_position = camera_position;
         m_mesh_perframe_storage_buffer_object.ambient_light = ambient_light;
         m_mesh_perframe_storage_buffer_object.point_light_num = point_light_num;
@@ -166,10 +193,452 @@ namespace Piccolo
         m_particlebillboard_perframe_storage_buffer_object.up_direction     = camera->up();
     }
 
+    void RenderResource::ensurePathTracingBLAS(std::shared_ptr<RHI> rhi,
+                                               RHICommandBuffer* command_buffer,
+                                               RenderMeshGPUResource& mesh)
+    {
+        if (rhi == nullptr ||
+            rhi->getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Unsupported)
+        {
+            return;
+        }
+
+        if (command_buffer == nullptr)
+        {
+            LOG_WARN("Path tracing BLAS build skipped because command buffer is null");
+            return;
+        }
+
+        if (!mesh.path_tracing_blas_dirty && mesh.path_tracing_bottom_level_as != nullptr)
+        {
+            return;
+        }
+
+        if (mesh.mesh_vertex_position_buffer == nullptr ||
+            mesh.mesh_vertex_count == 0 ||
+            mesh.mesh_index_buffer == nullptr ||
+            mesh.mesh_index_count == 0)
+        {
+            LOG_WARN("Path tracing BLAS build skipped because mesh buffers are incomplete");
+            return;
+        }
+
+        if (mesh.path_tracing_bottom_level_as != nullptr)
+        {
+            rhi->destroyAccelerationStructure(mesh.path_tracing_bottom_level_as);
+            mesh.path_tracing_bottom_level_as = nullptr;
+        }
+
+        RHIAccelerationStructureGeometryDesc geometry;
+        geometry.vertex_position_buffer = mesh.mesh_vertex_position_buffer;
+        geometry.vertex_position_offset = 0;
+        geometry.vertex_count           = mesh.mesh_vertex_count;
+        geometry.vertex_stride          = sizeof(MeshVertex::VertexPosition);
+        geometry.index_buffer           = mesh.mesh_index_buffer;
+        geometry.index_offset           = 0;
+        geometry.index_count            = mesh.mesh_index_count;
+        geometry.index_type             = mesh.mesh_index_type;
+        geometry.opaque                 = true;
+
+        RHIAccelerationStructureBuildDesc build_desc;
+        build_desc.type              = RHIAccelerationStructureType::BottomLevel;
+        build_desc.geometries        = &geometry;
+        build_desc.geometry_count    = 1;
+        build_desc.prefer_fast_trace = true;
+        build_desc.allow_update      = false;
+        build_desc.perform_update    = false;
+        build_desc.source            = nullptr;
+
+        RHIAccelerationStructure* new_bottom_level_as = nullptr;
+        if (!rhi->createAccelerationStructure(&build_desc, new_bottom_level_as) ||
+            new_bottom_level_as == nullptr)
+        {
+            LOG_WARN("Path tracing BLAS creation failed");
+            return;
+        }
+
+        if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, new_bottom_level_as))
+        {
+            LOG_WARN("Path tracing BLAS build failed");
+            rhi->destroyAccelerationStructure(new_bottom_level_as);
+            return;
+        }
+
+        mesh.path_tracing_bottom_level_as = new_bottom_level_as;
+        mesh.path_tracing_blas_dirty      = false;
+    }
+
+    RHIAccelerationStructure* RenderResource::buildPathTracingBLASFromSkinned(
+        std::shared_ptr<RHI> rhi,
+        RHICommandBuffer* command_buffer,
+        RHIBuffer* skinned_position_buffer,
+        uint32_t vertex_count,
+        uint32_t vertex_stride,
+        RHIBuffer* index_buffer,
+        uint32_t index_count,
+        RHIIndexType index_type,
+        RHIAccelerationStructure* source_blas)
+    {
+        if (skinned_position_buffer == nullptr || vertex_count == 0) return nullptr;
+
+        RHIAccelerationStructureGeometryDesc geometry;
+        geometry.vertex_position_buffer = skinned_position_buffer;
+        geometry.vertex_position_offset = 0;
+        geometry.vertex_count           = vertex_count;
+        geometry.vertex_stride          = vertex_stride;
+        geometry.index_buffer           = index_buffer;
+        geometry.index_offset           = 0;
+        geometry.index_count            = index_count;
+        geometry.index_type             = index_type;
+        geometry.opaque                 = true;
+
+        const bool is_update = (source_blas != nullptr);
+
+        RHIAccelerationStructureBuildDesc build_desc;
+        build_desc.type              = RHIAccelerationStructureType::BottomLevel;
+        build_desc.geometries        = &geometry;
+        build_desc.geometry_count    = 1;
+        build_desc.prefer_fast_trace = true;
+        build_desc.allow_update      = !is_update;  // first create: allow update; update: reuse existing
+        build_desc.perform_update    = is_update;   // subsequent frames: update in-place
+        build_desc.source            = is_update ? source_blas : nullptr;
+
+        RHIAccelerationStructure* blas = nullptr;
+        if (is_update)
+        {
+            // Update in-place: use existing BLAS, no createAccelerationStructure needed
+            blas = source_blas;
+        }
+        else
+        {
+            if (!rhi->createAccelerationStructure(&build_desc, blas) || blas == nullptr)
+            {
+                return nullptr;
+            }
+        }
+
+        if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, blas))
+        {
+            if (!is_update)
+                rhi->destroyAccelerationStructure(blas);
+            return nullptr;
+        }
+
+        return blas;
+    }
+
+    std::vector<RenderPathTracingCollectedInstance> RenderResource::collectPathTracingInstances(RenderScene& scene)
+    {
+        scene.rebuildPathTracingInstances(*this, true);
+
+        std::vector<RenderPathTracingCollectedInstance> collected_instances;
+        collected_instances.reserve(scene.m_path_tracing_instances.size());
+
+        for (RenderPathTracingInstance& source_instance : scene.m_path_tracing_instances)
+        {
+            if (!source_instance.enabled ||
+                source_instance.entity == nullptr ||
+                source_instance.mesh == nullptr ||
+                source_instance.material == nullptr)
+            {
+                continue;
+            }
+
+            RenderPathTracingCollectedInstance collected_instance;
+            collected_instance.bottom_level_as = source_instance.mesh->path_tracing_bottom_level_as;
+            collected_instance.instance_id     = source_instance.instance_id;
+            collected_instance.material_index  = source_instance.material_index;
+            collected_instance.mesh            = source_instance.mesh;
+            collected_instance.material        = source_instance.material;
+            collected_instance.entity          = source_instance.entity;
+
+            const Matrix4x4& transform = source_instance.entity->m_model_matrix;
+            for (uint32_t row = 0; row < 3; ++row)
+            {
+                for (uint32_t column = 0; column < 4; ++column)
+                {
+                    collected_instance.row_major_3x4_transform[row * 4 + column] = transform[row][column];
+                }
+            }
+
+            // Skinning data
+            collected_instance.enable_vertex_blending = source_instance.enable_vertex_blending;
+            if (source_instance.enable_vertex_blending && source_instance.entity != nullptr)
+            {
+                collected_instance.joint_count    = static_cast<uint32_t>(source_instance.entity->m_joint_matrices.size());
+                collected_instance.joint_matrices = source_instance.entity->m_joint_matrices.data();
+            }
+
+            collected_instances.push_back(collected_instance);
+        }
+
+        return collected_instances;
+    }
+
+    std::shared_ptr<RenderScene> RenderResource::getCurrentRenderScene() const
+    {
+        return m_current_render_scene.lock();
+    }
+
+    bool RenderResource::updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
+                                                       const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
+                                                       bool full_rebuild)
+    {
+        m_path_tracing_vertex_data.clear();
+        m_path_tracing_index_data.clear();
+        m_path_tracing_material_data.clear();
+        m_path_tracing_geometry_data.clear();
+        m_path_tracing_instance_data.clear();
+        m_path_tracing_material_texture_views.clear();
+
+        std::map<RenderMeshGPUResource*, uint32_t> geometry_indices;
+
+        for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
+        {
+            const RenderPathTracingCollectedInstance& source_instance = collected_instances[instance_index];
+
+            // Build geometry record
+            uint32_t geometry_index = 0;
+            const bool is_skinned = source_instance.enable_vertex_blending;
+
+            // Skinned meshes: each instance gets unique geometry (no dedup).
+            // Static meshes: dedup by mesh pointer (existing behavior).
+            if (!is_skinned)
+            {
+                auto geometry_it = geometry_indices.find(source_instance.mesh);
+                if (geometry_it != geometry_indices.end())
+                {
+                    geometry_index = geometry_it->second;
+                    // Build material/instance records below (existing path)
+                    // skip vertex/index append for dedup'd static meshes
+                }
+                else
+                {
+                    geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
+                    geometry_indices[source_instance.mesh] = geometry_index;
+
+                    RenderPathTracingGeometryGPUData geometry_data{};
+                    geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
+                    geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                    geometry_data.index_count = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+
+                    // Static mesh: copy rest-pose vertex data
+                    if (full_rebuild)
+                    {
+                        for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
+                        {
+                            RenderPathTracingVertexGPUData vertex{};
+                            vertex.position = Vector4(source_instance.mesh->path_tracing_positions[v], 1.0f);
+                            vertex.normal = Vector4(source_instance.mesh->path_tracing_normals[v], 0.0f);
+                            vertex.tangent = Vector4(source_instance.mesh->path_tracing_tangents[v], 0.0f);
+                            vertex.texcoord = Vector4(source_instance.mesh->path_tracing_texcoords[v].x,
+                                                      source_instance.mesh->path_tracing_texcoords[v].y,
+                                                      0.0f, 0.0f);
+                            m_path_tracing_vertex_data.push_back(vertex);
+                        }
+                    }
+
+                    // Append indices
+                    if (full_rebuild)
+                    {
+                        for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                            m_path_tracing_index_data.push_back(idx);
+                    }
+                    m_path_tracing_geometry_data.push_back(geometry_data);
+                }
+            }
+            else
+            {
+                // Skinned mesh: each instance gets its own geometry.
+                // vertex_offset = offset into g_skinned_vertices, looked up from GpuSkinningPass output.
+                // No placeholder vertices pushed to g_vertices — skinned instances read from
+                // the separate g_skinned_vertices buffer.
+                geometry_index = static_cast<uint32_t>(m_path_tracing_geometry_data.size());
+
+                // Look up skinned vertex offset from GpuSkinningPass output
+                uint32_t skinned_vertex_offset = 0;
+                auto& outputs = source_instance.mesh->skinned_mesh_outputs;
+                auto it = outputs.find(source_instance.instance_id);
+                if (it != outputs.end())
+                {
+                    skinned_vertex_offset = it->second.skinned_vertex_offset;
+                }
+
+                RenderPathTracingGeometryGPUData geometry_data{};
+                geometry_data.vertex_offset = skinned_vertex_offset;  // offset into g_skinned_vertices (Bug B2 fix)
+                geometry_data.index_offset  = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                geometry_data.index_count   = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+
+                // NO placeholder push to m_path_tracing_vertex_data
+
+                // Append indices
+                if (full_rebuild)
+                {
+                    for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                        m_path_tracing_index_data.push_back(idx);
+                }
+                m_path_tracing_geometry_data.push_back(geometry_data);
+            }
+
+            // Build material record
+            RenderPathTracingMaterialGPUData material_data{};
+            if (source_instance.entity != nullptr)
+            {
+                material_data.base_color_factor = source_instance.entity->m_base_color_factor;
+                material_data.emissive_factor = Vector4(source_instance.entity->m_emissive_factor, 0.0f);
+                material_data.metallic_roughness_normal_occlusion = Vector4(
+                    source_instance.entity->m_metallic_factor,
+                    source_instance.entity->m_roughness_factor,
+                    source_instance.entity->m_normal_scale,
+                    source_instance.entity->m_occlusion_strength
+                );
+                material_data.flags = source_instance.entity->m_double_sided ? kPathTracingMaterialFlagDoubleSided : 0u;
+            }
+            const uint32_t shader_material_index = static_cast<uint32_t>(m_path_tracing_material_data.size());
+            m_path_tracing_material_data.push_back(material_data);
+
+            // Build texture views record
+            RenderPathTracingMaterialTextureViews texture_views{};
+            if (source_instance.material != nullptr)
+            {
+                texture_views.base_color_image_view = source_instance.material->base_color_image_view;
+                texture_views.metallic_roughness_image_view = source_instance.material->metallic_roughness_image_view;
+                texture_views.normal_image_view = source_instance.material->normal_image_view;
+                texture_views.emissive_image_view = source_instance.material->emissive_image_view;
+            }
+            m_path_tracing_material_texture_views.push_back(texture_views);
+
+            // Update material texture indices (each material has 4 textures: base_color=0, metallic_roughness=1, normal=2, emissive=3)
+            const uint32_t texture_base = shader_material_index * 4u;
+            const bool     fits_in_array = (texture_base + 3u) < 1024u;
+            m_path_tracing_material_data[shader_material_index].base_color_texture_index =
+                fits_in_array ? texture_base + 0u : UINT32_MAX;
+            m_path_tracing_material_data[shader_material_index].metallic_roughness_texture_index =
+                fits_in_array ? texture_base + 1u : UINT32_MAX;
+            m_path_tracing_material_data[shader_material_index].normal_texture_index =
+                fits_in_array ? texture_base + 2u : UINT32_MAX;
+            m_path_tracing_material_data[shader_material_index].emissive_texture_index =
+                fits_in_array ? texture_base + 3u : UINT32_MAX;
+
+            // Build instance record
+            RenderPathTracingInstanceGPUData instance_data{};
+            instance_data.geometry_index = geometry_index;
+            instance_data.material_index = shader_material_index;
+            instance_data.entity_instance_id = source_instance.instance_id;
+            instance_data.flags = is_skinned ? 1u : 0u;  // bit 0: enable_vertex_blending
+            m_path_tracing_instance_data.push_back(instance_data);
+        }
+
+        // Upload buffers to GPU
+        const RHIBufferUsageFlags usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        const RHIMemoryPropertyFlags memory_properties = RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                         RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+        // Helper lambda to allocate or update a buffer
+        auto update_buffer = [rhi, usage, memory_properties](
+            RHIBuffer*& buffer,
+            RHIDeviceMemory*& buffer_memory,
+            size_t& capacity,
+            const void* data,
+            size_t data_size) -> bool
+        {
+            if (data_size == 0)
+            {
+                return true;
+            }
+
+            if (data_size > capacity)
+            {
+                // Destroy old buffer and memory
+                if (buffer != nullptr)
+                {
+                    rhi->destroyBuffer(buffer);
+                    buffer = nullptr;
+                }
+                if (buffer_memory != nullptr)
+                {
+                    rhi->freeMemory(buffer_memory);
+                    buffer_memory = nullptr;
+                }
+
+                capacity = data_size * 2; // Allocate with 2x padding for future growth
+
+                rhi->createBuffer(static_cast<RHIDeviceSize>(capacity), usage, memory_properties, buffer, buffer_memory);
+                if (buffer == nullptr || buffer_memory == nullptr)
+                {
+                    LOG_ERROR("Failed to create path tracing buffer");
+                    return false;
+                }
+            }
+
+            // Map and copy data
+            void* mapped_ptr = nullptr;
+            if (!rhi->mapMemory(buffer_memory, 0, data_size, 0, &mapped_ptr))
+            {
+                LOG_ERROR("Failed to map path tracing buffer memory");
+                return false;
+            }
+
+            std::memcpy(mapped_ptr, data, data_size);
+            rhi->unmapMemory(buffer_memory);
+
+            return true;
+        };
+
+        // Update buffers — skip vertex/index/material when only transforms changed
+        if (full_rebuild)
+        {
+            if (!update_buffer(m_path_tracing_vertex_buffer,
+                              m_path_tracing_vertex_buffer_memory,
+                              m_path_tracing_vertex_buffer_capacity,
+                              m_path_tracing_vertex_data.data(),
+                              m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData)))
+            {
+                return false;
+            }
+
+            if (!update_buffer(m_path_tracing_index_buffer,
+                              m_path_tracing_index_buffer_memory,
+                              m_path_tracing_index_buffer_capacity,
+                              m_path_tracing_index_data.data(),
+                              m_path_tracing_index_data.size() * sizeof(uint32_t)))
+            {
+                return false;
+            }
+
+            if (!update_buffer(m_path_tracing_material_buffer,
+                              m_path_tracing_material_buffer_memory,
+                              m_path_tracing_material_buffer_capacity,
+                              m_path_tracing_material_data.data(),
+                              m_path_tracing_material_data.size() * sizeof(RenderPathTracingMaterialGPUData)))
+            {
+                return false;
+            }
+        }
+
+        if (!update_buffer(m_path_tracing_geometry_buffer,
+                          m_path_tracing_geometry_buffer_memory,
+                          m_path_tracing_geometry_buffer_capacity,
+                          m_path_tracing_geometry_data.data(),
+                          m_path_tracing_geometry_data.size() * sizeof(RenderPathTracingGeometryGPUData)))
+        {
+            return false;
+        }
+
+        if (!update_buffer(m_path_tracing_instance_buffer,
+                          m_path_tracing_instance_buffer_memory,
+                          m_path_tracing_instance_buffer_capacity,
+                          m_path_tracing_instance_data.data(),
+                          m_path_tracing_instance_data.size() * sizeof(RenderPathTracingInstanceGPUData)))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     void RenderResource::createIBLSamplers(std::shared_ptr<RHI> rhi)
     {
-        VulkanRHI* raw_rhi = static_cast<VulkanRHI*>(rhi.get());
-
         RHIPhysicalDeviceProperties physical_device_properties{};
         rhi->getPhysicalDeviceProperties(&physical_device_properties);
 
@@ -196,7 +665,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._brdfLUT_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create BRDF LUT sampler");
         }
 
         samplerInfo.minLod = 0.0f;
@@ -210,7 +679,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._irradiance_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create irradiance texture sampler");
         }
 
         if (m_global_render_resource._ibl_resource._specular_texture_sampler != RHI_NULL_HANDLE)
@@ -220,7 +689,7 @@ namespace Piccolo
 
         if (rhi->createSampler(&samplerInfo, m_global_render_resource._ibl_resource._specular_texture_sampler) != RHI_SUCCESS)
         {
-            throw std::runtime_error("vk create sampler");
+            throw std::runtime_error("create specular texture sampler");
         }
     }
 
@@ -268,20 +737,20 @@ namespace Piccolo
             specular_cubemap_miplevels);
     }
 
-    VulkanMesh&
-        RenderResource::getOrCreateVulkanMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data)
+    RenderMeshGPUResource&
+        RenderResource::getOrCreateMesh(std::shared_ptr<RHI> rhi, RenderEntity entity, RenderMeshData mesh_data)
     {
         size_t assetid = entity.m_mesh_asset_id;
 
-        auto it = m_vulkan_meshes.find(assetid);
-        if (it != m_vulkan_meshes.end())
+        auto it = m_meshes.find(assetid);
+        if (it != m_meshes.end())
         {
             return it->second;
         }
         else
         {
-            VulkanMesh temp;
-            auto       res = m_vulkan_meshes.insert(std::make_pair(assetid, std::move(temp)));
+            RenderMeshGPUResource temp;
+            auto       res = m_meshes.insert(std::make_pair(assetid, std::move(temp)));
             assert(res.second);
 
             uint32_t index_buffer_size = static_cast<uint32_t>(mesh_data.m_static_mesh_data.m_index_buffer->m_size);
@@ -291,7 +760,7 @@ namespace Piccolo
             MeshVertexDataDefinition* vertex_buffer_data =
                 reinterpret_cast<MeshVertexDataDefinition*>(mesh_data.m_static_mesh_data.m_vertex_buffer->m_data);
 
-            VulkanMesh& now_mesh = res.first->second;
+            RenderMeshGPUResource& now_mesh = res.first->second;
 
             if (mesh_data.m_skeleton_binding_buffer)
             {
@@ -325,23 +794,21 @@ namespace Piccolo
         }
     }
 
-    VulkanPBRMaterial& RenderResource::getOrCreateVulkanMaterial(std::shared_ptr<RHI> rhi,
+    RenderPBRMaterialGPUResource& RenderResource::getOrCreateMaterial(std::shared_ptr<RHI> rhi,
         RenderEntity         entity,
         RenderMaterialData   material_data)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
-
         size_t assetid = entity.m_material_asset_id;
 
-        auto it = m_vulkan_pbr_materials.find(assetid);
-        if (it != m_vulkan_pbr_materials.end())
+        auto it = m_pbr_materials.find(assetid);
+        if (it != m_pbr_materials.end())
         {
             return it->second;
         }
         else
         {
-            VulkanPBRMaterial temp;
-            auto              res = m_vulkan_pbr_materials.insert(std::make_pair(assetid, std::move(temp)));
+            RenderPBRMaterialGPUResource temp;
+            auto              res = m_pbr_materials.insert(std::make_pair(assetid, std::move(temp)));
             assert(res.second);
 
             float empty_image[] = { 0.5f, 0.5f, 0.5f, 0.5f };
@@ -406,7 +873,7 @@ namespace Piccolo
                 emissive_image_format = material_data.m_emissive_texture->m_format;
             }
 
-            VulkanPBRMaterial& now_material = res.first->second;
+            RenderPBRMaterialGPUResource& now_material = res.first->second;
 
             // similiarly to the vertex/index buffer, we should allocate the uniform
             // buffer in DEVICE_LOCAL memory and use the temp stage buffer to copy the
@@ -448,22 +915,17 @@ namespace Piccolo
 
                 rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-                // use the vmaAllocator to allocate asset uniform buffer
+                // allocate asset uniform buffer in device local memory
                 RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
                 bufferInfo.size = buffer_size;
                 bufferInfo.usage = RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-                VmaAllocationCreateInfo allocInfo = {};
-                allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-                rhi->createBufferWithAlignmentVMA(
-                    vulkan_context->m_assets_allocator,
+                rhi->createBufferWithAlignment(
                     &bufferInfo,
-                    &allocInfo,
+                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                     m_global_render_resource._storage_buffer._min_uniform_buffer_offset_alignment,
                     now_material.material_uniform_buffer,
-                    &now_material.material_uniform_buffer_allocation,
-                    NULL);
+                    now_material.material_uniform_buffer_allocation);
 
                 // use the data from staging buffer
                 rhi->copyBuffer(inefficient_staging_buffer, now_material.material_uniform_buffer, 0, 0, buffer_size);
@@ -501,7 +963,7 @@ namespace Piccolo
             RHIDescriptorSetAllocateInfo material_descriptor_set_alloc_info;
             material_descriptor_set_alloc_info.sType = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             material_descriptor_set_alloc_info.pNext = NULL;
-            material_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            material_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             material_descriptor_set_alloc_info.descriptorSetCount = 1;
             material_descriptor_set_alloc_info.pSetLayouts        = m_material_descriptor_set_layout;
 
@@ -595,11 +1057,13 @@ namespace Piccolo
                                         MeshVertexDataDefinition const*        vertex_buffer_data,
                                         uint32_t                               joint_binding_buffer_size,
                                         MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
-                                        VulkanMesh&                            now_mesh)
+                                        RenderMeshGPUResource&                            now_mesh)
     {
         now_mesh.enable_vertex_blending = enable_vertex_blending;
         assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
         now_mesh.mesh_vertex_count = vertex_buffer_size / sizeof(MeshVertexDataDefinition);
+        now_mesh.path_tracing_static_opaque_supported = !enable_vertex_blending;
+        now_mesh.path_tracing_blas_dirty              = true;
         updateVertexBuffer(rhi,
                            enable_vertex_blending,
                            vertex_buffer_size,
@@ -611,6 +1075,7 @@ namespace Piccolo
                            now_mesh);
         assert(0 == (index_buffer_size % sizeof(uint16_t)));
         now_mesh.mesh_index_count = index_buffer_size / sizeof(uint16_t);
+        now_mesh.mesh_index_type  = RHI_INDEX_TYPE_UINT16;
         updateIndexBuffer(rhi, index_buffer_size, index_buffer_data, now_mesh);
     }
 
@@ -622,10 +1087,8 @@ namespace Piccolo
                                             MeshVertexBindingDataDefinition const* joint_binding_buffer_data,
                                             uint32_t                               index_buffer_size,
                                             uint16_t*                              index_buffer_data,
-                                            VulkanMesh&                            now_mesh)
+                                            RenderMeshGPUResource&                            now_mesh)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
-
         if (enable_vertex_blending)
         {
             assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
@@ -633,12 +1096,12 @@ namespace Piccolo
             assert(0 == (index_buffer_size % sizeof(uint16_t)));
             uint32_t index_count = index_buffer_size / sizeof(uint16_t);
 
-            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VulkanMeshVertexPostition) * vertex_count;
+            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VertexPosition) * vertex_count;
             RHIDeviceSize vertex_varying_enable_blending_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexVaryingEnableBlending) * vertex_count;
-            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VulkanMeshVertexVarying) * vertex_count;
+                sizeof(MeshVertex::VertexVaryingEnableBlending) * vertex_count;
+            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VertexVarying) * vertex_count;
             RHIDeviceSize vertex_joint_binding_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexJointBinding) * index_count;
+                sizeof(MeshVertex::VertexJointBinding) * index_count;
 
             RHIDeviceSize vertex_position_buffer_offset = 0;
             RHIDeviceSize vertex_varying_enable_blending_buffer_offset =
@@ -666,18 +1129,18 @@ namespace Piccolo
                            0,
                            &inefficient_staging_buffer_data);
 
-            MeshVertex::VulkanMeshVertexPostition* mesh_vertex_positions =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexPostition*>(
+            MeshVertex::VertexPosition* mesh_vertex_positions =
+                reinterpret_cast<MeshVertex::VertexPosition*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_position_buffer_offset);
-            MeshVertex::VulkanMeshVertexVaryingEnableBlending* mesh_vertex_blending_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVaryingEnableBlending*>(
+            MeshVertex::VertexVaryingEnableBlending* mesh_vertex_blending_varyings =
+                reinterpret_cast<MeshVertex::VertexVaryingEnableBlending*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) +
                     vertex_varying_enable_blending_buffer_offset);
-            MeshVertex::VulkanMeshVertexVarying* mesh_vertex_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVarying*>(
+            MeshVertex::VertexVarying* mesh_vertex_varyings =
+                reinterpret_cast<MeshVertex::VertexVarying*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_varying_buffer_offset);
-            MeshVertex::VulkanMeshVertexJointBinding* mesh_vertex_joint_binding =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexJointBinding*>(
+            MeshVertex::VertexJointBinding* mesh_vertex_joint_binding =
+                reinterpret_cast<MeshVertex::VertexJointBinding*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_joint_binding_buffer_offset);
 
             for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
@@ -699,6 +1162,25 @@ namespace Piccolo
                 mesh_vertex_varyings[vertex_index].texcoord =
                     Vector2(vertex_buffer_data[vertex_index].u, vertex_buffer_data[vertex_index].v);
             }
+
+            now_mesh.path_tracing_positions.resize(vertex_count);
+            now_mesh.path_tracing_normals.resize(vertex_count);
+            now_mesh.path_tracing_tangents.resize(vertex_count);
+            now_mesh.path_tracing_texcoords.resize(vertex_count);
+            for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+            {
+                now_mesh.path_tracing_positions[vertex_index] = mesh_vertex_positions[vertex_index].position;
+                now_mesh.path_tracing_normals[vertex_index]   = mesh_vertex_blending_varyings[vertex_index].normal;
+                now_mesh.path_tracing_tangents[vertex_index]  = mesh_vertex_blending_varyings[vertex_index].tangent;
+                now_mesh.path_tracing_texcoords[vertex_index] = mesh_vertex_varyings[vertex_index].texcoord;
+            }
+
+            now_mesh.path_tracing_indices.resize(index_count);
+            for (uint32_t index_index = 0; index_index < index_count; ++index_index)
+            {
+                now_mesh.path_tracing_indices[index_index] = static_cast<uint32_t>(index_buffer_data[index_index]);
+            }
+            now_mesh.path_tracing_geometry_dirty = true;
 
             for (uint32_t index_index = 0; index_index < index_count; ++index_index)
             {
@@ -727,43 +1209,36 @@ namespace Piccolo
 
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-            // use the vmaAllocator to allocate asset vertex buffer
+            // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 
-            VmaAllocationCreateInfo allocInfo = {};
-            allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-            bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+            const RHIBufferUsageFlags vertex_buffer_usage = withPathTracingBuildInputUsage(
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                rhi,
+                !enable_vertex_blending);
+            bufferInfo.usage = vertex_buffer_usage;
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_position_buffer,
-                                 &now_mesh.mesh_vertex_position_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_position_buffer,
+                                            now_mesh.mesh_vertex_position_buffer_allocation);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_enable_blending_buffer,
-                                 &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_buffer,
-                                 &now_mesh.mesh_vertex_varying_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_buffer,
+                                            now_mesh.mesh_vertex_varying_buffer_allocation);
 
             bufferInfo.usage = RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             bufferInfo.size = vertex_joint_binding_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_joint_binding_buffer,
-                                 &now_mesh.mesh_vertex_joint_binding_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_joint_binding_buffer,
+                                            now_mesh.mesh_vertex_joint_binding_buffer_allocation);
 
             // use the data from staging buffer
             rhi->copyBuffer(inefficient_staging_buffer,
@@ -796,7 +1271,7 @@ namespace Piccolo
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.sType =
                 RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pNext = NULL;
-            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pSetLayouts        = m_mesh_descriptor_set_layout;
 
@@ -842,10 +1317,10 @@ namespace Piccolo
             assert(0 == (vertex_buffer_size % sizeof(MeshVertexDataDefinition)));
             uint32_t vertex_count = vertex_buffer_size / sizeof(MeshVertexDataDefinition);
 
-            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VulkanMeshVertexPostition) * vertex_count;
+            RHIDeviceSize vertex_position_buffer_size = sizeof(MeshVertex::VertexPosition) * vertex_count;
             RHIDeviceSize vertex_varying_enable_blending_buffer_size =
-                sizeof(MeshVertex::VulkanMeshVertexVaryingEnableBlending) * vertex_count;
-            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VulkanMeshVertexVarying) * vertex_count;
+                sizeof(MeshVertex::VertexVaryingEnableBlending) * vertex_count;
+            RHIDeviceSize vertex_varying_buffer_size = sizeof(MeshVertex::VertexVarying) * vertex_count;
 
             RHIDeviceSize vertex_position_buffer_offset = 0;
             RHIDeviceSize vertex_varying_enable_blending_buffer_offset =
@@ -871,15 +1346,15 @@ namespace Piccolo
                            0,
                            &inefficient_staging_buffer_data);
 
-            MeshVertex::VulkanMeshVertexPostition* mesh_vertex_positions =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexPostition*>(
+            MeshVertex::VertexPosition* mesh_vertex_positions =
+                reinterpret_cast<MeshVertex::VertexPosition*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_position_buffer_offset);
-            MeshVertex::VulkanMeshVertexVaryingEnableBlending* mesh_vertex_blending_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVaryingEnableBlending*>(
+            MeshVertex::VertexVaryingEnableBlending* mesh_vertex_blending_varyings =
+                reinterpret_cast<MeshVertex::VertexVaryingEnableBlending*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) +
                     vertex_varying_enable_blending_buffer_offset);
-            MeshVertex::VulkanMeshVertexVarying* mesh_vertex_varyings =
-                reinterpret_cast<MeshVertex::VulkanMeshVertexVarying*>(
+            MeshVertex::VertexVarying* mesh_vertex_varyings =
+                reinterpret_cast<MeshVertex::VertexVarying*>(
                     reinterpret_cast<uintptr_t>(inefficient_staging_buffer_data) + vertex_varying_buffer_offset);
 
             for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
@@ -902,36 +1377,52 @@ namespace Piccolo
                     Vector2(vertex_buffer_data[vertex_index].u, vertex_buffer_data[vertex_index].v);
             }
 
+            now_mesh.path_tracing_positions.resize(vertex_count);
+            now_mesh.path_tracing_normals.resize(vertex_count);
+            now_mesh.path_tracing_tangents.resize(vertex_count);
+            now_mesh.path_tracing_texcoords.resize(vertex_count);
+            for (uint32_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+            {
+                now_mesh.path_tracing_positions[vertex_index] = mesh_vertex_positions[vertex_index].position;
+                now_mesh.path_tracing_normals[vertex_index]   = mesh_vertex_blending_varyings[vertex_index].normal;
+                now_mesh.path_tracing_tangents[vertex_index]  = mesh_vertex_blending_varyings[vertex_index].tangent;
+                now_mesh.path_tracing_texcoords[vertex_index] = mesh_vertex_varyings[vertex_index].texcoord;
+            }
+
+            assert(0 == (index_buffer_size % sizeof(uint16_t)));
+            const uint32_t index_count = index_buffer_size / sizeof(uint16_t);
+            now_mesh.path_tracing_indices.resize(index_count);
+            for (uint32_t index_index = 0; index_index < index_count; ++index_index)
+            {
+                now_mesh.path_tracing_indices[index_index] = static_cast<uint32_t>(index_buffer_data[index_index]);
+            }
+            now_mesh.path_tracing_geometry_dirty = true;
+
             rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-            // use the vmaAllocator to allocate asset vertex buffer
+            // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-            bufferInfo.usage = RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-            VmaAllocationCreateInfo allocInfo = {};
-            allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+            const RHIBufferUsageFlags vertex_buffer_usage = withPathTracingBuildInputUsage(
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                rhi,
+                !enable_vertex_blending);
+            bufferInfo.usage = vertex_buffer_usage;
 
             bufferInfo.size = vertex_position_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_position_buffer,
-                                 &now_mesh.mesh_vertex_position_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_position_buffer,
+                                            now_mesh.mesh_vertex_position_buffer_allocation);
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_enable_blending_buffer,
-                                 &now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer,
+                                            now_mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
             bufferInfo.size = vertex_varying_buffer_size;
-            rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                                 &bufferInfo,
-                                 &allocInfo,
-                                 now_mesh.mesh_vertex_varying_buffer,
-                                 &now_mesh.mesh_vertex_varying_buffer_allocation,
-                                 NULL);
+            rhi->createBufferWithAllocation(&bufferInfo,
+                                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                            now_mesh.mesh_vertex_varying_buffer,
+                                            now_mesh.mesh_vertex_varying_buffer_allocation);
 
             // use the data from staging buffer
             rhi->copyBuffer(inefficient_staging_buffer,
@@ -959,7 +1450,7 @@ namespace Piccolo
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.sType =
                 RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pNext = NULL;
-            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = vulkan_context->m_descriptor_pool;
+            mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
             mesh_vertex_blending_per_mesh_descriptor_set_alloc_info.pSetLayouts        = m_mesh_descriptor_set_layout;
 
@@ -1006,10 +1497,8 @@ namespace Piccolo
     void RenderResource::updateIndexBuffer(std::shared_ptr<RHI> rhi,
                                            uint32_t             index_buffer_size,
                                            void*                index_buffer_data,
-                                           VulkanMesh&          now_mesh)
+                                           RenderMeshGPUResource&          now_mesh)
     {
-        VulkanRHI* vulkan_context = static_cast<VulkanRHI*>(rhi.get());
-
         // temp staging buffer
         RHIDeviceSize buffer_size = index_buffer_size;
 
@@ -1026,20 +1515,18 @@ namespace Piccolo
         memcpy(staging_buffer_data, index_buffer_data, (size_t)buffer_size);
         rhi->unmapMemory(inefficient_staging_buffer_memory);
 
-        // use the vmaAllocator to allocate asset index buffer
+        // allocate asset index buffer in device local memory
         RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = buffer_size;
-        bufferInfo.usage = RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bufferInfo.usage = withPathTracingBuildInputUsage(
+            RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+            rhi,
+            now_mesh.path_tracing_static_opaque_supported);
 
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-        rhi->createBufferVMA(vulkan_context->m_assets_allocator,
-                             &bufferInfo,
-                             &allocInfo,
-                             now_mesh.mesh_index_buffer,
-                             &now_mesh.mesh_index_buffer_allocation,
-                             NULL);
+        rhi->createBufferWithAllocation(&bufferInfo,
+                                        RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                        now_mesh.mesh_index_buffer,
+                                        now_mesh.mesh_index_buffer_allocation);
 
         // use the data from staging buffer
         rhi->copyBuffer( inefficient_staging_buffer, now_mesh.mesh_index_buffer, 0, 0, buffer_size);
@@ -1047,6 +1534,16 @@ namespace Piccolo
         // release temp staging buffer
         rhi->destroyBuffer(inefficient_staging_buffer);
         rhi->freeMemory(inefficient_staging_buffer_memory);
+
+        assert(0 == (index_buffer_size % sizeof(uint16_t)));
+        const uint32_t index_count = index_buffer_size / sizeof(uint16_t);
+        now_mesh.path_tracing_indices.resize(index_count);
+        const uint16_t* source_indices = reinterpret_cast<const uint16_t*>(index_buffer_data);
+        for (uint32_t index_index = 0; index_index < index_count; ++index_index)
+        {
+            now_mesh.path_tracing_indices[index_index] = static_cast<uint32_t>(source_indices[index_index]);
+        }
+        now_mesh.path_tracing_geometry_dirty = true;
     }
 
     void RenderResource::updateTextureImageData(std::shared_ptr<RHI> rhi, const TextureDataToUpdate& texture_data)
@@ -1097,12 +1594,12 @@ namespace Piccolo
             texture_data.emissive_image_format);
     }
 
-    VulkanMesh& RenderResource::getEntityMesh(RenderEntity entity)
+    RenderMeshGPUResource& RenderResource::getEntityMesh(RenderEntity entity)
     {
         size_t assetid = entity.m_mesh_asset_id;
 
-        auto it = m_vulkan_meshes.find(assetid);
-        if (it != m_vulkan_meshes.end())
+        auto it = m_meshes.find(assetid);
+        if (it != m_meshes.end())
         {
             return it->second;
         }
@@ -1112,12 +1609,12 @@ namespace Piccolo
         }
     }
 
-    VulkanPBRMaterial& RenderResource::getEntityMaterial(RenderEntity entity)
+    RenderPBRMaterialGPUResource& RenderResource::getEntityMaterial(RenderEntity entity)
     {
         size_t assetid = entity.m_material_asset_id;
 
-        auto it = m_vulkan_pbr_materials.find(assetid);
-        if (it != m_vulkan_pbr_materials.end())
+        auto it = m_pbr_materials.find(assetid);
+        if (it != m_pbr_materials.end())
         {
             return it->second;
         }
@@ -1135,9 +1632,8 @@ namespace Piccolo
 
     void RenderResource::createAndMapStorageBuffer(std::shared_ptr<RHI> rhi)
     {
-        VulkanRHI* raw_rhi = static_cast<VulkanRHI*>(rhi.get());
         StorageBuffer& _storage_buffer = m_global_render_resource._storage_buffer;
-        uint32_t       frames_in_flight = raw_rhi->k_max_frames_in_flight;
+        uint32_t       frames_in_flight = rhi->getMaxFramesInFlight();
 
         RHIPhysicalDeviceProperties properties;
         rhi->getPhysicalDeviceProperties(&properties);
@@ -1197,6 +1693,6 @@ namespace Piccolo
                        0,
                        &_storage_buffer._axis_inefficient_storage_buffer_memory_pointer);
 
-        static_assert(64 >= sizeof(MeshVertex::VulkanMeshVertexJointBinding), "");
+        static_assert(64 >= sizeof(MeshVertex::VertexJointBinding), "");
     }
 } // namespace Piccolo

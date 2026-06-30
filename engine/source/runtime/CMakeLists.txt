@@ -16,6 +16,24 @@ set_target_properties(json11 PROPERTIES FOLDER "ThirdParty/json11")
 file(GLOB_RECURSE HEADER_FILES "*.h")
 file(GLOB_RECURSE SOURCE_FILES "*.cpp")
 
+list(APPEND HEADER_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/path_tracing_pass.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/gpu_skinning_pass.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/interface/rhi_ray_tracing.h")
+
+list(APPEND SOURCE_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/path_tracing_pass.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/gpu_skinning_pass.cpp")
+if(NOT PICCOLO_ENABLE_D3D12_BACKEND)
+  list(FILTER HEADER_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.h$")
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.cpp$")
+endif()
+
+if(NOT PICCOLO_ENABLE_VULKAN_BACKEND)
+  list(FILTER HEADER_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]vulkan[/\\\\].*\\.h$")
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]vulkan[/\\\\].*\\.cpp$")
+endif()
+
 #source_group(TREE "${ENGINE_ROOT_DIR}/schema" FILES ${SCHEMA_FILES})
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${HEADER_FILES} ${SOURCE_FILES})
 
@@ -47,23 +65,35 @@ target_link_libraries(${TARGET_NAME} PUBLIC glfw)
 target_link_libraries(${TARGET_NAME} PUBLIC imgui)
 target_link_libraries(${TARGET_NAME} PUBLIC Jolt)
 target_link_libraries(${TARGET_NAME} PUBLIC lua_static sol2)
-target_link_libraries(${TARGET_NAME} PUBLIC ${vulkan_lib})
 target_link_libraries(${TARGET_NAME} PRIVATE $<BUILD_INTERFACE:json11>)
+
+if(PICCOLO_ENABLE_VULKAN_BACKEND)
+  target_link_libraries(${TARGET_NAME} PUBLIC ${vulkan_lib})
+endif()
 
 if(ENABLE_PHYSICS_DEBUG_RENDERER)
   add_compile_definitions(ENABLE_PHYSICS_DEBUG_RENDERER)
-  target_link_libraries(${TARGET_NAME} PUBLIC TestFramework d3d12.lib shcore.lib)
+  target_link_libraries(${TARGET_NAME} PUBLIC TestFramework shcore.lib)
 endif()
 
-target_include_directories(
-  ${TARGET_NAME}
-  PUBLIC $<BUILD_INTERFACE:${vulkan_include}>)
+if(PICCOLO_ENABLE_D3D12_BACKEND)
+  target_link_libraries(${TARGET_NAME} PUBLIC d3d12.lib dxgi.lib dxguid.lib)
+endif()
+
+if(PICCOLO_ENABLE_VULKAN_BACKEND)
+  target_include_directories(
+    ${TARGET_NAME}
+    PUBLIC $<BUILD_INTERFACE:${vulkan_include}>)
+endif()
 
 add_dependencies(${TARGET_NAME} ${SHADER_COMPILE_TARGET})
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${ENGINE_ROOT_DIR}/shader/generated/cpp>)
 
+target_include_directories(
+  ${TARGET_NAME}
+  PUBLIC $<BUILD_INTERFACE:${ENGINE_ROOT_DIR}/shader/generated>)
 
 target_include_directories(
   ${TARGET_NAME} 
@@ -78,10 +108,12 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${JSON_INCLUDE}>
 )
 
-target_include_directories(
-  ${TARGET_NAME} 
-  PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/vulkanmemoryallocator/include>
-)
+if(PICCOLO_ENABLE_VULKAN_BACKEND)
+  target_include_directories(
+    ${TARGET_NAME}
+    PUBLIC $<BUILD_INTERFACE:${THIRD_PARTY_DIR}/vulkanmemoryallocator/include>
+  )
+endif()
 
 target_include_directories(
   ${TARGET_NAME} 
@@ -106,3 +138,4 @@ string(TOLOWER ${TARGET_NAME}/version.h VERSION_HEADER_LOCATION)
 ### precompile
 # set global vari used by precompile
 set(PICCOLO_RUNTIME_HEADS "${HEADER_FILES}" PARENT_SCOPE)
+

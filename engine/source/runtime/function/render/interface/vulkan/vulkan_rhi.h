@@ -10,16 +10,23 @@
 #include <map>
 #include <vector>
 
+struct GLFWwindow;
+
 namespace Piccolo
 {
-    
+    struct SwapChainSupportDetails
+    {
+        VkSurfaceCapabilitiesKHR        capabilities;
+        std::vector<VkSurfaceFormatKHR> formats;
+        std::vector<VkPresentModeKHR>   presentModes;
+    };
 
-    class VulkanRHI final : public RHI
+    class VulkanRHI : public RHI
     {
     public:
         // initialize
-        virtual void initialize(RHIInitInfo init_info) override final;
-        virtual void prepareContext() override final;
+        virtual void initialize(RHIInitInfo init_info) override;
+        virtual void prepareContext() override;
 
         // allocate and create
         bool allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers) override;
@@ -33,27 +40,24 @@ namespace Piccolo
         RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) override;
         void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) override;
         void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) override;
-        bool createBufferVMA(VmaAllocator allocator,
+        bool createBufferWithAllocation(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) override;
-        bool createBufferWithAlignmentVMA(
-            VmaAllocator allocator,
+            RHIAllocation*& pAllocation) override;
+        bool createBufferWithAlignment(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIDeviceSize minAlignment,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) override;
+            RHIAllocation*& pAllocation) override;
         void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) override;
         void createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
             RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels) override;
         void createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
             RHIImageView* &image_view) override;
-        void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) override;
-        void createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) override;
+        void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) override;
+        void createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) override;
         bool createCommandPool(const RHICommandPoolCreateInfo* pCreateInfo, RHICommandPool* &pCommandPool) override;
         bool createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateInfo, RHIDescriptorPool* &pDescriptorPool) override;
         bool createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo* pCreateInfo, RHIDescriptorSetLayout* &pSetLayout) override;
@@ -99,16 +103,31 @@ namespace Piccolo
 
         bool beginCommandBuffer(RHICommandBuffer* commandBuffer, const RHICommandBufferBeginInfo* pBeginInfo) override;
         void cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageLayout srcImageLayout, RHIBuffer* dstBuffer, uint32_t regionCount, const RHIBufferImageCopy* pRegions) override;
-        void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height) override;
+        using RHI::cmdCopyImageToImage;
+        void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImage* dstImage, uint32_t regionCount, const RHIImageBlit* pRegions) override;
         void cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, uint32_t regionCount, RHIBufferCopy* pRegions) override;
         void cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) override;
         void cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
         void cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset) override;
+        RHIRayTracingCapabilities getRayTracingCapabilities() const override;
+        bool createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
+                                         RHIAccelerationStructure*& acceleration_structure) override;
+        bool buildAccelerationStructure(RHICommandBuffer* command_buffer,
+                                        const RHIAccelerationStructureBuildDesc* build_desc,
+                                        RHIAccelerationStructure* acceleration_structure) override;
+        bool createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
+                                      RHIPipeline*& pipeline) override;
+        bool createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
+                                      RHIShaderBindingTable*& shader_binding_table) override;
+        void cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracingDispatchDesc* dispatch_desc) override;
+        void destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure) override;
+        void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table) override;
         void cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers) override;
         bool endCommandBuffer(RHICommandBuffer* commandBuffer) override;
         void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) override;
         bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) override;
         bool queueWaitIdle(RHIQueue* queue) override;
+        RHIBackendType getBackendType() const override;
         void resetCommandPool() override;
         void waitForFences() override;
         bool waitForFences(uint32_t fenceCount, const RHIFence* const* pFences, RHIBool32 waitAll, uint64_t timeout);
@@ -125,8 +144,11 @@ namespace Piccolo
         RHIQueue* getComputeQueue() const override;
         RHISwapChainDesc getSwapchainInfo() override;
         RHIDepthImageDesc getDepthImageInfo() const override;
+        void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) override;
+        RHIViewport getViewport() const override;
         uint8_t getMaxFramesInFlight() const override;
         uint8_t getCurrentFrameIndex() const override;
+        uint32_t getCurrentSwapchainImageIndex() const override;
         void setCurrentFrameIndex(uint8_t index) override;
 
         // command write
@@ -138,7 +160,7 @@ namespace Piccolo
         void popEvent(RHICommandBuffer* commond_buffer) override;
 
         // destory
-        virtual ~VulkanRHI() override final;
+        virtual ~VulkanRHI() override;
         void clear() override;
         void clearSwapchain() override;
         void destroyDefaultSampler(RHIDefaultSamplerType type) override;
@@ -157,6 +179,7 @@ namespace Piccolo
         void freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers) override;
 
         // memory
+        void freeAllocation(RHIAllocation*& allocation) override;
         void freeMemory(RHIDeviceMemory* &memory) override;
         bool mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size, RHIMemoryMapFlags flags, void** ppData) override;
         void unmapMemory(RHIDeviceMemory* memory) override;

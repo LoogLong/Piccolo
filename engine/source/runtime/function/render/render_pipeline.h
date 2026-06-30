@@ -15,6 +15,9 @@ namespace Piccolo
         virtual void deferredRender(std::shared_ptr<RHI>                rhi,
                                     std::shared_ptr<RenderResourceBase> render_resource) override final;
 
+        virtual bool pathTracingRender(std::shared_ptr<RHI>                rhi,
+                                       std::shared_ptr<RenderResourceBase> render_resource) override final;
+
         void passUpdateAfterRecreateSwapchain();
 
         virtual uint32_t getGuidOfPickedMesh(const Vector2& picked_uv) override final;
@@ -22,5 +25,8 @@ namespace Piccolo
         void setAxisVisibleState(bool state);
 
         void setSelectedAxis(size_t selected_axis);
+
+    private:
+        void updateSceneRenderMode(RHI& rhi);
     };
 } // namespace Piccolo

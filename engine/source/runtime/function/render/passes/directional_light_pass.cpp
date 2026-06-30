@@ -1,12 +1,9 @@
 #include "runtime/function/render/passes/directional_light_pass.h"
 
 #include "runtime/function/render/render_helper.h"
+#include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
-
-#include <mesh_directional_light_shadow_frag.h>
-#include <mesh_directional_light_shadow_vert.h>
+#include "runtime/function/render/render_shader_bytecode.h"
 
 #include <stdexcept>
 
@@ -28,11 +25,11 @@ namespace Piccolo
     }
     void DirectionalLightShadowPass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
-        const RenderResource* vulkan_resource = static_cast<const RenderResource*>(render_resource.get());
-        if (vulkan_resource)
+        const RenderResource* render_resource_ptr = static_cast<const RenderResource*>(render_resource.get());
+        if (render_resource_ptr)
         {
             m_mesh_directional_light_shadow_perframe_storage_buffer_object =
-                vulkan_resource->m_mesh_directional_light_shadow_perframe_storage_buffer_object;
+                render_resource_ptr->m_mesh_directional_light_shadow_perframe_storage_buffer_object;
         }
     }
     void DirectionalLightShadowPass::draw() { drawModel(); }
@@ -236,9 +233,11 @@ namespace Piccolo
         }
 
         RHIShader* vert_shader_module =
-            m_rhi->createShaderModule(MESH_DIRECTIONAL_LIGHT_SHADOW_VERT);
+            m_rhi->createShaderModule(
+                PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_DIRECTIONAL_LIGHT_SHADOW_VERT));
         RHIShader* frag_shader_module =
-            m_rhi->createShaderModule(MESH_DIRECTIONAL_LIGHT_SHADOW_FRAG);
+            m_rhi->createShaderModule(
+                PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_DIRECTIONAL_LIGHT_SHADOW_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -461,7 +460,7 @@ namespace Piccolo
             uint32_t         joint_count {0};
         };
 
-        std::map<VulkanPBRMaterial*, std::map<VulkanMesh*, std::vector<MeshNode>>>
+        std::map<RenderPBRMaterialGPUResource*, std::map<RenderMeshGPUResource*, std::vector<MeshNode>>>
             directional_light_mesh_drawcall_batch;
 
         // reorganize mesh

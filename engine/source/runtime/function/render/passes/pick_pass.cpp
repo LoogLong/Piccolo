@@ -1,15 +1,9 @@
 #include "runtime/function/render/passes/pick_pass.h"
 
+#include "runtime/function/render/render_gpu_resource.h"
 #include "runtime/function/render/render_mesh.h"
-#include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
-#include "runtime/function/render/interface/vulkan/vulkan_util.h"
-
+#include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/render_helper.h"
-
-#include <mesh_inefficient_pick_frag.h>
-#include <mesh_inefficient_pick_vert.h>
-
-
 
 #include <map>
 #include <stdexcept>
@@ -33,11 +27,11 @@ namespace Piccolo
     void PickPass::postInitialize() {}
     void PickPass::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
-        const RenderResource* vulkan_resource = static_cast<const RenderResource*>(render_resource.get());
-        if (vulkan_resource)
+        const RenderResource* render_resource_ptr = static_cast<const RenderResource*>(render_resource.get());
+        if (render_resource_ptr)
         {
             _mesh_inefficient_pick_perframe_storage_buffer_object.proj_view_matrix =
-                vulkan_resource->m_mesh_inefficient_pick_perframe_storage_buffer_object.proj_view_matrix;
+                render_resource_ptr->m_mesh_inefficient_pick_perframe_storage_buffer_object.proj_view_matrix;
             _mesh_inefficient_pick_perframe_storage_buffer_object.rt_width  = m_rhi->getSwapchainInfo().extent.width;
             _mesh_inefficient_pick_perframe_storage_buffer_object.rt_height = m_rhi->getSwapchainInfo().extent.height;
         }
@@ -149,7 +143,7 @@ namespace Piccolo
         mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.descriptorType =
             RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.descriptorCount = 1;
-        mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.stageFlags = RHI_SHADER_STAGE_VERTEX_BIT;
         mesh_inefficient_pick_global_layout_perframe_storage_buffer_binding.pImmutableSamplers = NULL;
 
         RHIDescriptorSetLayoutBinding& mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding =
@@ -158,7 +152,7 @@ namespace Piccolo
         mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.descriptorType =
             RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.descriptorCount = 1;
-        mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.stageFlags = RHI_SHADER_STAGE_VERTEX_BIT;
         mesh_inefficient_pick_global_layout_perdrawcall_storage_buffer_binding.pImmutableSamplers = NULL;
 
         RHIDescriptorSetLayoutBinding&
@@ -205,9 +199,9 @@ namespace Piccolo
         }
 
         RHIShader* vert_shader_module =
-            m_rhi->createShaderModule(MESH_INEFFICIENT_PICK_VERT);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_INEFFICIENT_PICK_VERT));
         RHIShader* frag_shader_module =
-            m_rhi->createShaderModule(MESH_INEFFICIENT_PICK_FRAG);
+            m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_INEFFICIENT_PICK_FRAG));
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info {};
         vert_pipeline_shader_stage_create_info.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -409,6 +403,7 @@ namespace Piccolo
             m_rhi->freeMemory(m_framebuffer.attachments[i].mem);
         }
         m_rhi->destroyFramebuffer(m_framebuffer.framebuffer);
+        m_framebuffer.framebuffer = nullptr;
 
         setupAttachments();
         setupFramebuffer();
@@ -431,7 +426,7 @@ namespace Piccolo
             uint32_t         node_id;
         };
 
-        std::map<VulkanPBRMaterial*, std::map<VulkanMesh*, std::vector<MeshNode>>> main_camera_mesh_drawcall_batch;
+        std::map<RenderPBRMaterialGPUResource*, std::map<RenderMeshGPUResource*, std::vector<MeshNode>>> main_camera_mesh_drawcall_batch;
 
         // reorganize mesh
         for (RenderMeshNode& node : *(m_visiable_nodes.p_main_camera_visible_mesh_nodes))
@@ -544,14 +539,14 @@ namespace Piccolo
 
         for (auto& pair1 : main_camera_mesh_drawcall_batch)
         {
-            VulkanPBRMaterial& material       = (*pair1.first);
+            RenderPBRMaterialGPUResource& material       = (*pair1.first);
             auto&              mesh_instanced = pair1.second;
 
             // TODO: render from near to far
 
             for (auto& pair2 : mesh_instanced)
             {
-                VulkanMesh& mesh       = (*pair2.first);
+                RenderMeshGPUResource& mesh       = (*pair2.first);
                 auto&       mesh_nodes = pair2.second;
 
                 uint32_t total_instance_count = static_cast<uint32_t>(mesh_nodes.size());

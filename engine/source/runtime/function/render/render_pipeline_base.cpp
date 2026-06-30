@@ -7,11 +7,16 @@ namespace Piccolo
 {
     void RenderPipelineBase::preparePassData(std::shared_ptr<RenderResourceBase> render_resource)
     {
+        m_gpu_skinning_pass->preparePassData(render_resource);
         m_main_camera_pass->preparePassData(render_resource);
         m_pick_pass->preparePassData(render_resource);
         m_directional_light_pass->preparePassData(render_resource);
         m_point_light_shadow_pass->preparePassData(render_resource);
         m_particle_pass->preparePassData(render_resource);
+        if (m_path_tracing_pass)
+        {
+            m_path_tracing_pass->preparePassData(render_resource);
+        }
         g_runtime_global_context.m_debugdraw_manager->preparePassData(render_resource);
     }
     void RenderPipelineBase::forwardRender(std::shared_ptr<RHI>                rhi,
@@ -20,8 +25,20 @@ namespace Piccolo
     void RenderPipelineBase::deferredRender(std::shared_ptr<RHI>                rhi,
                                             std::shared_ptr<RenderResourceBase> render_resource)
     {}
+
+    bool RenderPipelineBase::pathTracingRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
+    {
+        return false;
+    }
     void RenderPipelineBase::initializeUIRenderBackend(WindowUI* window_ui)
     {
         m_ui_pass->initializeUIRenderBackend(window_ui);
+    }
+    void RenderPipelineBase::shutdownUIRenderBackend()
+    {
+        if (m_ui_pass)
+        {
+            m_ui_pass->shutdownUIRenderBackend();
+        }
     }
 } // namespace Piccolo

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace Piccolo
 {
@@ -25,6 +26,9 @@ namespace Piccolo
         const std::string& getDefaultWorldUrl() const;
         const std::string& getGlobalRenderingResUrl() const;
         const std::string& getGlobalParticleResUrl() const;
+        const std::string& getRenderBackend() const;
+        const std::string& getRenderSceneMode() const;
+        bool               getRenderBackendAllowFallback() const;
 
     private:
         std::filesystem::path m_root_folder;
@@ -41,5 +45,8 @@ namespace Piccolo
         std::string m_default_world_url;
         std::string m_global_rendering_res_url;
         std::string m_global_particle_res_url;
+        std::string m_render_backend {"Auto"};
+        std::string m_render_scene_mode {"Raster"};
+        bool        m_render_backend_allow_fallback {true};
     };
 } // namespace Piccolo

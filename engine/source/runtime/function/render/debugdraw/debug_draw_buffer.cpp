@@ -330,7 +330,7 @@ namespace Piccolo
         m_rhi->createBuffer(
             bufferSize,
             RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_GPU_ONLY,
+            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             m_sphere_resource.buffer,
             m_sphere_resource.memory);
 
@@ -398,7 +398,7 @@ namespace Piccolo
         m_rhi->createBuffer(
             bufferSize,
             RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_GPU_ONLY,
+            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             m_cylinder_resource.buffer,
             m_cylinder_resource.memory);
 
@@ -489,7 +489,7 @@ namespace Piccolo
         m_rhi->createBuffer(
             bufferSize,
             RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VMA_MEMORY_USAGE_GPU_ONLY,
+            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             m_capsule_resource.buffer,
             m_capsule_resource.memory);
 

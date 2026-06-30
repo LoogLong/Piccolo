@@ -13,7 +13,11 @@ namespace Piccolo
         console_sink->set_level(spdlog::level::trace);
         console_sink->set_pattern("[%^%l%$] %v");
 
-        const spdlog::sinks_init_list sink_list = {console_sink};
+        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("logs/piccolo.log", true);
+        file_sink->set_level(spdlog::level::trace);
+        file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+
+        const spdlog::sinks_init_list sink_list = {console_sink, file_sink};
 
         spdlog::init_thread_pool(8192, 1);
 

@@ -1,21 +1,30 @@
 #pragma once
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#include <vk_mem_alloc.h>
-
+#include <array>
+#include <functional>
 #include <memory>
 #include <vector>
-#include <functional>
 
+#include "rhi_allocation.h"
+#include "rhi_ray_tracing.h"
 #include "rhi_struct.h"
+
 namespace Piccolo
 {
     class WindowSystem;
 
+    enum class RHIBackendType
+    {
+        Auto,
+        Vulkan,
+        D3D12
+    };
+
     struct RHIInitInfo
     {
         std::shared_ptr<WindowSystem> window_system;
+        RHIBackendType                requested_backend {RHIBackendType::Auto};
+        bool                          allow_fallback_to_vulkan {true};
     };
     
     class RHI
@@ -39,27 +48,24 @@ namespace Piccolo
         virtual RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) = 0;
         virtual void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) = 0;
         virtual void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) = 0;
-        virtual bool createBufferVMA(VmaAllocator allocator,
+        virtual bool createBufferWithAllocation(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) = 0;
-        virtual bool createBufferWithAlignmentVMA(
-            VmaAllocator allocator,
+            RHIAllocation*& pAllocation) = 0;
+        virtual bool createBufferWithAlignment(
             const RHIBufferCreateInfo* pBufferCreateInfo,
-            const VmaAllocationCreateInfo* pAllocationCreateInfo,
+            RHIMemoryPropertyFlags memoryPropertyFlags,
             RHIDeviceSize minAlignment,
             RHIBuffer* &pBuffer,
-            VmaAllocation* pAllocation,
-            VmaAllocationInfo* pAllocationInfo) = 0;
+            RHIAllocation*& pAllocation) = 0;
         virtual void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) = 0;
         virtual void createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
             RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels) = 0;
         virtual void createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
             RHIImageView* &image_view) = 0;
-        virtual void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) = 0;
-        virtual void createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) = 0;
+        virtual void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) = 0;
+        virtual void createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) = 0;
         virtual void createCommandPool() = 0;
         virtual bool createCommandPool(const RHICommandPoolCreateInfo* pCreateInfo, RHICommandPool*& pCommandPool) = 0;
         virtual bool createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateInfo, RHIDescriptorPool* &pDescriptorPool) = 0;
@@ -106,16 +112,42 @@ namespace Piccolo
 
         virtual bool beginCommandBuffer(RHICommandBuffer* commandBuffer, const RHICommandBufferBeginInfo* pBeginInfo) = 0;
         virtual void cmdCopyImageToBuffer(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageLayout srcImageLayout, RHIBuffer* dstBuffer, uint32_t regionCount, const RHIBufferImageCopy* pRegions) = 0;
-        virtual void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height) = 0;
+        virtual void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImage* dstImage, uint32_t regionCount, const RHIImageBlit* pRegions) = 0;
+        virtual void cmdCopyImageToImage(RHICommandBuffer* commandBuffer, RHIImage* srcImage, RHIImageAspectFlagBits srcFlag, RHIImage* dstImage, RHIImageAspectFlagBits dstFlag, uint32_t width, uint32_t height)
+        {
+            RHIImageBlit region {};
+            region.srcSubresource = {static_cast<RHIImageAspectFlags>(srcFlag), 0, 0, 1};
+            region.srcOffsets[0]  = {0, 0, 0};
+            region.srcOffsets[1]  = {static_cast<int32_t>(width), static_cast<int32_t>(height), 1};
+            region.dstSubresource = {static_cast<RHIImageAspectFlags>(dstFlag), 0, 0, 1};
+            region.dstOffsets[0]  = {0, 0, 0};
+            region.dstOffsets[1]  = {static_cast<int32_t>(width), static_cast<int32_t>(height), 1};
+            cmdCopyImageToImage(commandBuffer, srcImage, dstImage, 1, &region);
+        }
         virtual void cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, uint32_t regionCount, RHIBufferCopy* pRegions) = 0;
         virtual void cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) = 0;
         virtual void cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset) = 0;
+        virtual RHIRayTracingCapabilities getRayTracingCapabilities() const = 0;
+        virtual bool createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
+                                                 RHIAccelerationStructure*& acceleration_structure) = 0;
+        virtual bool buildAccelerationStructure(RHICommandBuffer* command_buffer,
+                                                const RHIAccelerationStructureBuildDesc* build_desc,
+                                                RHIAccelerationStructure* acceleration_structure) = 0;
+        virtual bool createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
+                                              RHIPipeline*& pipeline) = 0;
+        virtual bool createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
+                                              RHIShaderBindingTable*& shader_binding_table) = 0;
+        virtual void cmdTraceRays(RHICommandBuffer* command_buffer,
+                                  const RHIRayTracingDispatchDesc* dispatch_desc) = 0;
+        virtual void destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure) = 0;
+        virtual void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table) = 0;
         virtual void cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers) = 0;
         virtual bool endCommandBuffer(RHICommandBuffer* commandBuffer) = 0;
         virtual void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) = 0;
         virtual bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) = 0;
         virtual bool queueWaitIdle(RHIQueue* queue) = 0;
+        virtual RHIBackendType getBackendType() const = 0;
         virtual void resetCommandPool() = 0;
         virtual void waitForFences() = 0;
 
@@ -131,8 +163,11 @@ namespace Piccolo
         virtual RHIQueue* getComputeQueue() const = 0;
         virtual RHISwapChainDesc getSwapchainInfo() = 0;
         virtual RHIDepthImageDesc getDepthImageInfo() const = 0;
+        virtual void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) = 0;
+        virtual RHIViewport getViewport() const = 0;
         virtual uint8_t getMaxFramesInFlight() const = 0;
         virtual uint8_t getCurrentFrameIndex() const = 0;
+        virtual uint32_t getCurrentSwapchainImageIndex() const = 0;
         virtual void setCurrentFrameIndex(uint8_t index) = 0;
 
         // command write
@@ -162,6 +197,7 @@ namespace Piccolo
         virtual void freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers) = 0;
 
         // memory
+        virtual void freeAllocation(RHIAllocation*& allocation) = 0;
         virtual void freeMemory(RHIDeviceMemory* &memory) = 0;
         virtual bool mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size, RHIMemoryMapFlags flags, void** ppData) = 0;
         virtual void unmapMemory(RHIDeviceMemory* memory) = 0;

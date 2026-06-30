@@ -4,10 +4,35 @@
 
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <string>
+#include <cctype>
 
 namespace Piccolo
 {
+    namespace
+    {
+        bool toBoolWithDefault(const std::string& value, bool default_value)
+        {
+            std::string lower = value;
+            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+
+            if (lower == "1" || lower == "true" || lower == "yes" || lower == "on")
+            {
+                return true;
+            }
+
+            if (lower == "0" || lower == "false" || lower == "no" || lower == "off")
+            {
+                return false;
+            }
+
+            return default_value;
+        }
+    } // namespace
+
     void ConfigManager::initialize(const std::filesystem::path& config_file_path)
     {
         // read configs
@@ -56,6 +81,18 @@ namespace Piccolo
                 {
                     m_global_particle_res_url = value;
                 }
+                else if (name == "RenderBackend")
+                {
+                    m_render_backend = value;
+                }
+                else if (name == "RenderSceneMode")
+                {
+                    m_render_scene_mode = value;
+                }
+                else if (name == "RenderBackendAllowFallback")
+                {
+                    m_render_backend_allow_fallback = toBoolWithDefault(value, true);
+                }
 #ifdef ENABLE_PHYSICS_DEBUG_RENDERER
                 else if (name == "JoltAssetFolder")
                 {
@@ -83,6 +120,12 @@ namespace Piccolo
     const std::string& ConfigManager::getGlobalRenderingResUrl() const { return m_global_rendering_res_url; }
 
     const std::string& ConfigManager::getGlobalParticleResUrl() const { return m_global_particle_res_url; }
+
+    const std::string& ConfigManager::getRenderBackend() const { return m_render_backend; }
+
+    const std::string& ConfigManager::getRenderSceneMode() const { return m_render_scene_mode; }
+
+    bool ConfigManager::getRenderBackendAllowFallback() const { return m_render_backend_allow_fallback; }
 
 #ifdef ENABLE_PHYSICS_DEBUG_RENDERER
     const std::filesystem::path& ConfigManager::getJoltPhysicsAssetFolder() const { return m_jolt_physics_asset_folder; }
