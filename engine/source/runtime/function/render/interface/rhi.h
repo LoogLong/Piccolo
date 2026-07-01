@@ -155,6 +155,31 @@ namespace Piccolo
         virtual bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) = 0;
         virtual bool queueWaitIdle(RHIQueue* queue) = 0;
         virtual RHIBackendType getBackendType() const = 0;
+
+        // Backend behaviour capability queries. The render layer uses these instead of hard-coding
+        // getBackendType()==D3D12 so that pass/pipeline code stays backend-neutral. Defaults describe
+        // the Vulkan execution model; backends override where their submission model differs.
+
+        // Whether the normal/depth copy for the particle pass must be recorded inline in the current
+        // command buffer before submitRendering (true), or can run afterwards on a dedicated copy
+        // command buffer using the previous frame's resources (false, Vulkan).
+        virtual bool requiresDepthNormalCopyBeforeSubmit() const { return false; }
+        // Whether particle GPU compute uses dedicated per-frame compute command buffers and fences
+        // (true), rather than being recorded into the shared graphics command buffer (false, Vulkan).
+        virtual bool usesDedicatedComputeSubmission() const { return false; }
+        // Whether the backend uses the Vulkan clip-space convention (Y-down NDC, [0,1] depth) for
+        // projection matrices. D3D12 uses [0,1] depth with Y-up, so it returns false (the default).
+        virtual bool usesVulkanClipSpace() const { return false; }
+
+        // ImGui render-backend binding. Each RHI backend owns the ImGui platform+renderer backend
+        // (ImGui_ImplGlfw + ImGui_Impl{Vulkan,DX12}) so that UIPass stays backend-neutral and does not
+        // static_cast to a concrete RHI. Default implementations are no-ops for backends without UI.
+        virtual bool initializeImGuiRenderBackend(RHIRenderPass* ui_render_pass, uint32_t ui_subpass) { return false; }
+        virtual void shutdownImGuiRenderBackend() {}
+        virtual void newFrameImGui() {}
+        virtual void renderImGuiDrawData() {}
+        virtual void uploadImGuiFonts() {}
+
         virtual void resetCommandPool() = 0;
         virtual void waitForFences() = 0;
 

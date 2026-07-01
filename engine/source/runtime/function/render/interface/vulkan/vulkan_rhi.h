@@ -128,6 +128,12 @@ namespace Piccolo
         bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) override;
         bool queueWaitIdle(RHIQueue* queue) override;
         RHIBackendType getBackendType() const override;
+        bool           usesVulkanClipSpace() const override { return true; }
+        bool           initializeImGuiRenderBackend(RHIRenderPass* ui_render_pass, uint32_t ui_subpass) override;
+        void           shutdownImGuiRenderBackend() override;
+        void           newFrameImGui() override;
+        void           renderImGuiDrawData() override;
+        void           uploadImGuiFonts() override;
         void resetCommandPool() override;
         void waitForFences() override;
         bool waitForFences(uint32_t fenceCount, const RHIFence* const* pFences, RHIBool32 waitAll, uint64_t timeout);

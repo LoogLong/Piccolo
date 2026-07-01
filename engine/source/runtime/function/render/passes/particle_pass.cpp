@@ -49,7 +49,7 @@ namespace Piccolo
 
     void ParticlePass::copyNormalAndDepthImage()
     {
-        const bool use_inline_copy = m_rhi->getBackendType() == RHIBackendType::D3D12;
+        const bool use_inline_copy = m_rhi->requiresDepthNormalCopyBeforeSubmit();
         uint8_t index = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
         if (!use_inline_copy)
         {
@@ -854,7 +854,7 @@ namespace Piccolo
         if (RHI_SUCCESS != m_rhi->createFence(&fenceCreateInfo, m_fence))
             throw std::runtime_error("create fence");
 
-        if (m_rhi->getBackendType() == RHIBackendType::D3D12)
+        if (m_rhi->usesDedicatedComputeSubmission())
         {
             m_compute_command_buffers.resize(m_rhi->getMaxFramesInFlight(), nullptr);
             for (RHICommandBuffer*& compute_command_buffer : m_compute_command_buffers)
@@ -1834,7 +1834,7 @@ namespace Piccolo
             m_rhi->popEvent(command_buffer); // end particle compute label
         };
 
-        if (m_rhi->getBackendType() == RHIBackendType::D3D12)
+        if (m_rhi->usesDedicatedComputeSubmission())
         {
             const uint8_t frame_index = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
             RHIFence*     compute_fence = m_compute_fences[frame_index];

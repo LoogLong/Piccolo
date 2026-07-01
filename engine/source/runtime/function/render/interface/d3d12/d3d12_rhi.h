@@ -26,6 +26,12 @@ namespace Piccolo
         void prepareContext() override;
         void clear() override;
         RHIBackendType getBackendType() const override;
+        bool           requiresDepthNormalCopyBeforeSubmit() const override { return true; }
+        bool           usesDedicatedComputeSubmission() const override { return true; }
+        bool           initializeImGuiRenderBackend(RHIRenderPass* ui_render_pass, uint32_t ui_subpass) override;
+        void           shutdownImGuiRenderBackend() override;
+        void           newFrameImGui() override;
+        void           renderImGuiDrawData() override;
         void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) override;
         RHIViewport getViewport() const override;
 #ifdef _WIN32

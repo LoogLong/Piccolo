@@ -196,13 +196,13 @@ namespace Piccolo
         
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        if (render_rhi->getBackendType() == RHIBackendType::D3D12)
+        if (render_rhi->requiresDepthNormalCopyBeforeSubmit())
         {
             static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
         }
 
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        if (render_rhi->getBackendType() != RHIBackendType::D3D12)
+        if (!render_rhi->requiresDepthNormalCopyBeforeSubmit())
         {
             static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
         }
@@ -255,13 +255,13 @@ namespace Piccolo
                    
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        if (render_rhi->getBackendType() == RHIBackendType::D3D12)
+        if (render_rhi->requiresDepthNormalCopyBeforeSubmit())
         {
             static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
         }
 
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        if (render_rhi->getBackendType() != RHIBackendType::D3D12)
+        if (!render_rhi->requiresDepthNormalCopyBeforeSubmit())
         {
             static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
         }

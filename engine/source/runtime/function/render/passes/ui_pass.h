@@ -20,12 +20,7 @@ namespace Piccolo
         void draw() override final;
 
     private:
-        void uploadFonts();
-
-    private:
-        WindowUI*      m_window_ui {nullptr};
-        RHIBackendType m_initialized_backend {RHIBackendType::Auto};
-        bool           m_platform_backend_initialized {false};
-        bool           m_renderer_backend_initialized {false};
+        WindowUI* m_window_ui {nullptr};
+        bool      m_renderer_backend_initialized {false};
     };
 } // namespace Piccolo

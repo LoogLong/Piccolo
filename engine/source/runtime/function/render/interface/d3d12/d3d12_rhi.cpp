@@ -17,6 +17,9 @@
 #include <d3dcompiler.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+#include <imgui.h>
+#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_dx12.h>
 #ifdef D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT
 #define PICCOLO_D3D12_HAS_DXR 1
 #else
@@ -3928,6 +3931,57 @@ namespace Piccolo
     RHIBackendType D3D12RHI::getBackendType() const
     {
         return RHIBackendType::D3D12;
+    }
+
+    bool D3D12RHI::initializeImGuiRenderBackend(RHIRenderPass* /*ui_render_pass*/, uint32_t /*ui_subpass*/)
+    {
+#ifdef _WIN32
+        if (!ImGui_ImplGlfw_InitForOther(getWindow(), true))
+        {
+            LOG_WARN("Failed to initialize ImGui GLFW backend for D3D12");
+            return false;
+        }
+
+        if (!ImGui_ImplDX12_Init(getD3D12Device(),
+                                 getMaxFramesInFlight(),
+                                 getD3D12SwapchainFormat(),
+                                 getD3D12ImGuiSrvHeap(),
+                                 getD3D12ImGuiSrvCpuHandle(),
+                                 getD3D12ImGuiSrvGpuHandle()))
+        {
+            LOG_WARN("Failed to initialize ImGui D3D12 renderer backend");
+            ImGui_ImplGlfw_Shutdown();
+            return false;
+        }
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    void D3D12RHI::shutdownImGuiRenderBackend()
+    {
+#ifdef _WIN32
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+#endif
+    }
+
+    void D3D12RHI::newFrameImGui()
+    {
+#ifdef _WIN32
+        ImGui_ImplDX12_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+#endif
+    }
+
+    void D3D12RHI::renderImGuiDrawData()
+    {
+#ifdef _WIN32
+        ID3D12DescriptorHeap* descriptor_heaps[] = {getD3D12ImGuiSrvHeap()};
+        getD3D12CommandList()->SetDescriptorHeaps(1, descriptor_heaps);
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), getD3D12CommandList());
+#endif
     }
 
 bool D3D12RHI::isPointLightShadowEnabled()

@@ -202,7 +202,7 @@ namespace Piccolo
         // update per-frame visible objects
         m_render_scene->updateVisibleObjects(std::static_pointer_cast<RenderResource>(m_render_resource),
                                              m_render_camera,
-                                             m_rhi->getBackendType() == RHIBackendType::Vulkan);
+                                             m_rhi->usesVulkanClipSpace());
 
         // prepare pipeline's render passes data
         m_render_pipeline->preparePassData(m_render_resource);
