@@ -20,6 +20,8 @@ namespace Piccolo
     class RenderPassBase
     {
     public:
+        virtual ~RenderPassBase() = default;
+
         virtual void initialize(const RenderPassInitInfo* init_info) = 0;
         virtual void postInitialize();
         virtual void setCommonInfo(RenderPassCommonInfo common_info);

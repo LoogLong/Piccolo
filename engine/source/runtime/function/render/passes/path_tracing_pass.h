@@ -21,6 +21,8 @@ namespace Piccolo
     class PathTracingPass : public RenderPassBase
     {
     public:
+        ~PathTracingPass() override;
+
         void initialize(const RenderPassInitInfo* init_info) override final;
         void preparePassData(std::shared_ptr<RenderResourceBase> render_resource) override final;
 

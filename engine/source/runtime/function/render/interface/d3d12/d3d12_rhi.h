@@ -28,6 +28,7 @@ namespace Piccolo
         RHIBackendType getBackendType() const override;
         bool           requiresDepthNormalCopyBeforeSubmit() const override { return true; }
         bool           usesDedicatedComputeSubmission() const override { return true; }
+        void           destroyRayTracingPipeline(RHIPipeline*& pipeline) override;
         bool           initializeImGuiRenderBackend(RHIRenderPass* ui_render_pass, uint32_t ui_subpass) override;
         void           shutdownImGuiRenderBackend() override;
         void           newFrameImGui() override;

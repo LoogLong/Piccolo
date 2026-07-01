@@ -32,6 +32,23 @@ namespace Piccolo
         }
     } // namespace
 
+    PathTracingPass::~PathTracingPass()
+    {
+        if (m_rhi != nullptr)
+        {
+            // Release GPU ray tracing objects owned by this pass. Deleting the wrapper releases the
+            // underlying ComPtr-held D3D12 state object / SBT buffers.
+            if (m_shader_binding_table != nullptr)
+            {
+                m_rhi->destroyShaderBindingTable(m_shader_binding_table);
+            }
+            if (m_ray_tracing_pipeline != nullptr)
+            {
+                m_rhi->destroyRayTracingPipeline(m_ray_tracing_pipeline);
+            }
+        }
+    }
+
     void PathTracingPass::initialize(const RenderPassInitInfo* init_info)
     {
         const auto* path_tracing_init_info = static_cast<const PathTracingPassInitInfo*>(init_info);

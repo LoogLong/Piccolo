@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cwchar>
 #include <cstring>
@@ -32,6 +33,17 @@ namespace Piccolo
     namespace
     {
 #ifdef _WIN32
+        // Descriptor heap capacities for the shader-visible and RTV/DSV heaps. These size the fixed
+        // descriptor pools allocated at device initialization; overflow results in bind failures, so
+        // they are named here to make the limits explicit and adjustable in one place.
+        constexpr uint32_t kCbvSrvUavHeapDescriptorCount = 65536;
+        constexpr uint32_t kSamplerHeapDescriptorCount   = 2048;
+        constexpr uint32_t kRtvHeapDescriptorCount       = 1024;
+        constexpr uint32_t kDsvHeapDescriptorCount       = 256;
+        // DXR shader configuration limits (bytes) for the path tracing pipeline.
+        constexpr uint32_t kRayTracingMaxPayloadSizeBytes   = 32;
+        constexpr uint32_t kRayTracingMaxAttributeSizeBytes = 8;
+
         struct D3D12RHIPipelineLayout;
         struct D3D12RHIDescriptorSet;
 
@@ -3725,7 +3737,7 @@ namespace Piccolo
         createRenderTargetViews();
         if (!createDescriptorHeap(m_d3d12_device.Get(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                                  65536,
+                                  kCbvSrvUavHeapDescriptorCount,
                                   true,
                                   m_d3d12_cbv_srv_uav_heap,
                                   m_d3d12_cbv_srv_uav_descriptor_size,
@@ -3745,7 +3757,7 @@ namespace Piccolo
         m_d3d12_transient_cbv_srv_uav_descriptor_next = m_d3d12_cbv_srv_uav_descriptor_next;
         if (!createDescriptorHeap(m_d3d12_device.Get(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
-                                  2048,
+                                  kSamplerHeapDescriptorCount,
                                   true,
                                   m_d3d12_sampler_heap,
                                   m_d3d12_sampler_descriptor_size,
@@ -4557,6 +4569,10 @@ bool D3D12RHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCrea
     }
 
     pBuffer     = nullptr;
+    // D3D12 backs buffers with committed resources, so the buffer's memory lifetime is owned by the
+    // ID3D12Resource inside D3D12RHIBuffer and is released by destroyBuffer(). There is no separate
+    // allocation object to hand back (unlike the Vulkan/VMA backend), so pAllocation is intentionally
+    // null here; freeAllocation() is a safe no-op for D3D12 allocations.
     pAllocation = nullptr;
 
     auto* d3d_buffer = new D3D12RHIBuffer();
@@ -7382,6 +7398,7 @@ void D3D12RHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, ui
     else if (commandBuffer != nullptr && vertexCount > 0 && instanceCount > 0)
     {
         LOG_WARN("D3D12 cmdDraw skipped because no command list is available");
+        assert(false && "D3D12 cmdDraw invoked without a valid command list");
     }
 #else
     (void)commandBuffer;
@@ -7413,6 +7430,7 @@ void D3D12RHI::cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX
     else if (commandBuffer != nullptr && groupCountX > 0 && groupCountY > 0 && groupCountZ > 0)
     {
         LOG_WARN("D3D12 cmdDispatch skipped because no command list is available");
+        assert(false && "D3D12 cmdDispatch invoked without a valid command list");
     }
 #else
     (void)commandBuffer;
@@ -7826,8 +7844,8 @@ bool D3D12RHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* c
     hit_group_desc.ClosestHitShaderImport = closest_hit_export;
 
     D3D12_RAYTRACING_SHADER_CONFIG shader_config {};
-    shader_config.MaxPayloadSizeInBytes = 32;
-    shader_config.MaxAttributeSizeInBytes = 8;
+    shader_config.MaxPayloadSizeInBytes = kRayTracingMaxPayloadSizeBytes;
+    shader_config.MaxAttributeSizeInBytes = kRayTracingMaxAttributeSizeBytes;
 
     D3D12_GLOBAL_ROOT_SIGNATURE global_root_signature {};
     global_root_signature.pGlobalRootSignature = d3d_layout->root_signature.Get();
@@ -7976,6 +7994,7 @@ void D3D12RHI::cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracin
     if (d3d_command_buffer->in_render_pass)
     {
         LOG_WARN("D3D12 cmdTraceRays skipped because DXR dispatch cannot run inside a render pass");
+        assert(false && "D3D12 cmdTraceRays must not be recorded inside a render pass");
         return;
     }
 
@@ -7989,14 +8008,15 @@ void D3D12RHI::cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracin
     {
         command_list4->SetPipelineState1(pipeline_impl->state_object.Get());
     }
-    if (dispatch_desc->layout != nullptr && dispatch_desc->layout != pipeline_impl->layout)
+    // Prefer the layout supplied with the dispatch; otherwise fall back to the pipeline's own layout.
+    // Do not mutate the shared pipeline object here — it may be reused across dispatches/layouts.
+    D3D12RHIPipelineLayout* effective_layout =
+        dispatch_desc->layout != nullptr ? static_cast<D3D12RHIPipelineLayout*>(dispatch_desc->layout)
+                                         : pipeline_impl->layout;
+    if (effective_layout != nullptr && effective_layout->root_signature != nullptr)
     {
-        pipeline_impl->layout = static_cast<D3D12RHIPipelineLayout*>(dispatch_desc->layout);
-    }
-    if (pipeline_impl->layout != nullptr && pipeline_impl->layout->root_signature != nullptr)
-    {
-        d3d_command_buffer->bound_ray_tracing_pipeline_layout = pipeline_impl->layout;
-        d3d_command_buffer->bound_ray_tracing_root_signature = pipeline_impl->layout->root_signature.Get();
+        d3d_command_buffer->bound_ray_tracing_pipeline_layout = effective_layout;
+        d3d_command_buffer->bound_ray_tracing_root_signature = effective_layout->root_signature.Get();
         command_list->SetComputeRootSignature(d3d_command_buffer->bound_ray_tracing_root_signature);
         d3d_command_buffer->ray_tracing_root_signature_dirty = false;
     }
@@ -8043,6 +8063,15 @@ void D3D12RHI::destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_
     delete static_cast<D3D12RHIShaderBindingTable*>(shader_binding_table);
 #endif
     shader_binding_table = nullptr;
+}
+
+void D3D12RHI::destroyRayTracingPipeline(RHIPipeline*& pipeline)
+{
+#ifdef _WIN32
+    // Deleting the wrapper releases the ComPtr-held DXR state object.
+    delete static_cast<D3D12RHIPipeline*>(pipeline);
+#endif
+    pipeline = nullptr;
 }
 
 void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers)
@@ -9821,7 +9850,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
     {
         if (!createDescriptorHeap(m_d3d12_device.Get(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-                                  1024,
+                                  kRtvHeapDescriptorCount,
                                   false,
                                   m_d3d12_rtv_heap,
                                   m_d3d12_rtv_descriptor_size,
@@ -9832,7 +9861,7 @@ RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
         }
         if (!createDescriptorHeap(m_d3d12_device.Get(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-                                  256,
+                                  kDsvHeapDescriptorCount,
                                   false,
                                   m_d3d12_dsv_heap,
                                   m_d3d12_dsv_descriptor_size,

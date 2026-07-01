@@ -149,6 +149,9 @@ namespace Piccolo
                                   const RHIRayTracingDispatchDesc* dispatch_desc) = 0;
         virtual void destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure) = 0;
         virtual void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table) = 0;
+        // Release a ray tracing pipeline created by createRayTracingPipeline. Default no-op for backends
+        // without ray tracing; the owning pass calls this to avoid leaking the GPU pipeline object.
+        virtual void destroyRayTracingPipeline(RHIPipeline*& pipeline) { pipeline = nullptr; }
         virtual void cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers) = 0;
         virtual bool endCommandBuffer(RHICommandBuffer* commandBuffer) = 0;
         virtual void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) = 0;
