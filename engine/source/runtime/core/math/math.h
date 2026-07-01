@@ -10,8 +10,7 @@
 
 namespace Piccolo
 {
-	class Transform;
-	static const float Math_POS_INFINITY = std::numeric_limits<float>::infinity();
+    static const float Math_POS_INFINITY = std::numeric_limits<float>::infinity();
     static const float Math_NEG_INFINITY = -std::numeric_limits<float>::infinity();
     static const float Math_PI           = 3.14159265358979323846264338327950288f;
     static const float Math_ONE_OVER_PI  = 1.0f / Math_PI;
@@ -256,12 +255,6 @@ namespace Piccolo
             return std::min({A, B, C});
         }
 
-        template<class T>
-        static constexpr T lerp(const T A, const T B, const float alpha)
-        {
-            return A + alpha * (B - A);
-        }
-
         static Matrix4x4
         makeViewMatrix(const Vector3& position, const Quaternion& orientation, const Matrix4x4* reflect_matrix = nullptr);
 
@@ -275,17 +268,6 @@ namespace Piccolo
         
         static Matrix4x4
         makeOrthographicProjectionMatrix01(float left, float right, float bottom, float top, float znear, float zfar);
-
-
-        template<typename T>
-        static T RightHandYUpToZUp(const T& in);
-
-        template<>
-        static Vector3 RightHandYUpToZUp<Vector3>(const Vector3& in);
-        template<>
-        static Quaternion RightHandYUpToZUp<Quaternion>(const Quaternion& in);
-        template<>
-        static Transform RightHandYUpToZUp<Transform>(const Transform& in);
     };
 
     // these functions could not be defined within the class definition of class

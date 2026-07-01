@@ -38,11 +38,7 @@ namespace Piccolo
         m_target_position = transform_component->getPosition();
     }
 
-    void MotorComponent::getOffStuckDead()
-    {
-	    //LOG_INFO("Some get off stuck dead logic");
-    }
-
+    void MotorComponent::getOffStuckDead() { LOG_INFO("Some get off stuck dead logic"); }
     MotorComponent::~MotorComponent()
     {
         if (m_controller_type == ControllerType::physics)
@@ -66,10 +62,9 @@ namespace Piccolo
 
         if (current_character->getObjectID() != m_parent_object.lock()->getID())
             return;
+
         TransformComponent* transform_component =
             m_parent_object.lock()->tryGetComponent<TransformComponent>("TransformComponent");
-        AnimationComponent* animation_component =
-            m_parent_object.lock()->tryGetComponent<AnimationComponent>("AnimationComponent");
 
         Radian turn_angle_yaw = g_runtime_global_context.m_input_system->m_cursor_delta_yaw;
 
@@ -83,15 +78,6 @@ namespace Piccolo
         calculatedDesiredMoveDirection(command, transform_component->getRotation());
         calculateDesiredDisplacement(delta_time);
         calculateTargetPosition(transform_component->getPosition());
-
-        if (animation_component->HasRootMotion())
-        {
-            animation_component->tick(delta_time);
-            Piccolo::Transform rt = animation_component->GetRootMotion();
-            auto               pos = Math::RightHandYUpToZUp(rt.m_position);
-            transform_component->setPosition(pos);
-            return;
-        }
 
         transform_component->setPosition(m_target_position);
     }
