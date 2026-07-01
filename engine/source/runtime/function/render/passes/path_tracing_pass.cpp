@@ -14,6 +14,13 @@ namespace Piccolo
 {
     namespace
     {
+        // Export names of the path tracing HLSL library entry points (see shader/hlsl/path_tracing.lib.hlsl).
+        // These belong to the path tracing pass rather than the generic RHI interface.
+        constexpr const wchar_t* kPathTracingRayGenExport     = L"PathTracingRayGen";
+        constexpr const wchar_t* kPathTracingMissExport       = L"PathTracingMiss";
+        constexpr const wchar_t* kPathTracingClosestHitExport = L"PathTracingClosestHit";
+        constexpr const wchar_t* kPathTracingHitGroupExport   = L"PathTracingHitGroup";
+
         bool matrixEquals(const Matrix4x4& lhs, const Matrix4x4& rhs)
         {
             return std::memcmp(lhs.m_mat, rhs.m_mat, sizeof(lhs.m_mat)) == 0;
@@ -35,9 +42,7 @@ namespace Piccolo
         }
 
         m_render_resource_impl = std::static_pointer_cast<RenderResource>(m_render_resource);
-        if (m_rhi == nullptr ||
-            m_rhi->getBackendType() != RHIBackendType::D3D12 ||
-            m_rhi->getRayTracingCapabilities().support_level != RHIRayTracingSupportLevel::Supported)
+        if (m_rhi == nullptr || !m_rhi->supportsRayTracing())
         {
             return;
         }
@@ -75,8 +80,7 @@ namespace Piccolo
             m_render_resource_impl == nullptr ||
             m_scene_output_image == nullptr ||
             m_scene_output_image_view == nullptr ||
-            m_rhi->getBackendType() != RHIBackendType::D3D12 ||
-            m_rhi->getRayTracingCapabilities().support_level != RHIRayTracingSupportLevel::Supported)
+            !m_rhi->supportsRayTracing())
         {
             return false;
         }

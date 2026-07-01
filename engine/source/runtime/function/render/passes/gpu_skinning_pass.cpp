@@ -24,8 +24,8 @@ namespace Piccolo
     {
         if (m_skin_compute_pipeline != nullptr) return true;
         if (m_rhi == nullptr) return false;
-        if (m_rhi->getBackendType() != RHIBackendType::D3D12 ||
-            m_rhi->getRayTracingCapabilities().support_level != RHIRayTracingSupportLevel::Supported)
+        // GPU skinning currently feeds path-traced BLAS builds, so gate it on ray-tracing support.
+        if (!m_rhi->supportsRayTracing())
         {
             return false;
         }

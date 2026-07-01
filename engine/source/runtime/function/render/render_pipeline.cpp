@@ -369,9 +369,7 @@ namespace Piccolo
             return;
         }
 
-        const RHIRayTracingCapabilities capabilities = rhi.getRayTracingCapabilities();
-        if (rhi.getBackendType() == RHIBackendType::D3D12 &&
-            capabilities.support_level == RHIRayTracingSupportLevel::Supported)
+        if (rhi.supportsRayTracing())
         {
             m_effective_scene_render_mode = RenderSceneRenderMode::PathTracing;
             return;

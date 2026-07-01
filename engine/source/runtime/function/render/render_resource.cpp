@@ -17,19 +17,16 @@ namespace Piccolo
 {
     namespace
     {
-        bool supportsD3D12PathTracingMeshInputs(const std::shared_ptr<RHI>& rhi, bool static_geometry)
+        bool supportsPathTracingMeshInputs(const std::shared_ptr<RHI>& rhi, bool static_geometry)
         {
-            return static_geometry &&
-                   rhi != nullptr &&
-                   rhi->getBackendType() == RHIBackendType::D3D12 &&
-                   rhi->getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Supported;
+            return static_geometry && rhi != nullptr && rhi->supportsRayTracing();
         }
 
         RHIBufferUsageFlags withPathTracingBuildInputUsage(RHIBufferUsageFlags usage,
                                                            const std::shared_ptr<RHI>& rhi,
                                                            bool static_geometry)
         {
-            if (supportsD3D12PathTracingMeshInputs(rhi, static_geometry))
+            if (supportsPathTracingMeshInputs(rhi, static_geometry))
             {
                 usage |= RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                          RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
