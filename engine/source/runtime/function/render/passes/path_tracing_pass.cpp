@@ -87,11 +87,6 @@ namespace Piccolo
             return false;
         }
 
-        m_last_collected_instance_count = 0;
-        m_last_blas_build_count         = 0;
-        m_last_tlas_rebuilt             = false;
-        m_accumulation_recreated_this_frame = false;
-
         if (m_descriptor_set_layout == nullptr)
         {
             setupDescriptorSetLayout();
@@ -210,7 +205,6 @@ namespace Piccolo
         m_scene_output_image_view = scene_output_image_view;
         destroyAccumulationImage();
         resetAccumulation();
-        m_descriptor_set_dirty = true;
     }
 
     void PathTracingPass::resetAccumulation()
@@ -349,7 +343,6 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate path tracing descriptor set");
         }
-        m_descriptor_set_dirty = true;
     }
 
     bool PathTracingPass::setupRayTracingPipeline()
@@ -419,7 +412,6 @@ namespace Piccolo
                             RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                             m_frame_data_buffer,
                             m_frame_data_memory);
-        m_descriptor_set_dirty = true;
         return m_frame_data_buffer != nullptr && m_frame_data_memory != nullptr;
     }
 
@@ -483,10 +475,8 @@ namespace Piccolo
                                1,
                                m_accumulation_prev_image_view);
         m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
-        m_accumulation_recreated_this_frame = true;
         m_extent = extent;
         resetAccumulation();
-        m_descriptor_set_dirty = true;
         return m_accumulation_image != nullptr && m_accumulation_image_view != nullptr;
     }
 
@@ -775,10 +765,6 @@ namespace Piccolo
 
         // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
         // t11=texture_array); dynamic descriptors every frame.
-        const uint32_t write_count = m_static_descriptors_written
-            ? static_cast<uint32_t>(std::size(writes)) - 5  // skip writes[1],[9],[10],[11],[12]
-            : static_cast<uint32_t>(std::size(writes));
-        RHIWriteDescriptorSet* p_writes = writes;
         if (m_static_descriptors_written)
         {
             // Compact: write only dynamic bindings (skip static)
@@ -797,7 +783,6 @@ namespace Piccolo
             m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
             m_static_descriptors_written = true;
         }
-        m_descriptor_set_dirty = false;
         return true;
     }
 
@@ -838,12 +823,7 @@ namespace Piccolo
                 continue;
             }
 
-            const bool was_dirty = instance.mesh->path_tracing_blas_dirty;
             m_render_resource_impl->ensurePathTracingBLAS(m_rhi, command_buffer, *instance.mesh);
-            if (was_dirty && !instance.mesh->path_tracing_blas_dirty && instance.mesh->path_tracing_bottom_level_as != nullptr)
-            {
-                ++m_last_blas_build_count;
-            }
             instance.bottom_level_as = instance.mesh->path_tracing_bottom_level_as;
         }
 
@@ -853,7 +833,6 @@ namespace Piccolo
             scene.isPathTracingTLASDirty() ||
             m_top_level_as == nullptr ||
             m_tlas_instance_count != collected_instances.size();
-        m_last_tlas_rebuilt = tlas_dirty;
         if (!tlas_dirty)
         {
             return true;
@@ -902,10 +881,6 @@ namespace Piccolo
                 pt_resources.blas);  // pass existing BLAS for update; nullptr on first frame
 
             instance.bottom_level_as = pt_resources.blas;
-            if (pt_resources.blas != nullptr)
-            {
-                ++m_last_blas_build_count;
-            }
         }
 
         // ---- Clean up orphaned per-instance BLAS ----
@@ -941,23 +916,18 @@ namespace Piccolo
         {
             destroyTopLevelAS();
             m_tlas_instance_count = 0;
-            m_last_collected_instance_count = 0;
             return false;
         }
-
-        m_last_collected_instance_count = static_cast<uint32_t>(collected_instances.size());
 
         // ---- Update scene buffers with FILTERED instances ----
         // Full rebuild only when static data changed (new meshes, first frame).
         // Otherwise only instance+geometry buffers are updated (transforms + skinned vertex_offset).
-        const bool static_data_changed = scene.isPathTracingTLASDirty() ||
-                                         m_last_collected_instance_count == 0;
+        const bool static_data_changed = scene.isPathTracingTLASDirty();
         if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances,
                                                                     static_data_changed))
         {
             return false;
         }
-        m_descriptor_set_dirty = true;
 
         // ---- Rebuild TLAS ----
 
@@ -1001,7 +971,6 @@ namespace Piccolo
         m_tlas_instance_count = static_cast<uint32_t>(instances.size());
         scene.clearPathTracingTLASDirty();
         resetAccumulation();
-        m_descriptor_set_dirty = true;
         return true;
     }
 
@@ -1013,7 +982,6 @@ namespace Piccolo
         }
         m_top_level_as = nullptr;
         m_tlas_instance_count = 0;
-        m_descriptor_set_dirty = true;
     }
 
     void PathTracingPass::destroyAccumulationImage()

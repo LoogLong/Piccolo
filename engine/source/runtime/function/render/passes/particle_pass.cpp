@@ -1084,7 +1084,6 @@ namespace Piccolo
 
             if (m_rhi->createPipelineLayout(&pipeline_layout_create_info, m_render_pipelines[0].layout) != RHI_SUCCESS)
                 throw std::runtime_error("create compute pass pipe layout");
-            LOG_INFO("compute pipe layout done");
         }
         RHIComputePipelineCreateInfo computePipelineCreateInfo {};
 
