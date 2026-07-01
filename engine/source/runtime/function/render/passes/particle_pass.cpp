@@ -989,9 +989,8 @@ namespace Piccolo
             if (RHI_SUCCESS !=
                 m_rhi->createDescriptorSetLayout(&particle_descriptor_layout_create_info, m_descriptor_infos[0].layout))
             {
-                throw std::runtime_error("setup particle compute Descriptor done");
+                throw std::runtime_error("create particle compute descriptor set layout failed");
             }
-            LOG_INFO("setup particle compute Descriptor done");
         }
         // scene depth and normal binding
         {
@@ -1085,7 +1084,6 @@ namespace Piccolo
 
             if (m_rhi->createPipelineLayout(&pipeline_layout_create_info, m_render_pipelines[0].layout) != RHI_SUCCESS)
                 throw std::runtime_error("create compute pass pipe layout");
-            LOG_INFO("compute pipe layout done");
         }
         RHIComputePipelineCreateInfo computePipelineCreateInfo {};
 
@@ -1297,7 +1295,7 @@ namespace Piccolo
 
             if (RHI_SUCCESS != m_rhi->allocateDescriptorSets(&particle_descriptor_set_alloc_info,
                                                              m_descriptor_infos[eid * 3 + 1].descriptor_set))
-                LOG_INFO("allocate normal and depth descriptor set done");
+                throw std::runtime_error("allocate normal and depth descriptor set failed");
         }
     }
 

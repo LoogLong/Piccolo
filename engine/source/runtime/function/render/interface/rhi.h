@@ -129,6 +129,13 @@ namespace Piccolo
         virtual void cmdDispatch(RHICommandBuffer* commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset) = 0;
         virtual RHIRayTracingCapabilities getRayTracingCapabilities() const = 0;
+        // Capability query used by the render layer to gate ray-traced features (e.g. path tracing,
+        // GPU-skinned BLAS builds) without hard-coding backend-type checks. A backend that cannot run
+        // ray tracing (e.g. the current Vulkan backend) reports Unsupported and this returns false.
+        bool supportsRayTracing() const
+        {
+            return getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Supported;
+        }
         virtual bool createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
                                                  RHIAccelerationStructure*& acceleration_structure) = 0;
         virtual bool buildAccelerationStructure(RHICommandBuffer* command_buffer,

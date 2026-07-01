@@ -3478,6 +3478,13 @@ namespace Piccolo
         }
 
 #if PICCOLO_D3D12_HAS_DXR
+        // Default DXIL export names matching the path tracing HLSL library entry points. Only used as a
+        // fallback when the caller does not provide explicit export names in the create info.
+        constexpr const wchar_t* kDefaultRayGenExport     = L"PathTracingRayGen";
+        constexpr const wchar_t* kDefaultMissExport       = L"PathTracingMiss";
+        constexpr const wchar_t* kDefaultClosestHitExport = L"PathTracingClosestHit";
+        constexpr const wchar_t* kDefaultHitGroupExport   = L"PathTracingHitGroup";
+
         const wchar_t* rayTracingExportOrDefault(const wchar_t* export_name, const wchar_t* default_export)
         {
             return export_name != nullptr ? export_name : default_export;
@@ -7740,13 +7747,13 @@ bool D3D12RHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* c
     pipeline_impl->layout = d3d_layout;
 
     const wchar_t* raygen_export =
-        rayTracingExportOrDefault(create_info->shader_library.raygen_export, kPathTracingRayGenExport);
+        rayTracingExportOrDefault(create_info->shader_library.raygen_export, kDefaultRayGenExport);
     const wchar_t* miss_export =
-        rayTracingExportOrDefault(create_info->shader_library.miss_export, kPathTracingMissExport);
+        rayTracingExportOrDefault(create_info->shader_library.miss_export, kDefaultMissExport);
     const wchar_t* closest_hit_export =
-        rayTracingExportOrDefault(create_info->shader_library.closest_hit_export, kPathTracingClosestHitExport);
+        rayTracingExportOrDefault(create_info->shader_library.closest_hit_export, kDefaultClosestHitExport);
     const wchar_t* hit_group_export =
-        rayTracingExportOrDefault(create_info->shader_library.hit_group_export, kPathTracingHitGroupExport);
+        rayTracingExportOrDefault(create_info->shader_library.hit_group_export, kDefaultHitGroupExport);
 
     D3D12_EXPORT_DESC exports[3] {};
     exports[0].Name = raygen_export;
@@ -7833,11 +7840,11 @@ bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* c
     }
 
     const wchar_t* raygen_export =
-        rayTracingExportOrDefault(create_info->raygen_export, kPathTracingRayGenExport);
+        rayTracingExportOrDefault(create_info->raygen_export, kDefaultRayGenExport);
     const wchar_t* miss_export =
-        rayTracingExportOrDefault(create_info->miss_export, kPathTracingMissExport);
+        rayTracingExportOrDefault(create_info->miss_export, kDefaultMissExport);
     const wchar_t* hit_group_export =
-        rayTracingExportOrDefault(create_info->hit_group_export, kPathTracingHitGroupExport);
+        rayTracingExportOrDefault(create_info->hit_group_export, kDefaultHitGroupExport);
     const void* raygen_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(raygen_export);
     const void* miss_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(miss_export);
     const void* hit_group_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(hit_group_export);

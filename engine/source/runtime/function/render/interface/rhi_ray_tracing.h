@@ -29,11 +29,6 @@ namespace Piccolo
         bool                      supports_inline_ray_tracing {false};
     };
 
-    static constexpr const wchar_t* kPathTracingRayGenExport     = L"PathTracingRayGen";
-    static constexpr const wchar_t* kPathTracingMissExport       = L"PathTracingMiss";
-    static constexpr const wchar_t* kPathTracingClosestHitExport = L"PathTracingClosestHit";
-    static constexpr const wchar_t* kPathTracingHitGroupExport   = L"PathTracingHitGroup";
-
     struct RHIAccelerationStructureGeometryDesc
     {
         RHIBuffer*      vertex_position_buffer {nullptr};

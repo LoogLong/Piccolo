@@ -280,6 +280,9 @@ namespace Piccolo
         size_t m_path_tracing_geometry_buffer_capacity {0};
         size_t m_path_tracing_instance_buffer_capacity {0};
 
+        // Non-owning RHI handle cached while path tracing buffers exist, so clear() can release them.
+        RHI* m_path_tracing_rhi {nullptr};
+
         void createAndMapStorageBuffer(std::shared_ptr<RHI> rhi);
         void createIBLSamplers(std::shared_ptr<RHI> rhi);
         void createIBLTextures(std::shared_ptr<RHI>                        rhi,

@@ -54,6 +54,7 @@ namespace Piccolo
         std::shared_ptr<RHI> m_rhi;
         RenderSceneRenderMode m_requested_scene_render_mode {RenderSceneRenderMode::Raster};
         RenderSceneRenderMode m_effective_scene_render_mode {RenderSceneRenderMode::Raster};
+        bool                  m_scene_render_mode_fallback_logged {false};
 
         std::shared_ptr<RenderPassBase> m_gpu_skinning_pass;
         std::shared_ptr<RenderPassBase> m_directional_light_pass;

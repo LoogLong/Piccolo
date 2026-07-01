@@ -14,7 +14,6 @@ namespace Piccolo
         m_render_entities.clear();
         m_path_tracing_instances.clear();
         m_path_tracing_entity_signatures.clear();
-        m_last_path_tracing_skipped_skinned = UINT32_MAX;
         m_last_path_tracing_skipped_transparent = UINT32_MAX;
         m_last_path_tracing_skipped_missing = UINT32_MAX;
         markPathTracingSceneDirty();
@@ -103,7 +102,6 @@ namespace Piccolo
         m_render_entities.clear();
         m_path_tracing_instances.clear();
         m_path_tracing_entity_signatures.clear();
-        m_last_path_tracing_skipped_skinned = UINT32_MAX;
         m_last_path_tracing_skipped_transparent = UINT32_MAX;
         m_last_path_tracing_skipped_missing = UINT32_MAX;
         markPathTracingSceneDirty();
@@ -172,7 +170,6 @@ namespace Piccolo
 
         m_path_tracing_instances.clear();
 
-        uint32_t skipped_skinned     = 0;
         uint32_t skipped_transparent = 0;
         uint32_t skipped_missing     = 0;
         std::map<size_t, uint32_t> material_indices;
@@ -231,17 +228,14 @@ namespace Piccolo
         }
 
         const bool skipped_counts_changed =
-            skipped_skinned != m_last_path_tracing_skipped_skinned ||
             skipped_transparent != m_last_path_tracing_skipped_transparent ||
             skipped_missing != m_last_path_tracing_skipped_missing;
 
         if (log_skipped_instances && skipped_counts_changed)
         {
-            if (skipped_skinned > 0 || skipped_transparent > 0)
+            if (skipped_transparent > 0)
             {
-                LOG_INFO("Path tracing scene export skipped {} skinned/vertex-blended and {} transparent/blended instances",
-                         skipped_skinned,
-                         skipped_transparent);
+                LOG_INFO("Path tracing scene export skipped {} transparent/blended instances", skipped_transparent);
             }
             if (skipped_missing > 0)
             {
@@ -250,7 +244,6 @@ namespace Piccolo
             }
         }
 
-        m_last_path_tracing_skipped_skinned = skipped_skinned;
         m_last_path_tracing_skipped_transparent = skipped_transparent;
         m_last_path_tracing_skipped_missing = skipped_missing;
     }

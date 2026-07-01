@@ -369,12 +369,20 @@ namespace Piccolo
             return;
         }
 
-        const RHIRayTracingCapabilities capabilities = rhi.getRayTracingCapabilities();
-        if (rhi.getBackendType() == RHIBackendType::D3D12 &&
-            capabilities.support_level == RHIRayTracingSupportLevel::Supported)
+        if (rhi.supportsRayTracing())
         {
             m_effective_scene_render_mode = RenderSceneRenderMode::PathTracing;
             return;
+        }
+
+        // Requested PathTracing but ray tracing is unavailable on the active backend: fall back to
+        // rasterization. Warn once so the discrepancy between requested and effective mode is visible.
+        if (!m_scene_render_mode_fallback_logged)
+        {
+            LOG_WARN("RenderSceneMode=PathTracing requested but ray tracing is unavailable on the '{}' backend; "
+                     "falling back to Raster.",
+                     rhi.getBackendType() == RHIBackendType::D3D12 ? "D3D12" : "Vulkan");
+            m_scene_render_mode_fallback_logged = true;
         }
 
         m_effective_scene_render_mode = RenderSceneRenderMode::Raster;

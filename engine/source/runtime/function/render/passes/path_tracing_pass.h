@@ -99,12 +99,7 @@ namespace Piccolo
         Matrix4x4 m_last_proj_view_matrix_inv {Matrix4x4::IDENTITY};
         Vector3   m_last_camera_position {Vector3::ZERO};
         bool      m_has_last_camera_state {false};
-        bool      m_descriptor_set_dirty {true};
         bool      m_static_descriptors_written {false};
-        uint32_t  m_last_collected_instance_count {0};
-        uint32_t  m_last_blas_build_count {0};
-        bool      m_last_tlas_rebuilt {false};
-        bool      m_accumulation_recreated_this_frame {false};
 
         RHIImageView* m_irradiance_texture_view {nullptr};
         RHIImageView* m_specular_texture_view {nullptr};
