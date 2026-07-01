@@ -40,6 +40,47 @@ namespace Piccolo
 
     void RenderResource::clear()
     {
+        // Release the path tracing scene buffers owned by RenderResource. The RHI handle is cached
+        // while those buffers exist (see updatePathTracingSceneBuffers) and is still valid here, as
+        // RenderResource::clear() runs before RHI::clear() during shutdown.
+        if (m_path_tracing_rhi != nullptr)
+        {
+            auto destroy_buffer = [this](RHIBuffer*& buffer, RHIDeviceMemory*& memory) {
+                if (buffer != nullptr)
+                {
+                    m_path_tracing_rhi->destroyBuffer(buffer);
+                    buffer = nullptr;
+                }
+                if (memory != nullptr)
+                {
+                    m_path_tracing_rhi->freeMemory(memory);
+                    memory = nullptr;
+                }
+            };
+
+            destroy_buffer(m_path_tracing_vertex_buffer, m_path_tracing_vertex_buffer_memory);
+            destroy_buffer(m_path_tracing_index_buffer, m_path_tracing_index_buffer_memory);
+            destroy_buffer(m_path_tracing_material_buffer, m_path_tracing_material_buffer_memory);
+            destroy_buffer(m_path_tracing_geometry_buffer, m_path_tracing_geometry_buffer_memory);
+            destroy_buffer(m_path_tracing_instance_buffer, m_path_tracing_instance_buffer_memory);
+
+            m_path_tracing_vertex_buffer_capacity   = 0;
+            m_path_tracing_index_buffer_capacity    = 0;
+            m_path_tracing_material_buffer_capacity = 0;
+            m_path_tracing_geometry_buffer_capacity = 0;
+            m_path_tracing_instance_buffer_capacity = 0;
+            m_path_tracing_rhi                      = nullptr;
+        }
+
+        // The skinned vertex buffer is owned by GpuSkinningPass; only drop the non-owning reference.
+        m_skinned_vertex_buffer = nullptr;
+
+        m_path_tracing_vertex_data.clear();
+        m_path_tracing_index_data.clear();
+        m_path_tracing_material_data.clear();
+        m_path_tracing_geometry_data.clear();
+        m_path_tracing_instance_data.clear();
+        m_path_tracing_material_texture_views.clear();
     }
 
     void RenderResource::uploadGlobalRenderResource(std::shared_ptr<RHI> rhi, LevelResourceDesc level_resource_desc)
@@ -384,6 +425,9 @@ namespace Piccolo
                                                        const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
                                                        bool full_rebuild)
     {
+        // Cache the RHI so the buffers created below can be released in clear().
+        m_path_tracing_rhi = rhi.get();
+
         m_path_tracing_vertex_data.clear();
         m_path_tracing_index_data.clear();
         m_path_tracing_material_data.clear();
