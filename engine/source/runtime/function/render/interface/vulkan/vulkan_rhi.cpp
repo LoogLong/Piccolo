@@ -2966,23 +2966,179 @@ namespace Piccolo
     bool VulkanRHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
                                              RHIPipeline*& pipeline)
     {
-        (void)create_info;
         pipeline = nullptr;
-        return false;
+        if (!m_ray_tracing_enabled || create_info == nullptr || create_info->shader_library.bytecode == nullptr ||
+            create_info->layout == nullptr)
+        {
+            return false;
+        }
+
+        // The shader library is a single SPIR-V module exposing multiple ray tracing entry points
+        // (raygen/miss/closesthit), mirroring the DXIL library used by the D3D12 backend.
+        VkShaderModuleCreateInfo module_info {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        module_info.codeSize = create_info->shader_library.bytecode_size;
+        module_info.pCode    = reinterpret_cast<const uint32_t*>(create_info->shader_library.bytecode);
+        VkShaderModule shader_module = VK_NULL_HANDLE;
+        if (vkCreateShaderModule(m_device, &module_info, nullptr, &shader_module) != VK_SUCCESS)
+        {
+            LOG_ERROR("failed to create ray tracing shader module");
+            return false;
+        }
+
+        auto narrow = [](const wchar_t* w) {
+            std::string s;
+            if (w != nullptr)
+            {
+                for (; *w != 0; ++w)
+                {
+                    s.push_back(static_cast<char>(*w));
+                }
+            }
+            return s;
+        };
+        const std::string raygen_name = narrow(create_info->shader_library.raygen_export);
+        const std::string miss_name   = narrow(create_info->shader_library.miss_export);
+        const std::string chit_name   = narrow(create_info->shader_library.closest_hit_export);
+
+        VkPipelineShaderStageCreateInfo stages[3] {};
+        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        stages[0].module = shader_module;
+        stages[0].pName  = raygen_name.c_str();
+        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
+        stages[1].module = shader_module;
+        stages[1].pName  = miss_name.c_str();
+        stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[2].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        stages[2].module = shader_module;
+        stages[2].pName  = chit_name.c_str();
+
+        VkRayTracingShaderGroupCreateInfoKHR groups[3] {};
+        for (auto& group : groups)
+        {
+            group.sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+            group.generalShader      = VK_SHADER_UNUSED_KHR;
+            group.closestHitShader   = VK_SHADER_UNUSED_KHR;
+            group.anyHitShader       = VK_SHADER_UNUSED_KHR;
+            group.intersectionShader = VK_SHADER_UNUSED_KHR;
+        }
+        groups[0].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[0].generalShader = 0; // raygen
+        groups[1].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[1].generalShader = 1; // miss
+        groups[2].type            = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        groups[2].closestHitShader = 2; // closest hit
+
+        VkRayTracingPipelineCreateInfoKHR pipeline_info {VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+        pipeline_info.stageCount = 3;
+        pipeline_info.pStages    = stages;
+        pipeline_info.groupCount = 3;
+        pipeline_info.pGroups    = groups;
+        pipeline_info.maxPipelineRayRecursionDepth =
+            (std::min)(create_info->max_recursion_depth, m_ray_tracing_pipeline_properties.maxRayRecursionDepth);
+        pipeline_info.layout = static_cast<VulkanPipelineLayout*>(create_info->layout)->getResource();
+
+        VkPipeline vk_pipeline = VK_NULL_HANDLE;
+        const VkResult result  = _vkCreateRayTracingPipelines(
+            m_device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &vk_pipeline);
+        vkDestroyShaderModule(m_device, shader_module, nullptr);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkCreateRayTracingPipelinesKHR failed");
+            return false;
+        }
+
+        auto* impl = new VulkanPipeline();
+        impl->setResource(vk_pipeline);
+        pipeline = impl;
+        return true;
     }
 
     bool VulkanRHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* create_info,
                                              RHIShaderBindingTable*& shader_binding_table)
     {
-        (void)create_info;
         shader_binding_table = nullptr;
-        return false;
+        if (!m_ray_tracing_enabled || create_info == nullptr || create_info->ray_tracing_pipeline == nullptr)
+        {
+            return false;
+        }
+        VkPipeline vk_pipeline = static_cast<VulkanPipeline*>(create_info->ray_tracing_pipeline)->getResource();
+
+        const uint32_t handle_size       = m_ray_tracing_pipeline_properties.shaderGroupHandleSize;
+        const uint32_t handle_alignment  = m_ray_tracing_pipeline_properties.shaderGroupHandleAlignment;
+        const uint32_t base_alignment    = m_ray_tracing_pipeline_properties.shaderGroupBaseAlignment;
+        const uint32_t handle_aligned    = static_cast<uint32_t>(alignUpSize(handle_size, handle_alignment));
+        const uint32_t group_count       = 3;
+
+        std::vector<uint8_t> handles(static_cast<size_t>(handle_size) * group_count);
+        if (_vkGetRayTracingShaderGroupHandles(
+                m_device, vk_pipeline, 0, group_count, handles.size(), handles.data()) != VK_SUCCESS)
+        {
+            LOG_ERROR("vkGetRayTracingShaderGroupHandlesKHR failed");
+            return false;
+        }
+
+        // One record per region (raygen/miss/hit), each region base-aligned; raygen size must equal stride.
+        const VkDeviceSize raygen_stride = alignUpSize(handle_aligned, base_alignment);
+        const VkDeviceSize raygen_size   = raygen_stride;
+        const VkDeviceSize miss_offset   = raygen_size;
+        const VkDeviceSize miss_stride   = handle_aligned;
+        const VkDeviceSize miss_size     = alignUpSize(miss_stride, base_alignment);
+        const VkDeviceSize hit_offset    = miss_offset + miss_size;
+        const VkDeviceSize hit_stride    = handle_aligned;
+        const VkDeviceSize hit_size      = alignUpSize(hit_stride, base_alignment);
+        const VkDeviceSize total_size    = hit_offset + hit_size;
+
+        auto* impl = new VulkanRHIShaderBindingTable();
+        VulkanUtil::createBuffer(m_physical_device,
+                                 m_device,
+                                 total_size,
+                                 VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                 impl->buffer,
+                                 impl->memory);
+
+        void* mapped = nullptr;
+        vkMapMemory(m_device, impl->memory, 0, total_size, 0, &mapped);
+        auto* dst = static_cast<uint8_t*>(mapped);
+        std::memcpy(dst, handles.data() + 0 * handle_size, handle_size);                        // raygen
+        std::memcpy(dst + miss_offset, handles.data() + 1 * handle_size, handle_size);          // miss
+        std::memcpy(dst + hit_offset, handles.data() + 2 * handle_size, handle_size);           // hit
+        vkUnmapMemory(m_device, impl->memory);
+
+        const VkDeviceAddress base_address = getBufferDeviceAddress(impl->buffer);
+        impl->raygen_region.deviceAddress  = base_address;
+        impl->raygen_region.stride         = raygen_stride;
+        impl->raygen_region.size           = raygen_size;
+        impl->miss_region.deviceAddress    = base_address + miss_offset;
+        impl->miss_region.stride           = miss_stride;
+        impl->miss_region.size             = miss_size;
+        impl->hit_region.deviceAddress     = base_address + hit_offset;
+        impl->hit_region.stride            = hit_stride;
+        impl->hit_region.size              = hit_size;
+
+        shader_binding_table = impl;
+        return true;
     }
 
     void VulkanRHI::cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracingDispatchDesc* dispatch_desc)
     {
-        (void)command_buffer;
-        (void)dispatch_desc;
+        if (!m_ray_tracing_enabled || command_buffer == nullptr || dispatch_desc == nullptr ||
+            dispatch_desc->shader_binding_table == nullptr)
+        {
+            return;
+        }
+        VkCommandBuffer cmd = static_cast<VulkanCommandBuffer*>(command_buffer)->getResource();
+        auto*           sbt = static_cast<VulkanRHIShaderBindingTable*>(dispatch_desc->shader_binding_table);
+        _vkCmdTraceRays(cmd,
+                        &sbt->raygen_region,
+                        &sbt->miss_region,
+                        &sbt->hit_region,
+                        &sbt->callable_region,
+                        dispatch_desc->width,
+                        dispatch_desc->height,
+                        dispatch_desc->depth);
     }
 
     void VulkanRHI::destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure)
@@ -3020,6 +3176,19 @@ namespace Piccolo
 
     void VulkanRHI::destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table)
     {
+        if (shader_binding_table != nullptr && m_device != nullptr)
+        {
+            auto* impl = static_cast<VulkanRHIShaderBindingTable*>(shader_binding_table);
+            if (impl->buffer != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(m_device, impl->buffer, nullptr);
+            }
+            if (impl->memory != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(m_device, impl->memory, nullptr);
+            }
+            delete impl;
+        }
         shader_binding_table = nullptr;
     }
 
