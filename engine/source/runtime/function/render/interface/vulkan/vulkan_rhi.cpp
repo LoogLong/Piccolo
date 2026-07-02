@@ -76,6 +76,55 @@
 
 namespace Piccolo
 {
+    namespace
+    {
+        // Vulkan-backed implementation of the opaque RHI ray tracing handles.
+        struct VulkanRHIAccelerationStructure : public RHIAccelerationStructure
+        {
+            VkAccelerationStructureKHR   handle {VK_NULL_HANDLE};
+            VkBuffer                     as_buffer {VK_NULL_HANDLE};
+            VkDeviceMemory               as_memory {VK_NULL_HANDLE};
+            VkBuffer                     scratch_buffer {VK_NULL_HANDLE};
+            VkDeviceMemory               scratch_memory {VK_NULL_HANDLE};
+            VkBuffer                     instance_buffer {VK_NULL_HANDLE}; // TLAS only
+            VkDeviceMemory               instance_memory {VK_NULL_HANDLE};
+            void*                        instance_mapped {nullptr};
+            VkDeviceAddress              device_address {0};
+            RHIAccelerationStructureType type {RHIAccelerationStructureType::BottomLevel};
+        };
+
+        struct VulkanRHIShaderBindingTable : public RHIShaderBindingTable
+        {
+            VkBuffer                        buffer {VK_NULL_HANDLE};
+            VkDeviceMemory                  memory {VK_NULL_HANDLE};
+            VkStridedDeviceAddressRegionKHR raygen_region {};
+            VkStridedDeviceAddressRegionKHR miss_region {};
+            VkStridedDeviceAddressRegionKHR hit_region {};
+            VkStridedDeviceAddressRegionKHR callable_region {};
+        };
+
+        VkTransformMatrixKHR toVkTransformMatrix(const float* row_major_3x4)
+        {
+            VkTransformMatrixKHR m {};
+            if (row_major_3x4 != nullptr)
+            {
+                std::memcpy(&m, row_major_3x4, sizeof(float) * 12);
+            }
+            else
+            {
+                m.matrix[0][0] = 1.0f;
+                m.matrix[1][1] = 1.0f;
+                m.matrix[2][2] = 1.0f;
+            }
+            return m;
+        }
+
+        VkDeviceSize alignUpSize(VkDeviceSize value, VkDeviceSize alignment)
+        {
+            return alignment == 0 ? value : (value + alignment - 1) & ~(alignment - 1);
+        }
+    } // namespace
+
     VulkanRHI::~VulkanRHI()
     {
         // TODO
@@ -2312,6 +2361,8 @@ namespace Piccolo
         std::vector<VkWriteDescriptorSet> vk_write_descriptor_set_list(write_descriptor_set_size);
         int image_info_count = 0;
         int buffer_info_count = 0;
+        int accel_info_count = 0;
+        int accel_handle_count = 0;
         for (int i = 0; i < write_descriptor_set_size; ++i)
         {
             const auto& rhi_write_descriptor_set_element = pDescriptorWrites[i];
@@ -2323,11 +2374,23 @@ namespace Piccolo
             {
                 buffer_info_count++;
             }
+            if (rhi_write_descriptor_set_element.pAccelerationStructureInfo != nullptr)
+            {
+                accel_info_count++;
+                accel_handle_count +=
+                    rhi_write_descriptor_set_element.pAccelerationStructureInfo->accelerationStructureCount;
+            }
         }
         std::vector<VkDescriptorImageInfo> vk_descriptor_image_info_list(image_info_count);
         std::vector<VkDescriptorBufferInfo> vk_descriptor_buffer_info_list(buffer_info_count);
+        // Acceleration-structure descriptor writes are chained into VkWriteDescriptorSet::pNext; these
+        // vectors are pre-sized so their addresses stay stable while the write list is populated.
+        std::vector<VkWriteDescriptorSetAccelerationStructureKHR> vk_accel_write_list(accel_info_count);
+        std::vector<VkAccelerationStructureKHR>                   vk_accel_handle_list(accel_handle_count);
         int image_info_current = 0;
         int buffer_info_current = 0;
+        int accel_info_current = 0;
+        int accel_handle_current = 0;
 
         for (int i = 0; i < write_descriptor_set_size; ++i)
         {
@@ -2375,6 +2438,30 @@ namespace Piccolo
             vk_write_descriptor_set_element.pImageInfo = vk_descriptor_image_info_ptr;
             vk_write_descriptor_set_element.pBufferInfo = vk_descriptor_buffer_info_ptr;
             //vk_write_descriptor_set_element.pTexelBufferView = &((VulkanBufferView*)rhi_write_descriptor_set_element.pTexelBufferView)->getResource();
+
+            // Acceleration structure write: translate RHI handles to Vulkan handles and chain the
+            // VkWriteDescriptorSetAccelerationStructureKHR into pNext (overriding the copied pNext).
+            if (rhi_write_descriptor_set_element.pAccelerationStructureInfo != nullptr)
+            {
+                const RHIWriteDescriptorSetAccelerationStructure* as_info =
+                    rhi_write_descriptor_set_element.pAccelerationStructureInfo;
+                VkWriteDescriptorSetAccelerationStructureKHR& vk_as_write =
+                    vk_accel_write_list[accel_info_current++];
+                vk_as_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+                vk_as_write.pNext = nullptr;
+                vk_as_write.accelerationStructureCount = as_info->accelerationStructureCount;
+
+                const int handle_base = accel_handle_current;
+                for (uint32_t k = 0; k < as_info->accelerationStructureCount; ++k)
+                {
+                    RHIAccelerationStructure* rhi_as = as_info->pAccelerationStructures[k];
+                    vk_accel_handle_list[accel_handle_current++] =
+                        rhi_as != nullptr ? static_cast<VulkanRHIAccelerationStructure*>(rhi_as)->handle
+                                          : VK_NULL_HANDLE;
+                }
+                vk_as_write.pAccelerationStructures = vk_accel_handle_list.data() + handle_base;
+                vk_write_descriptor_set_element.pNext = &vk_as_write;
+            }
         };
 
         if (image_info_current != image_info_count
@@ -2660,55 +2747,6 @@ namespace Piccolo
     {
         vkCmdDispatchIndirect(((VulkanCommandBuffer*)commandBuffer)->getResource(), ((VulkanBuffer*)buffer)->getResource(), offset);
     }
-
-    namespace
-    {
-        // Vulkan-backed implementation of the opaque RHI ray tracing handles.
-        struct VulkanRHIAccelerationStructure : public RHIAccelerationStructure
-        {
-            VkAccelerationStructureKHR   handle {VK_NULL_HANDLE};
-            VkBuffer                     as_buffer {VK_NULL_HANDLE};
-            VkDeviceMemory               as_memory {VK_NULL_HANDLE};
-            VkBuffer                     scratch_buffer {VK_NULL_HANDLE};
-            VkDeviceMemory               scratch_memory {VK_NULL_HANDLE};
-            VkBuffer                     instance_buffer {VK_NULL_HANDLE}; // TLAS only
-            VkDeviceMemory               instance_memory {VK_NULL_HANDLE};
-            void*                        instance_mapped {nullptr};
-            VkDeviceAddress              device_address {0};
-            RHIAccelerationStructureType type {RHIAccelerationStructureType::BottomLevel};
-        };
-
-        struct VulkanRHIShaderBindingTable : public RHIShaderBindingTable
-        {
-            VkBuffer                        buffer {VK_NULL_HANDLE};
-            VkDeviceMemory                  memory {VK_NULL_HANDLE};
-            VkStridedDeviceAddressRegionKHR raygen_region {};
-            VkStridedDeviceAddressRegionKHR miss_region {};
-            VkStridedDeviceAddressRegionKHR hit_region {};
-            VkStridedDeviceAddressRegionKHR callable_region {};
-        };
-
-        VkTransformMatrixKHR toVkTransformMatrix(const float* row_major_3x4)
-        {
-            VkTransformMatrixKHR m {};
-            if (row_major_3x4 != nullptr)
-            {
-                std::memcpy(&m, row_major_3x4, sizeof(float) * 12);
-            }
-            else
-            {
-                m.matrix[0][0] = 1.0f;
-                m.matrix[1][1] = 1.0f;
-                m.matrix[2][2] = 1.0f;
-            }
-            return m;
-        }
-
-        VkDeviceSize alignUpSize(VkDeviceSize value, VkDeviceSize alignment)
-        {
-            return alignment == 0 ? value : (value + alignment - 1) & ~(alignment - 1);
-        }
-    } // namespace
 
     RHIRayTracingCapabilities VulkanRHI::getRayTracingCapabilities() const
     {
@@ -3363,7 +3401,7 @@ namespace Piccolo
         // should be big enough, and thus we can sub-allocate DescriptorSet from
         // DescriptorPool merely as we sub-allocate Buffer/Image from DeviceMemory.
 
-        VkDescriptorPoolSize pool_sizes[7];
+        std::vector<VkDescriptorPoolSize> pool_sizes(7);
         pool_sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         pool_sizes[0].descriptorCount = 3 + 2 + 2 + 2 + 1 + 1 + 3 + 3;
         pool_sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -3379,12 +3417,30 @@ namespace Piccolo
         pool_sizes[6].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         pool_sizes[6].descriptorCount = 1;
 
+        uint32_t max_sets =
+            1 + 1 + 1 + m_max_material_count + m_max_vertex_blending_mesh_count + 1 + 1; // +skybox + axis descriptor set
+
+        // The path tracing descriptor set (allocated from this pool) needs an acceleration structure,
+        // storage images, a large sampled-image array, samplers and storage buffers. Reserve capacity
+        // for it when ray tracing is available so the set can be allocated.
+        if (m_ray_tracing_enabled)
+        {
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4});
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4});
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2});
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16});
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4});
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLER, 4});
+            // binding 11 is a 1024-element sampled-image array plus binding 1035 (previous accumulation).
+            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024 + 8});
+            max_sets += 1;
+        }
+
         VkDescriptorPoolCreateInfo pool_info {};
         pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_info.poolSizeCount = sizeof(pool_sizes) / sizeof(pool_sizes[0]);
-        pool_info.pPoolSizes    = pool_sizes;
-        pool_info.maxSets =
-            1 + 1 + 1 + m_max_material_count + m_max_vertex_blending_mesh_count + 1 + 1; // +skybox + axis descriptor set
+        pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+        pool_info.pPoolSizes    = pool_sizes.data();
+        pool_info.maxSets       = max_sets;
         pool_info.flags = 0U;
 
         if (vkCreateDescriptorPool(m_device, &pool_info, nullptr, &m_vk_descriptor_pool) != VK_SUCCESS)
