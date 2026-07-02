@@ -128,7 +128,7 @@ namespace Piccolo
 
     VulkanRHI::~VulkanRHI()
     {
-        // TODO
+        clear();
     }
 
     void VulkanRHI::initialize(RHIInitInfo init_info)
@@ -212,10 +212,141 @@ namespace Piccolo
 
     void VulkanRHI::clear()
     {
-        if (m_enable_validation_Layers)
+        if (m_device != VK_NULL_HANDLE)
+        {
+            vkDeviceWaitIdle(m_device);
+
+            destroyDefaultSampler(Default_Sampler_Linear);
+            destroyDefaultSampler(Default_Sampler_Nearest);
+            destroyMipmappedSampler();
+
+            for (auto framebuffer : m_swapchain_framebuffers)
+            {
+                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            }
+            m_swapchain_framebuffers.clear();
+
+            if (m_swapchain != VK_NULL_HANDLE)
+            {
+                for (auto* image_view : m_swapchain_imageviews)
+                {
+                    if (image_view != nullptr)
+                    {
+                        vkDestroyImageView(m_device, ((VulkanImageView*)image_view)->getResource(), nullptr);
+                        delete image_view;
+                    }
+                }
+                m_swapchain_imageviews.clear();
+                vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+                m_swapchain = VK_NULL_HANDLE;
+            }
+
+            if (m_depth_image_view != nullptr && ((VulkanImageView*)m_depth_image_view)->getResource() != VK_NULL_HANDLE)
+            {
+                destroyImageView(m_depth_image_view);
+            }
+            if (m_depth_image != nullptr && ((VulkanImage*)m_depth_image)->getResource() != VK_NULL_HANDLE)
+            {
+                vkDestroyImage(m_device, ((VulkanImage*)m_depth_image)->getResource(), nullptr);
+                ((VulkanImage*)m_depth_image)->setResource(VK_NULL_HANDLE);
+            }
+            if (m_depth_image_memory != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(m_device, m_depth_image_memory, nullptr);
+                m_depth_image_memory = VK_NULL_HANDLE;
+            }
+
+            for (uint32_t i = 0; i < k_max_frames_in_flight; ++i)
+            {
+                if (m_image_available_for_render_semaphores[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroySemaphore(m_device, m_image_available_for_render_semaphores[i], nullptr);
+                    m_image_available_for_render_semaphores[i] = VK_NULL_HANDLE;
+                }
+                if (m_image_finished_for_presentation_semaphores[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroySemaphore(m_device, m_image_finished_for_presentation_semaphores[i], nullptr);
+                    m_image_finished_for_presentation_semaphores[i] = VK_NULL_HANDLE;
+                }
+                if (m_image_available_for_texturescopy_semaphores[i] != nullptr)
+                {
+                    vkDestroySemaphore(m_device,
+                                       ((VulkanSemaphore*)m_image_available_for_texturescopy_semaphores[i])->getResource(),
+                                       nullptr);
+                    delete m_image_available_for_texturescopy_semaphores[i];
+                    m_image_available_for_texturescopy_semaphores[i] = nullptr;
+                }
+                if (m_is_frame_in_flight_fences[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroyFence(m_device, m_is_frame_in_flight_fences[i], nullptr);
+                    m_is_frame_in_flight_fences[i] = VK_NULL_HANDLE;
+                }
+                delete m_rhi_is_frame_in_flight_fences[i];
+                m_rhi_is_frame_in_flight_fences[i] = nullptr;
+                delete m_command_buffers[i];
+                m_command_buffers[i] = nullptr;
+                if (m_command_pools[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroyCommandPool(m_device, m_command_pools[i], nullptr);
+                    m_command_pools[i] = VK_NULL_HANDLE;
+                }
+            }
+
+            delete m_current_command_buffer;
+            m_current_command_buffer = nullptr;
+
+            if (m_rhi_command_pool != nullptr)
+            {
+                destroyCommandPool(m_rhi_command_pool);
+                delete m_rhi_command_pool;
+                m_rhi_command_pool = nullptr;
+            }
+
+            if (m_vk_descriptor_pool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(m_device, m_vk_descriptor_pool, nullptr);
+                m_vk_descriptor_pool = VK_NULL_HANDLE;
+            }
+            delete m_descriptor_pool;
+            m_descriptor_pool = nullptr;
+
+            delete static_cast<VulkanQueue*>(m_graphics_queue);
+            m_graphics_queue = nullptr;
+            delete static_cast<VulkanQueue*>(m_compute_queue);
+            m_compute_queue = nullptr;
+
+            if (m_assets_allocator != VK_NULL_HANDLE)
+            {
+                vmaDestroyAllocator(m_assets_allocator);
+                m_assets_allocator = VK_NULL_HANDLE;
+            }
+
+            destroyDevice();
+            m_device = VK_NULL_HANDLE;
+        }
+
+        if (m_surface != VK_NULL_HANDLE && m_instance != VK_NULL_HANDLE)
+        {
+            vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+            m_surface = VK_NULL_HANDLE;
+        }
+
+        if (m_enable_validation_Layers && m_debug_messenger != nullptr && m_instance != VK_NULL_HANDLE)
         {
             destroyDebugUtilsMessengerEXT(m_instance, m_debug_messenger, nullptr);
+            m_debug_messenger = nullptr;
         }
+
+        if (m_instance != VK_NULL_HANDLE)
+        {
+            vkDestroyInstance(m_instance, nullptr);
+            m_instance = VK_NULL_HANDLE;
+        }
+
+        m_physical_device = VK_NULL_HANDLE;
+        m_present_queue   = VK_NULL_HANDLE;
+        m_ray_tracing_enabled = false;
+        m_ray_tracing_capabilities.support_level = RHIRayTracingSupportLevel::Unsupported;
     }
 
     void VulkanRHI::waitForFences()

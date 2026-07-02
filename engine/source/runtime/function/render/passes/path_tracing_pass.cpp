@@ -989,30 +989,45 @@ namespace Piccolo
             return false;
         }
 
-        // ---- Rebuild TLAS ----
-
         std::vector<RHIAccelerationStructureInstanceDesc> instances;
         instances.reserve(collected_instances.size());
         for (const RenderPathTracingCollectedInstance& collected_instance : collected_instances)
         {
             RHIAccelerationStructureInstanceDesc instance_desc {};
-            instance_desc.bottom_level_as          = collected_instance.bottom_level_as;
-            instance_desc.row_major_3x4_transform  = collected_instance.row_major_3x4_transform.data();
-            instance_desc.instance_id              = collected_instance.instance_id;
-            instance_desc.hit_group_index          = 0;
-            instance_desc.instance_mask            = 0xFF;
-            instance_desc.force_opaque             = true;
+            instance_desc.bottom_level_as         = collected_instance.bottom_level_as;
+            instance_desc.row_major_3x4_transform = collected_instance.row_major_3x4_transform.data();
+            instance_desc.instance_id             = collected_instance.instance_id;
+            instance_desc.hit_group_index         = 0;
+            instance_desc.instance_mask           = 0xFF;
+            instance_desc.force_opaque            = true;
             instances.push_back(instance_desc);
         }
+
+        // ---- Build or update TLAS ----
+        const uint32_t instance_count = static_cast<uint32_t>(instances.size());
 
         RHIAccelerationStructureBuildDesc build_desc {};
         build_desc.type              = RHIAccelerationStructureType::TopLevel;
         build_desc.instances         = instances.data();
-        build_desc.instance_count    = static_cast<uint32_t>(instances.size());
+        build_desc.instance_count    = instance_count;
         build_desc.prefer_fast_trace = true;
-        build_desc.allow_update      = false;
-        build_desc.perform_update    = false;
-        build_desc.source            = nullptr;
+        build_desc.allow_update      = true;
+
+        const bool can_update_in_place =
+            m_top_level_as != nullptr && !static_data_changed && m_tlas_instance_count == instance_count;
+        if (can_update_in_place)
+        {
+            build_desc.perform_update = true;
+            build_desc.source         = m_top_level_as;
+            if (!m_rhi->buildAccelerationStructure(command_buffer, &build_desc, m_top_level_as))
+            {
+                return false;
+            }
+            return true;
+        }
+
+        build_desc.perform_update = false;
+        build_desc.source         = nullptr;
 
         RHIAccelerationStructure* new_top_level_as = nullptr;
         if (!m_rhi->createAccelerationStructure(&build_desc, new_top_level_as) ||
@@ -1027,10 +1042,13 @@ namespace Piccolo
         }
 
         destroyTopLevelAS();
-        m_top_level_as        = new_top_level_as;
-        m_tlas_instance_count = static_cast<uint32_t>(instances.size());
+        m_top_level_as          = new_top_level_as;
+        m_tlas_instance_count   = instance_count;
         scene.clearPathTracingTLASDirty();
-        resetAccumulation();
+        if (static_data_changed)
+        {
+            resetAccumulation();
+        }
         return true;
     }
 

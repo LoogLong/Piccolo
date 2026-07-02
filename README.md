@@ -118,7 +118,7 @@ Piccolo runtime now supports backend selection from config files:
 
 ```ini
 RenderBackend=Auto
-RenderBackendAllowFallback=true
+RenderBackendAllowFallback=false
 ```
 
 - `RenderBackend` supports `Auto`, `Vulkan`, `D3D12`.
