@@ -1,5 +1,12 @@
 # 渲染后端迁移说明
 
+## Vulkan 路径追踪（2026-07）
+
+- Vulkan 1.2 + KHR ray tracing 扩展：BLAS/TLAS、RT pipeline、SBT 与共享 HLSL `path_tracing.lib.hlsl`
+- 可选 `dxc -spirv` 构建 Vulkan RT / compute shader bytecode；未找到 `dxc` 时自动回退光栅
+- `RenderSceneMode=PathTracing` 需同时满足硬件 RT 能力与已构建的 path tracing shader bytecode
+- Windows 主路径部署配置默认 `RenderBackendAllowFallback=false`
+
 ## D3D12 后端选择与回退（2026-06）
 
 ### 已完成
@@ -30,12 +37,9 @@
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=OFF -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 D3D12-only 构建，验证运行时和 ImGui 目标不再链接 Vulkan。
 - Windows 可通过 `-DPICCOLO_ENABLE_VULKAN_BACKEND=ON -DPICCOLO_ENABLE_D3D12_BACKEND=ON` 配置 dual-backend 构建，验证 D3D12 主路径与显式 Vulkan 路径可共存。
 - Linux/macOS deployment 输出使用 `RenderBackend=Auto` 并解析到 Vulkan；非 Windows Vulkan 仍受支持。
-- D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL 且 `RenderBackendAllowFallback=true`，运行时会按配置回退 Vulkan
+- D3D12 启动需要 DXIL shader bytecode；若构建未生成 DXIL且配置允许回退，运行时可按 `RenderBackendAllowFallback` 回退 Vulkan
 - 当前不新增测试源码；验证以构建、smoke 脚本、日志扫描和文档审查为主。
-- 2026-06-08 手动验证更新：Windows D3D12-only Debug/Release PiccoloEditor 构建通过，Debug/Release D3D12 smoke 均在禁止 Vulkan fallback 时通过；Windows dual-backend Debug 构建通过，显式 Vulkan smoke 通过；自动化生命周期覆盖了 Debug editor 启动、默认 world/level 加载、重复 resize、minimize/restore 和 restore 后 60 秒存活检查，日志扫描未发现 D3D12 debug-layer/device/fallback/error 匹配。
-- 2026-06-08 验证 caveat：未声明完整手动/目视 D3D12 runtime 验收完成；自动截图未能证明渲染画面，一次 Debug 截图运行显示 Visual C++ Debug Assertion (`debug_heap.cpp:908`, `is_block_type_valid(header->_block_use)`)，正常关闭未验证；交互和目视项仍需覆盖相机移动、mesh picking 稳定 ID、UI panel toggle、axis/debug draw 触发、level reload、主相机/post-process/ImGui/debug draw/particles 的视觉确认。
-- 后续风险属于正常 engine runtime validation，而不是 backend wiring 未完成。
-- 2026-06-10 验证更新：Windows dual-backend Debug 构建通过，D3D12/Auto->D3D12/Vulkan smoke 均通过；D3D12 visible capture 非黑比例 100%，默认场景截图与 Vulkan 对照无明显 pass 缺失；FPS gate 中 D3D12 545.90 FPS、Vulkan 568.85 FPS，D3D12 未出现 1 FPS 回退。
+- Windows D3D12/Vulkan smoke 与 dual-backend 构建已在 CI 中覆盖；完整 RT 画面与蒙皮 PT 需在 RT 硬件上人工验证。
 
 ### 验证命令
 

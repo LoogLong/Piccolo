@@ -511,6 +511,12 @@ namespace Piccolo
 #define PICCOLO_VULKAN_PATH_TRACING_LIB ::Piccolo::emptyVulkanShaderBytecode()
 #endif
 
+#if PICCOLO_ENABLE_VULKAN_BACKEND && defined(__has_include) && __has_include(<vulkan_cpp/gpu_skinning_comp.h>)
+#include <vulkan_cpp/gpu_skinning_comp.h>
+#undef PICCOLO_VULKAN_GPU_SKINNING_COMP
+#define PICCOLO_VULKAN_GPU_SKINNING_COMP VULKAN_GPU_SKINNING_COMP
+#endif
+
 #define PICCOLO_RENDER_SHADER_BYTECODE_CONCAT_DETAIL(prefix, shader) prefix##shader
 #define PICCOLO_RENDER_SHADER_BYTECODE_CONCAT(prefix, shader) \
     PICCOLO_RENDER_SHADER_BYTECODE_CONCAT_DETAIL(prefix, shader)
@@ -519,3 +525,16 @@ namespace Piccolo
 #define PICCOLO_RENDER_SHADER_BYTECODE(rhi, shader) \
     (::Piccolo::selectRenderShaderBytecode( \
         (rhi)->getBackendType(), PICCOLO_RENDER_VULKAN_SHADER_BYTECODE(shader), PICCOLO_RENDER_D3D12_SHADER_BYTECODE(shader)))
+
+namespace Piccolo
+{
+    inline bool pathTracingBytecodeAvailable(const RHI& rhi)
+    {
+        return !PICCOLO_RENDER_SHADER_BYTECODE(&rhi, PATH_TRACING_LIB).empty();
+    }
+
+    inline bool supportsPathTracing(const RHI& rhi)
+    {
+        return rhi.supportsRayTracing() && pathTracingBytecodeAvailable(rhi);
+    }
+} // namespace Piccolo

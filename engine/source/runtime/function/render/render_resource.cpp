@@ -37,6 +37,21 @@ namespace Piccolo
 
     void RenderResource::clear()
     {
+        RHI* path_tracing_rhi = m_path_tracing_rhi;
+        if (path_tracing_rhi != nullptr)
+        {
+            for (auto& mesh_entry : m_meshes)
+            {
+                RenderMeshGPUResource& mesh = mesh_entry.second;
+                if (mesh.path_tracing_bottom_level_as != nullptr)
+                {
+                    path_tracing_rhi->destroyAccelerationStructure(mesh.path_tracing_bottom_level_as);
+                    mesh.path_tracing_bottom_level_as = nullptr;
+                }
+                mesh.path_tracing_blas_dirty = true;
+            }
+        }
+
         // Release the path tracing scene buffers owned by RenderResource. The RHI handle is cached
         // while those buffers exist (see updatePathTracingSceneBuffers) and is still valid here, as
         // RenderResource::clear() runs before RHI::clear() during shutdown.

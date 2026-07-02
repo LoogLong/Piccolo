@@ -130,8 +130,8 @@ namespace Piccolo
         virtual void cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset) = 0;
         virtual RHIRayTracingCapabilities getRayTracingCapabilities() const = 0;
         // Capability query used by the render layer to gate ray-traced features (e.g. path tracing,
-        // GPU-skinned BLAS builds) without hard-coding backend-type checks. A backend that cannot run
-        // ray tracing (e.g. the current Vulkan backend) reports Unsupported and this returns false.
+        // GPU-skinned BLAS builds) without hard-coding backend-type checks. Backends that cannot run
+        // ray tracing report Unsupported; use supportsPathTracing() when shader bytecode is also required.
         bool supportsRayTracing() const
         {
             return getRayTracingCapabilities().support_level == RHIRayTracingSupportLevel::Supported;

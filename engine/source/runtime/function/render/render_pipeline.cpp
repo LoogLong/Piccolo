@@ -1,4 +1,5 @@
 #include "runtime/function/render/render_pipeline.h"
+#include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/passes/color_grading_pass.h"
 #include "runtime/function/render/passes/combine_ui_pass.h"
 #include "runtime/function/render/passes/directional_light_pass.h"
@@ -270,6 +271,10 @@ namespace Piccolo
 
     void RenderPipeline::passUpdateAfterRecreateSwapchain()
     {
+        m_path_tracing_runtime_fallback      = false;
+        m_path_tracing_dispatch_fail_logged  = false;
+        m_scene_render_mode_fallback_logged  = false;
+
         MainCameraPass&   main_camera_pass   = *(static_cast<MainCameraPass*>(m_main_camera_pass.get()));
         ColorGradingPass& color_grading_pass = *(static_cast<ColorGradingPass*>(m_color_grading_pass.get()));
         FXAAPass&         fxaa_pass          = *(static_cast<FXAAPass*>(m_fxaa_pass.get()));
@@ -341,6 +346,13 @@ namespace Piccolo
         PathTracingPass& path_tracing_pass = *(static_cast<PathTracingPass*>(m_path_tracing_pass.get()));
         if (!path_tracing_pass.dispatch())
         {
+            if (!m_path_tracing_dispatch_fail_logged)
+            {
+                LOG_WARN("Path tracing dispatch failed; skipping raster fallback for this frame and disabling path "
+                         "tracing until the next swapchain recreate or scene mode change.");
+                m_path_tracing_dispatch_fail_logged = true;
+            }
+            m_path_tracing_runtime_fallback = true;
             return false;
         }
 
@@ -365,23 +377,38 @@ namespace Piccolo
     {
         if (m_requested_scene_render_mode != RenderSceneRenderMode::PathTracing)
         {
+            m_effective_scene_render_mode     = RenderSceneRenderMode::Raster;
+            m_path_tracing_runtime_fallback   = false;
+            m_path_tracing_dispatch_fail_logged = false;
+            return;
+        }
+
+        if (m_path_tracing_runtime_fallback)
+        {
             m_effective_scene_render_mode = RenderSceneRenderMode::Raster;
             return;
         }
 
-        if (rhi.supportsRayTracing())
+        if (supportsPathTracing(rhi))
         {
             m_effective_scene_render_mode = RenderSceneRenderMode::PathTracing;
             return;
         }
 
-        // Requested PathTracing but ray tracing is unavailable on the active backend: fall back to
-        // rasterization. Warn once so the discrepancy between requested and effective mode is visible.
         if (!m_scene_render_mode_fallback_logged)
         {
-            LOG_WARN("RenderSceneMode=PathTracing requested but ray tracing is unavailable on the '{}' backend; "
-                     "falling back to Raster.",
-                     rhi.getBackendType() == RHIBackendType::D3D12 ? "D3D12" : "Vulkan");
+            if (!rhi.supportsRayTracing())
+            {
+                LOG_WARN("RenderSceneMode=PathTracing requested but ray tracing is unavailable on the '{}' backend; "
+                         "falling back to Raster.",
+                         rhi.getBackendType() == RHIBackendType::D3D12 ? "D3D12" : "Vulkan");
+            }
+            else
+            {
+                LOG_WARN("RenderSceneMode=PathTracing requested but path tracing shader bytecode is missing for the "
+                         "'{}' backend (build dxc output if required); falling back to Raster.",
+                         rhi.getBackendType() == RHIBackendType::D3D12 ? "D3D12" : "Vulkan");
+            }
             m_scene_render_mode_fallback_logged = true;
         }
 
