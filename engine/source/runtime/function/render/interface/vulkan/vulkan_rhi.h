@@ -122,6 +122,7 @@ namespace Piccolo
         void cmdTraceRays(RHICommandBuffer* command_buffer, const RHIRayTracingDispatchDesc* dispatch_desc) override;
         void destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure) override;
         void destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table) override;
+        void destroyRayTracingPipeline(RHIPipeline*& pipeline) override;
         void cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers) override;
         bool endCommandBuffer(RHICommandBuffer* commandBuffer) override;
         void updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWriteDescriptorSet* pDescriptorWrites, uint32_t descriptorCopyCount, const RHICopyDescriptorSet* pDescriptorCopies) override;
@@ -276,6 +277,31 @@ namespace Piccolo
         uint32_t                       m_vulkan_api_version {VK_API_VERSION_1_0};
 
         std::vector<char const*> m_device_extensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+        // ---- Ray tracing (VK_KHR_acceleration_structure + VK_KHR_ray_tracing_pipeline) ----
+        // Enabled only when the physical device advertises the required extensions/features; otherwise
+        // getRayTracingCapabilities() reports Unsupported and the render layer falls back to raster.
+        bool                                                m_ray_tracing_enabled {false};
+        RHIRayTracingCapabilities                           m_ray_tracing_capabilities {};
+        VkPhysicalDeviceRayTracingPipelinePropertiesKHR     m_ray_tracing_pipeline_properties {};
+        VkPhysicalDeviceAccelerationStructurePropertiesKHR  m_acceleration_structure_properties {};
+
+        PFN_vkGetBufferDeviceAddressKHR                 _vkGetBufferDeviceAddress {nullptr};
+        PFN_vkCreateAccelerationStructureKHR            _vkCreateAccelerationStructure {nullptr};
+        PFN_vkDestroyAccelerationStructureKHR           _vkDestroyAccelerationStructure {nullptr};
+        PFN_vkGetAccelerationStructureBuildSizesKHR     _vkGetAccelerationStructureBuildSizes {nullptr};
+        PFN_vkCmdBuildAccelerationStructuresKHR         _vkCmdBuildAccelerationStructures {nullptr};
+        PFN_vkGetAccelerationStructureDeviceAddressKHR  _vkGetAccelerationStructureDeviceAddress {nullptr};
+        PFN_vkCreateRayTracingPipelinesKHR              _vkCreateRayTracingPipelines {nullptr};
+        PFN_vkGetRayTracingShaderGroupHandlesKHR        _vkGetRayTracingShaderGroupHandles {nullptr};
+        PFN_vkCmdTraceRaysKHR                           _vkCmdTraceRays {nullptr};
+
+        // True when the device supports all ray-tracing extensions/features. Fills the local extension
+        // list and returns the pNext feature chain to enable on the device (valid while build vectors live).
+        bool checkRayTracingSupport(VkPhysicalDevice physical_device) const;
+        void loadRayTracingFunctions();
+        void queryRayTracingProperties();
+        VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer) const;
 
         // default sampler cache
         RHISampler* m_linear_sampler = nullptr;

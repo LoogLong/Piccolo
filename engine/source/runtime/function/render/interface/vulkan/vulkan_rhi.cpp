@@ -627,7 +627,9 @@ namespace Piccolo
             LOG_ERROR("validation layers requested, but not available!");
         }
 
-        m_vulkan_api_version = VK_API_VERSION_1_0;
+        // Vulkan 1.2 is required for buffer device address and descriptor indexing (core), which the
+        // ray tracing path depends on. Ray tracing itself stays optional and is gated per-device.
+        m_vulkan_api_version = VK_API_VERSION_1_2;
 
         // app info
         VkApplicationInfo appInfo {};
@@ -794,15 +796,62 @@ namespace Piccolo
             physical_device_features.geometryShader = VK_TRUE;
         }
 
+        // Ray tracing is optional: only enable the extensions/features when the device supports them.
+        // Otherwise the device is created exactly as before and the engine runs the raster path.
+        m_ray_tracing_enabled = checkRayTracingSupport(m_physical_device);
+
+        std::vector<char const*> enabled_device_extensions = m_device_extensions;
+
+        // Feature chain used only when ray tracing is enabled (keeps the raster-only path unchanged).
+        VkPhysicalDeviceFeatures2                        features2 {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceVulkan12Features                 vulkan12_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR    ray_tracing_pipeline_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+
+        if (m_ray_tracing_enabled)
+        {
+            enabled_device_extensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+            enabled_device_extensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+            enabled_device_extensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            enabled_device_extensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+
+            vulkan12_features.bufferDeviceAddress                       = VK_TRUE;
+            vulkan12_features.descriptorIndexing                        = VK_TRUE;
+            vulkan12_features.runtimeDescriptorArray                    = VK_TRUE;
+            vulkan12_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            vulkan12_features.descriptorBindingPartiallyBound           = VK_TRUE;
+            vulkan12_features.descriptorBindingVariableDescriptorCount  = VK_TRUE;
+
+            acceleration_structure_features.accelerationStructure = VK_TRUE;
+            ray_tracing_pipeline_features.rayTracingPipeline      = VK_TRUE;
+
+            features2.features               = physical_device_features;
+            features2.pNext                  = &vulkan12_features;
+            vulkan12_features.pNext          = &acceleration_structure_features;
+            acceleration_structure_features.pNext = &ray_tracing_pipeline_features;
+        }
+
         // device create info
         VkDeviceCreateInfo device_create_info {};
         device_create_info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         device_create_info.pQueueCreateInfos       = queue_create_infos.data();
         device_create_info.queueCreateInfoCount    = static_cast<uint32_t>(queue_create_infos.size());
-        device_create_info.pEnabledFeatures        = &physical_device_features;
-        device_create_info.enabledExtensionCount   = static_cast<uint32_t>(m_device_extensions.size());
-        device_create_info.ppEnabledExtensionNames = m_device_extensions.data();
+        device_create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_device_extensions.size());
+        device_create_info.ppEnabledExtensionNames = enabled_device_extensions.data();
         device_create_info.enabledLayerCount       = 0;
+        if (m_ray_tracing_enabled)
+        {
+            // When using VkPhysicalDeviceFeatures2 in pNext, pEnabledFeatures must be null.
+            device_create_info.pNext            = &features2;
+            device_create_info.pEnabledFeatures = nullptr;
+        }
+        else
+        {
+            device_create_info.pEnabledFeatures = &physical_device_features;
+        }
 
         if (vkCreateDevice(m_physical_device, &device_create_info, nullptr, &m_device) != VK_SUCCESS)
         {
@@ -840,7 +889,105 @@ namespace Piccolo
         _vkCmdBindDescriptorSets = (PFN_vkCmdBindDescriptorSets)vkGetDeviceProcAddr(m_device, "vkCmdBindDescriptorSets");
         _vkCmdClearAttachments   = (PFN_vkCmdClearAttachments)vkGetDeviceProcAddr(m_device, "vkCmdClearAttachments");
 
+        if (m_ray_tracing_enabled)
+        {
+            loadRayTracingFunctions();
+            queryRayTracingProperties();
+        }
+
         m_depth_image_format = (RHIFormat)findDepthFormat();
+    }
+
+    bool VulkanRHI::checkRayTracingSupport(VkPhysicalDevice physical_device) const
+    {
+        uint32_t extension_count = 0;
+        vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, nullptr);
+        std::vector<VkExtensionProperties> available(extension_count);
+        vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, available.data());
+
+        const char* required[] = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                  VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+                                  VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+                                  VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME};
+        for (const char* req : required)
+        {
+            bool found = false;
+            for (const VkExtensionProperties& ext : available)
+            {
+                if (std::strcmp(ext.extensionName, req) == 0)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void VulkanRHI::loadRayTracingFunctions()
+    {
+        _vkGetBufferDeviceAddress =
+            (PFN_vkGetBufferDeviceAddressKHR)vkGetDeviceProcAddr(m_device, "vkGetBufferDeviceAddressKHR");
+        _vkCreateAccelerationStructure =
+            (PFN_vkCreateAccelerationStructureKHR)vkGetDeviceProcAddr(m_device, "vkCreateAccelerationStructureKHR");
+        _vkDestroyAccelerationStructure =
+            (PFN_vkDestroyAccelerationStructureKHR)vkGetDeviceProcAddr(m_device, "vkDestroyAccelerationStructureKHR");
+        _vkGetAccelerationStructureBuildSizes = (PFN_vkGetAccelerationStructureBuildSizesKHR)vkGetDeviceProcAddr(
+            m_device, "vkGetAccelerationStructureBuildSizesKHR");
+        _vkCmdBuildAccelerationStructures = (PFN_vkCmdBuildAccelerationStructuresKHR)vkGetDeviceProcAddr(
+            m_device, "vkCmdBuildAccelerationStructuresKHR");
+        _vkGetAccelerationStructureDeviceAddress = (PFN_vkGetAccelerationStructureDeviceAddressKHR)vkGetDeviceProcAddr(
+            m_device, "vkGetAccelerationStructureDeviceAddressKHR");
+        _vkCreateRayTracingPipelines =
+            (PFN_vkCreateRayTracingPipelinesKHR)vkGetDeviceProcAddr(m_device, "vkCreateRayTracingPipelinesKHR");
+        _vkGetRayTracingShaderGroupHandles = (PFN_vkGetRayTracingShaderGroupHandlesKHR)vkGetDeviceProcAddr(
+            m_device, "vkGetRayTracingShaderGroupHandlesKHR");
+        _vkCmdTraceRays = (PFN_vkCmdTraceRaysKHR)vkGetDeviceProcAddr(m_device, "vkCmdTraceRaysKHR");
+
+        // If any required entry point is missing, disable ray tracing to stay safe.
+        if (_vkGetBufferDeviceAddress == nullptr || _vkCreateAccelerationStructure == nullptr ||
+            _vkDestroyAccelerationStructure == nullptr || _vkGetAccelerationStructureBuildSizes == nullptr ||
+            _vkCmdBuildAccelerationStructures == nullptr || _vkGetAccelerationStructureDeviceAddress == nullptr ||
+            _vkCreateRayTracingPipelines == nullptr || _vkGetRayTracingShaderGroupHandles == nullptr ||
+            _vkCmdTraceRays == nullptr)
+        {
+            LOG_WARN("Ray tracing extension entry points missing; disabling Vulkan ray tracing.");
+            m_ray_tracing_enabled = false;
+        }
+    }
+
+    void VulkanRHI::queryRayTracingProperties()
+    {
+        m_ray_tracing_pipeline_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+        m_acceleration_structure_properties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+        m_ray_tracing_pipeline_properties.pNext = &m_acceleration_structure_properties;
+
+        VkPhysicalDeviceProperties2 properties2 {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        properties2.pNext = &m_ray_tracing_pipeline_properties;
+        vkGetPhysicalDeviceProperties2(m_physical_device, &properties2);
+
+        m_ray_tracing_capabilities.support_level                  = RHIRayTracingSupportLevel::Supported;
+        m_ray_tracing_capabilities.max_recursion_depth            = m_ray_tracing_pipeline_properties.maxRayRecursionDepth;
+        m_ray_tracing_capabilities.shader_group_handle_size       = m_ray_tracing_pipeline_properties.shaderGroupHandleSize;
+        m_ray_tracing_capabilities.shader_group_handle_alignment  = m_ray_tracing_pipeline_properties.shaderGroupHandleAlignment;
+        m_ray_tracing_capabilities.shader_binding_table_alignment = m_ray_tracing_pipeline_properties.shaderGroupBaseAlignment;
+        m_ray_tracing_capabilities.supports_inline_ray_tracing    = false;
+    }
+
+    VkDeviceAddress VulkanRHI::getBufferDeviceAddress(VkBuffer buffer) const
+    {
+        if (buffer == VK_NULL_HANDLE || _vkGetBufferDeviceAddress == nullptr)
+        {
+            return 0;
+        }
+        VkBufferDeviceAddressInfo info {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        info.buffer = buffer;
+        return _vkGetBufferDeviceAddress(m_device, &info);
     }
 
     void VulkanRHI::createCommandPool()
@@ -2516,7 +2663,7 @@ namespace Piccolo
 
     RHIRayTracingCapabilities VulkanRHI::getRayTracingCapabilities() const
     {
-        return {};
+        return m_ray_tracing_capabilities;
     }
 
     bool VulkanRHI::createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
@@ -2567,6 +2714,20 @@ namespace Piccolo
     void VulkanRHI::destroyShaderBindingTable(RHIShaderBindingTable*& shader_binding_table)
     {
         shader_binding_table = nullptr;
+    }
+
+    void VulkanRHI::destroyRayTracingPipeline(RHIPipeline*& pipeline)
+    {
+        if (pipeline != nullptr && m_device != nullptr)
+        {
+            VkPipeline vk_pipeline = static_cast<VulkanPipeline*>(pipeline)->getResource();
+            if (vk_pipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(m_device, vk_pipeline, nullptr);
+            }
+            delete pipeline;
+        }
+        pipeline = nullptr;
     }
 
     void VulkanRHI::cmdCopyImageToBuffer(
@@ -3098,6 +3259,12 @@ namespace Piccolo
         allocatorCreateInfo.device                 = m_device;
         allocatorCreateInfo.instance               = m_instance;
         allocatorCreateInfo.pVulkanFunctions       = &vulkanFunctions;
+        if (m_ray_tracing_enabled)
+        {
+            // Required so VMA allocates buffers with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, which ray
+            // tracing (acceleration structure inputs, scratch, SBT) depends on.
+            allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        }
 
         vmaCreateAllocator(&allocatorCreateInfo, &m_assets_allocator);
     }
