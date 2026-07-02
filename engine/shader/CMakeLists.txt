@@ -36,6 +36,19 @@ if (PICCOLO_ENABLE_VULKAN_BACKEND AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${G
 endif()
 
 include(${PICCOLO_ROOT_DIR}/cmake/ShaderCompile.cmake)
+include(${PICCOLO_ROOT_DIR}/cmake/GenerateRenderShaderBytecodeHeader.cmake)
+
+set(HLSL_RT_SHADER_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/path_tracing.lib.hlsl"
+  "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/gpu_skinning.comp.hlsl")
+
+set(RENDER_SHADER_BYTECODE_GEN_H
+  "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/render_shader_bytecode_gen.h")
+generate_render_shader_bytecode_header(
+  OUTPUT_HEADER "${RENDER_SHADER_BYTECODE_GEN_H}"
+  GLSL_SHADERS "${SHADER_FILES}"
+  HLSL_SHADERS "${HLSL_SHADER_FILES}"
+  HLSL_RT_SHADERS "${HLSL_RT_SHADER_FILES}")
 
 if(PICCOLO_ENABLE_VULKAN_BACKEND)
   compile_shader(
@@ -48,9 +61,6 @@ if(PICCOLO_ENABLE_VULKAN_BACKEND)
   # Vulkan ray tracing shaders are authored in HLSL (shared with D3D12) and compiled to SPIR-V via dxc.
   # Developer-controlled (option b): if dxc is not found, ray tracing SPIR-V is simply not built and the
   # engine falls back to rasterization at runtime. Install dxc (Vulkan SDK / Windows SDK) to enable it.
-  set(HLSL_RT_SHADER_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/path_tracing.lib.hlsl"
-    "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/gpu_skinning.comp.hlsl")
   if(HLSL_RT_SHADER_FILES)
     find_program(dxc_spirv_executable NAMES dxc dxc.exe)
     if(dxc_spirv_executable)
