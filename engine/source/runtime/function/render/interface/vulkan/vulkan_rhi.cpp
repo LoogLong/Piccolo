@@ -2661,6 +2661,55 @@ namespace Piccolo
         vkCmdDispatchIndirect(((VulkanCommandBuffer*)commandBuffer)->getResource(), ((VulkanBuffer*)buffer)->getResource(), offset);
     }
 
+    namespace
+    {
+        // Vulkan-backed implementation of the opaque RHI ray tracing handles.
+        struct VulkanRHIAccelerationStructure : public RHIAccelerationStructure
+        {
+            VkAccelerationStructureKHR   handle {VK_NULL_HANDLE};
+            VkBuffer                     as_buffer {VK_NULL_HANDLE};
+            VkDeviceMemory               as_memory {VK_NULL_HANDLE};
+            VkBuffer                     scratch_buffer {VK_NULL_HANDLE};
+            VkDeviceMemory               scratch_memory {VK_NULL_HANDLE};
+            VkBuffer                     instance_buffer {VK_NULL_HANDLE}; // TLAS only
+            VkDeviceMemory               instance_memory {VK_NULL_HANDLE};
+            void*                        instance_mapped {nullptr};
+            VkDeviceAddress              device_address {0};
+            RHIAccelerationStructureType type {RHIAccelerationStructureType::BottomLevel};
+        };
+
+        struct VulkanRHIShaderBindingTable : public RHIShaderBindingTable
+        {
+            VkBuffer                        buffer {VK_NULL_HANDLE};
+            VkDeviceMemory                  memory {VK_NULL_HANDLE};
+            VkStridedDeviceAddressRegionKHR raygen_region {};
+            VkStridedDeviceAddressRegionKHR miss_region {};
+            VkStridedDeviceAddressRegionKHR hit_region {};
+            VkStridedDeviceAddressRegionKHR callable_region {};
+        };
+
+        VkTransformMatrixKHR toVkTransformMatrix(const float* row_major_3x4)
+        {
+            VkTransformMatrixKHR m {};
+            if (row_major_3x4 != nullptr)
+            {
+                std::memcpy(&m, row_major_3x4, sizeof(float) * 12);
+            }
+            else
+            {
+                m.matrix[0][0] = 1.0f;
+                m.matrix[1][1] = 1.0f;
+                m.matrix[2][2] = 1.0f;
+            }
+            return m;
+        }
+
+        VkDeviceSize alignUpSize(VkDeviceSize value, VkDeviceSize alignment)
+        {
+            return alignment == 0 ? value : (value + alignment - 1) & ~(alignment - 1);
+        }
+    } // namespace
+
     RHIRayTracingCapabilities VulkanRHI::getRayTracingCapabilities() const
     {
         return m_ray_tracing_capabilities;
@@ -2669,19 +2718,249 @@ namespace Piccolo
     bool VulkanRHI::createAccelerationStructure(const RHIAccelerationStructureBuildDesc* build_desc,
                                                 RHIAccelerationStructure*& acceleration_structure)
     {
-        (void)build_desc;
         acceleration_structure = nullptr;
-        return false;
+        if (!m_ray_tracing_enabled || build_desc == nullptr)
+        {
+            return false;
+        }
+
+        const bool is_tlas = build_desc->type == RHIAccelerationStructureType::TopLevel;
+
+        // Build the geometry description (device addresses are needed only for the final build; sizing
+        // uses primitive counts, so instance-data address may stay 0 here).
+        std::vector<VkAccelerationStructureGeometryKHR> geometries;
+        std::vector<uint32_t>                           max_primitive_counts;
+        if (is_tlas)
+        {
+            VkAccelerationStructureGeometryKHR geo {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+            geo.geometryType                          = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+            geo.flags                                 = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            geo.geometry.instances.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+            geo.geometry.instances.arrayOfPointers    = VK_FALSE;
+            geometries.push_back(geo);
+            max_primitive_counts.push_back(build_desc->instance_count);
+        }
+        else
+        {
+            for (uint32_t g = 0; g < build_desc->geometry_count; ++g)
+            {
+                const RHIAccelerationStructureGeometryDesc& src = build_desc->geometries[g];
+                VkAccelerationStructureGeometryKHR          geo {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+                geo.geometryType       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                geo.flags              = src.opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+                geo.geometry.triangles.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                geo.geometry.triangles.vertexStride = src.vertex_stride;
+                geo.geometry.triangles.maxVertex    = src.vertex_count > 0 ? src.vertex_count - 1 : 0;
+                geo.geometry.triangles.indexType    = static_cast<VkIndexType>(src.index_type);
+                geometries.push_back(geo);
+                max_primitive_counts.push_back(src.index_count / 3);
+            }
+        }
+
+        VkAccelerationStructureBuildGeometryInfoKHR build_info {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        build_info.type          = is_tlas ? VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
+                                           : VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        build_info.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        if (build_desc->allow_update)
+        {
+            build_info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+        }
+        build_info.mode           = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        build_info.geometryCount  = static_cast<uint32_t>(geometries.size());
+        build_info.pGeometries    = geometries.data();
+
+        VkAccelerationStructureBuildSizesInfoKHR size_info {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+        _vkGetAccelerationStructureBuildSizes(m_device,
+                                              VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                              &build_info,
+                                              max_primitive_counts.data(),
+                                              &size_info);
+
+        auto* impl = new VulkanRHIAccelerationStructure();
+        impl->type = build_desc->type;
+
+        // Acceleration structure backing storage.
+        VulkanUtil::createBuffer(m_physical_device,
+                                 m_device,
+                                 size_info.accelerationStructureSize,
+                                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                 impl->as_buffer,
+                                 impl->as_memory);
+
+        VkAccelerationStructureCreateInfoKHR as_create_info {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+        as_create_info.buffer = impl->as_buffer;
+        as_create_info.size   = size_info.accelerationStructureSize;
+        as_create_info.type   = build_info.type;
+        if (_vkCreateAccelerationStructure(m_device, &as_create_info, nullptr, &impl->handle) != VK_SUCCESS)
+        {
+            LOG_ERROR("vkCreateAccelerationStructureKHR failed");
+            RHIAccelerationStructure* to_destroy = impl;
+            destroyAccelerationStructure(to_destroy);
+            return false;
+        }
+
+        // Scratch buffer (sized for the larger of build/update, aligned per device requirement).
+        const VkDeviceSize scratch_alignment =
+            m_acceleration_structure_properties.minAccelerationStructureScratchOffsetAlignment;
+        const VkDeviceSize scratch_size =
+            alignUpSize((std::max)(size_info.buildScratchSize, size_info.updateScratchSize), scratch_alignment);
+        VulkanUtil::createBuffer(m_physical_device,
+                                 m_device,
+                                 scratch_size,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                 impl->scratch_buffer,
+                                 impl->scratch_memory);
+
+        VkAccelerationStructureDeviceAddressInfoKHR address_info {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        address_info.accelerationStructure = impl->handle;
+        impl->device_address               = _vkGetAccelerationStructureDeviceAddress(m_device, &address_info);
+
+        // TLAS: host-visible instance buffer written each build.
+        if (is_tlas)
+        {
+            const VkDeviceSize instance_buffer_size =
+                sizeof(VkAccelerationStructureInstanceKHR) * (std::max)(1u, build_desc->instance_count);
+            VulkanUtil::createBuffer(m_physical_device,
+                                     m_device,
+                                     instance_buffer_size,
+                                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                     impl->instance_buffer,
+                                     impl->instance_memory);
+            vkMapMemory(m_device, impl->instance_memory, 0, instance_buffer_size, 0, &impl->instance_mapped);
+        }
+
+        acceleration_structure = impl;
+        return true;
     }
 
     bool VulkanRHI::buildAccelerationStructure(RHICommandBuffer* command_buffer,
                                                const RHIAccelerationStructureBuildDesc* build_desc,
                                                RHIAccelerationStructure* acceleration_structure)
     {
-        (void)command_buffer;
-        (void)build_desc;
-        (void)acceleration_structure;
-        return false;
+        if (!m_ray_tracing_enabled || command_buffer == nullptr || build_desc == nullptr ||
+            acceleration_structure == nullptr)
+        {
+            return false;
+        }
+
+        auto*        impl       = static_cast<VulkanRHIAccelerationStructure*>(acceleration_structure);
+        VkCommandBuffer cmd      = static_cast<VulkanCommandBuffer*>(command_buffer)->getResource();
+        const bool   is_tlas    = build_desc->type == RHIAccelerationStructureType::TopLevel;
+
+        std::vector<VkAccelerationStructureGeometryKHR>       geometries;
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+
+        if (is_tlas)
+        {
+            // Populate the instance buffer for this build.
+            auto* dst = static_cast<VkAccelerationStructureInstanceKHR*>(impl->instance_mapped);
+            for (uint32_t i = 0; i < build_desc->instance_count; ++i)
+            {
+                const RHIAccelerationStructureInstanceDesc& src = build_desc->instances[i];
+                VkAccelerationStructureInstanceKHR          inst {};
+                inst.transform                              = toVkTransformMatrix(src.row_major_3x4_transform);
+                inst.instanceCustomIndex                    = src.instance_id & 0xFFFFFF;
+                inst.mask                                   = src.instance_mask;
+                inst.instanceShaderBindingTableRecordOffset = src.hit_group_index & 0xFFFFFF;
+                inst.flags = src.force_opaque ? VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR : 0;
+                inst.accelerationStructureReference =
+                    src.bottom_level_as
+                        ? static_cast<VulkanRHIAccelerationStructure*>(src.bottom_level_as)->device_address
+                        : 0;
+                if (dst != nullptr)
+                {
+                    dst[i] = inst;
+                }
+            }
+
+            VkAccelerationStructureGeometryKHR geo {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+            geo.geometryType                       = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+            geo.flags                              = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            geo.geometry.instances.sType           = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+            geo.geometry.instances.arrayOfPointers = VK_FALSE;
+            geo.geometry.instances.data.deviceAddress = getBufferDeviceAddress(impl->instance_buffer);
+            geometries.push_back(geo);
+
+            VkAccelerationStructureBuildRangeInfoKHR range {};
+            range.primitiveCount = build_desc->instance_count;
+            ranges.push_back(range);
+        }
+        else
+        {
+            for (uint32_t g = 0; g < build_desc->geometry_count; ++g)
+            {
+                const RHIAccelerationStructureGeometryDesc& src = build_desc->geometries[g];
+                VkAccelerationStructureGeometryKHR          geo {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+                geo.geometryType       = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                geo.flags              = src.opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+                geo.geometry.triangles.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                geo.geometry.triangles.vertexData.deviceAddress =
+                    getBufferDeviceAddress(static_cast<VulkanBuffer*>(src.vertex_position_buffer)->getResource()) +
+                    src.vertex_position_offset;
+                geo.geometry.triangles.vertexStride = src.vertex_stride;
+                geo.geometry.triangles.maxVertex    = src.vertex_count > 0 ? src.vertex_count - 1 : 0;
+                geo.geometry.triangles.indexType    = static_cast<VkIndexType>(src.index_type);
+                geo.geometry.triangles.indexData.deviceAddress =
+                    src.index_buffer
+                        ? getBufferDeviceAddress(static_cast<VulkanBuffer*>(src.index_buffer)->getResource()) +
+                              src.index_offset
+                        : 0;
+                geometries.push_back(geo);
+
+                VkAccelerationStructureBuildRangeInfoKHR range {};
+                range.primitiveCount = src.index_count / 3;
+                ranges.push_back(range);
+            }
+        }
+
+        const bool do_update = build_desc->perform_update && build_desc->allow_update;
+
+        VkAccelerationStructureBuildGeometryInfoKHR build_info {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+        build_info.type  = is_tlas ? VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR
+                                   : VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        if (build_desc->allow_update)
+        {
+            build_info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+        }
+        build_info.mode                     = do_update ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
+                                                        : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        build_info.srcAccelerationStructure = do_update ? impl->handle : VK_NULL_HANDLE;
+        build_info.dstAccelerationStructure = impl->handle;
+        build_info.geometryCount            = static_cast<uint32_t>(geometries.size());
+        build_info.pGeometries              = geometries.data();
+        build_info.scratchData.deviceAddress = getBufferDeviceAddress(impl->scratch_buffer);
+
+        const VkAccelerationStructureBuildRangeInfoKHR* range_ptr = ranges.data();
+        _vkCmdBuildAccelerationStructures(cmd, 1, &build_info, &range_ptr);
+
+        // Ensure the build completes before the structure is read (by a subsequent TLAS build or a trace).
+        VkMemoryBarrier barrier {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+                             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                             0,
+                             1,
+                             &barrier,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr);
+        return true;
     }
 
     bool VulkanRHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* create_info,
@@ -2708,6 +2987,34 @@ namespace Piccolo
 
     void VulkanRHI::destroyAccelerationStructure(RHIAccelerationStructure*& acceleration_structure)
     {
+        if (acceleration_structure != nullptr && m_device != nullptr)
+        {
+            auto* impl = static_cast<VulkanRHIAccelerationStructure*>(acceleration_structure);
+            if (impl->instance_mapped != nullptr && impl->instance_memory != VK_NULL_HANDLE)
+            {
+                vkUnmapMemory(m_device, impl->instance_memory);
+            }
+            if (impl->handle != VK_NULL_HANDLE && _vkDestroyAccelerationStructure != nullptr)
+            {
+                _vkDestroyAccelerationStructure(m_device, impl->handle, nullptr);
+            }
+            auto free_buffer = [this](VkBuffer& b, VkDeviceMemory& m) {
+                if (b != VK_NULL_HANDLE)
+                {
+                    vkDestroyBuffer(m_device, b, nullptr);
+                    b = VK_NULL_HANDLE;
+                }
+                if (m != VK_NULL_HANDLE)
+                {
+                    vkFreeMemory(m_device, m, nullptr);
+                    m = VK_NULL_HANDLE;
+                }
+            };
+            free_buffer(impl->as_buffer, impl->as_memory);
+            free_buffer(impl->scratch_buffer, impl->scratch_memory);
+            free_buffer(impl->instance_buffer, impl->instance_memory);
+            delete impl;
+        }
         acceleration_structure = nullptr;
     }
 

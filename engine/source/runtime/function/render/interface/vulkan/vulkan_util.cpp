@@ -151,6 +151,15 @@ namespace Piccolo
         buffer_memory_allocate_info.memoryTypeIndex =
             VulkanUtil::findMemoryType(physical_device, buffer_memory_requirements.memoryTypeBits, properties);
 
+        // Ray tracing inputs (vertex/index/AS/scratch/SBT) are addressed via vkGetBufferDeviceAddress,
+        // which requires the buffer memory to be allocated with the device-address flag.
+        VkMemoryAllocateFlagsInfo memory_allocate_flags_info {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+        if ((usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0)
+        {
+            memory_allocate_flags_info.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+            buffer_memory_allocate_info.pNext = &memory_allocate_flags_info;
+        }
+
         if (vkAllocateMemory(device, &buffer_memory_allocate_info, nullptr, &buffer_memory) != VK_SUCCESS)
         {
             LOG_ERROR("vkAllocateMemory failed!");
