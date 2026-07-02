@@ -501,6 +501,16 @@ namespace Piccolo
 #define PICCOLO_D3D12_TONE_MAPPING_FRAG ::Piccolo::emptyD3D12ShaderBytecode()
 #endif
 
+// Vulkan ray tracing library (SPIR-V compiled from the shared HLSL via dxc). Independent of the GLSL
+// SPIR-V headers above; only present when dxc built it. Falls back to empty bytecode otherwise, in
+// which case the render layer keeps ray tracing disabled on Vulkan.
+#if PICCOLO_ENABLE_VULKAN_BACKEND && defined(__has_include) && __has_include(<vulkan_cpp/path_tracing_lib.h>)
+#include <vulkan_cpp/path_tracing_lib.h>
+#define PICCOLO_VULKAN_PATH_TRACING_LIB VULKAN_PATH_TRACING_LIB
+#else
+#define PICCOLO_VULKAN_PATH_TRACING_LIB ::Piccolo::emptyVulkanShaderBytecode()
+#endif
+
 #define PICCOLO_RENDER_SHADER_BYTECODE_CONCAT_DETAIL(prefix, shader) prefix##shader
 #define PICCOLO_RENDER_SHADER_BYTECODE_CONCAT(prefix, shader) \
     PICCOLO_RENDER_SHADER_BYTECODE_CONCAT_DETAIL(prefix, shader)

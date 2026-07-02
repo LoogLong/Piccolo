@@ -68,6 +68,66 @@ function(get_hlsl_shader_profile SHADER OUT_PROFILE)
     set(${OUT_PROFILE} "${SHADER_PROFILE}" PARENT_SCOPE)
 endfunction()
 
+function(compile_hlsl_to_spirv SHADERS TARGET_NAME SHADER_INCLUDE_FOLDER GENERATED_DIR DXC_BIN)
+    # Compiles HLSL ray tracing libraries (*.lib.hlsl) to SPIR-V via dxc for the Vulkan backend, reusing
+    # the same HLSL source the D3D12 backend compiles to DXIL. Runs on any platform where dxc is found.
+    if(NOT SHADERS OR NOT DXC_BIN)
+        return()
+    endif()
+
+    if(NOT TARGET ${TARGET_NAME})
+        message(FATAL_ERROR "Target ${TARGET_NAME} must exist before adding HLSL->SPIR-V shader compilation")
+    endif()
+
+    set(working_dir "${CMAKE_CURRENT_SOURCE_DIR}")
+    file(GLOB_RECURSE HLSL_INCLUDE_FILES CONFIGURE_DEPENDS "${SHADER_INCLUDE_FOLDER}/*.hlsli")
+
+    set(ALL_GENERATED_SPV_FILES "")
+    set(ALL_GENERATED_CPP_FILES "")
+
+    foreach(SHADER ${SHADERS})
+        get_filename_component(SHADER_NAME "${SHADER}" NAME)
+        string(REGEX REPLACE "\\.hlsl$" "" SHADER_BASE_NAME "${SHADER_NAME}")
+        string(REPLACE "." "_" HEADER_NAME "${SHADER_BASE_NAME}")
+        string(TOUPPER "${HEADER_NAME}" GLOBAL_SHADER_VAR)
+        set(GLOBAL_SHADER_VAR "VULKAN_${GLOBAL_SHADER_VAR}")
+
+        get_hlsl_shader_profile("${SHADER}" SHADER_PROFILE)
+
+        set(SPV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/vulkan_spv/${SHADER_BASE_NAME}.spv")
+        set(CPP_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/vulkan_cpp/${HEADER_NAME}.h")
+
+        add_custom_command(
+            OUTPUT "${SPV_FILE}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/vulkan_spv"
+            COMMAND "${DXC_BIN}" -nologo -spirv -fspv-target-env=vulkan1.2 -T "${SHADER_PROFILE}"
+                -I "${SHADER_INCLUDE_FOLDER}" -Fo "${SPV_FILE}" "${SHADER}"
+            DEPENDS "${SHADER}" ${HLSL_INCLUDE_FILES}
+            WORKING_DIRECTORY "${working_dir}"
+            VERBATIM)
+
+        list(APPEND ALL_GENERATED_SPV_FILES "${SPV_FILE}")
+
+        add_custom_command(
+            OUTPUT "${CPP_FILE}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_DIR}/vulkan_cpp"
+            COMMAND "${CMAKE_COMMAND}" "-DPATH=${SPV_FILE}" "-DHEADER=${CPP_FILE}"
+                "-DGLOBAL=${GLOBAL_SHADER_VAR}" -P "${PICCOLO_ROOT_DIR}/cmake/GenerateShaderCPPFile.cmake"
+            DEPENDS "${SPV_FILE}" "${PICCOLO_ROOT_DIR}/cmake/GenerateShaderCPPFile.cmake"
+            WORKING_DIRECTORY "${working_dir}"
+            VERBATIM)
+
+        list(APPEND ALL_GENERATED_CPP_FILES "${CPP_FILE}")
+    endforeach()
+
+    set(SPIRV_TARGET_NAME "${TARGET_NAME}VulkanRT")
+    add_custom_target(${SPIRV_TARGET_NAME}
+        DEPENDS ${ALL_GENERATED_SPV_FILES} ${ALL_GENERATED_CPP_FILES}
+        SOURCES ${SHADERS} ${HLSL_INCLUDE_FILES})
+    add_dependencies(${TARGET_NAME} ${SPIRV_TARGET_NAME})
+    set_target_properties("${SPIRV_TARGET_NAME}" PROPERTIES FOLDER "Engine")
+endfunction()
+
 function(compile_hlsl_shader SHADERS TARGET_NAME SHADER_INCLUDE_FOLDER GENERATED_DIR DXC_BIN)
     if(NOT WIN32)
         return()

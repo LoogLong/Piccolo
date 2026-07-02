@@ -377,10 +377,11 @@ namespace Piccolo
             return false;
         }
 
-        const std::vector<unsigned char>& bytecode = PICCOLO_D3D12_PATH_TRACING_LIB;
+        // Backend-neutral selection: SPIR-V for Vulkan, DXIL for D3D12 (same HLSL source).
+        const std::vector<unsigned char>& bytecode = PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PATH_TRACING_LIB);
         if (bytecode.empty())
         {
-            LOG_WARN("D3D12 path tracing shader library is missing; falling back to raster");
+            LOG_WARN("Path tracing shader library is missing for the active backend; falling back to raster");
             return false;
         }
 
