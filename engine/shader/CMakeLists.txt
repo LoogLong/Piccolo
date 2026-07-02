@@ -7,11 +7,7 @@ file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gl
                                             "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.tesc"
                                             "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.tese"
                                             "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.mesh"
-                                            "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.task"
-                                            "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.rgen"
-                                            "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.rchit"
-                                            "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.rmiss"
-                                            "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.rcall")
+                                            "${CMAKE_CURRENT_SOURCE_DIR}/glsl/*.task")
 
 file(GLOB_RECURSE HLSL_SHADER_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.vert.hlsl"
                                                        "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/*.frag.hlsl"
@@ -52,8 +48,9 @@ if(PICCOLO_ENABLE_VULKAN_BACKEND)
   # Vulkan ray tracing shaders are authored in HLSL (shared with D3D12) and compiled to SPIR-V via dxc.
   # Developer-controlled (option b): if dxc is not found, ray tracing SPIR-V is simply not built and the
   # engine falls back to rasterization at runtime. Install dxc (Vulkan SDK / Windows SDK) to enable it.
-  set(HLSL_RT_SHADER_FILES ${HLSL_SHADER_FILES})
-  list(FILTER HLSL_RT_SHADER_FILES INCLUDE REGEX "\\.lib\\.hlsl$")
+  set(HLSL_RT_SHADER_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/path_tracing.lib.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/gpu_skinning.comp.hlsl")
   if(HLSL_RT_SHADER_FILES)
     find_program(dxc_spirv_executable NAMES dxc dxc.exe)
     if(dxc_spirv_executable)
@@ -94,32 +91,4 @@ if(WIN32 AND PICCOLO_ENABLE_D3D12_BACKEND)
 endif()
 
 set_target_properties("${TARGET_NAME}" PROPERTIES FOLDER "Engine" )
-
-# For each shader, we create a header file
-# foreach(SHADER ${shaders})
-#     # Prepare a header name and a global variable for this shader
-#     get_filename_component(SHADER_NAME ${SHADER} NAME)
-#     string(REPLACE "." "_" HEADER_NAME ${SHADER_NAME})
-#     string(TOUPPER ${HEADER_NAME} GLOBAL_SHADER_VAR)
-
-#     set(SHADER_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/${HEADER_NAME}.h")
-
-#     add_custom_target(
-#       ${HEADER_NAME}
-#       # Compile any GLSL shader into SPIR-V shader
-#       # -g -Od should only be used in debug version
-#       COMMAND ${glslangValidator_executable} -I${SHADER_INCLUDE_FOLDER} -V100 -o ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/${SHADER_NAME}.spv ${SHADER}
-#       # Make a C header file with the SPIR-V shader
-#       COMMAND ${CMAKE_COMMAND} -DPATH="${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/${SHADER_NAME}.spv" -DHEADER="${SHADER_HEADER}" -DGLOBAL="${GLOBAL_SHADER_VAR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_resource.cmake"
-#       # Rebuild the header file if the shader is updated
-#       DEPENDS ${SHADER}
-#       COMMENT "Building ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/${SHADER_NAME}.spv and embedding it into ${SHADER_HEADER}"
-#     )
-
-#     set_target_properties(${HEADER_NAME} PROPERTIES FOLDER "Shaders/generated" )
-#     # Add the custom target like a dependencies of the project
-#     add_dependencies(${PICCOLO_NAME} ${HEADER_NAME})
-
-#     message(STATUS "Generating build commands for ${SHADER}")
-# endforeach()
 

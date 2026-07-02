@@ -59,6 +59,7 @@ namespace Piccolo
         bool buildTopLevelAS(RenderScene& scene);
         void destroyTopLevelAS();
         void destroyAccumulationImage();
+        void teardown();
 
         void transitionImage(RHIImage*              image,
                              RHIImageLayout        old_layout,

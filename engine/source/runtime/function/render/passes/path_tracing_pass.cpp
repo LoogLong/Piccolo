@@ -34,19 +34,49 @@ namespace Piccolo
 
     PathTracingPass::~PathTracingPass()
     {
-        if (m_rhi != nullptr)
+        teardown();
+    }
+
+    void PathTracingPass::teardown()
+    {
+        if (m_rhi == nullptr)
         {
-            // Release GPU ray tracing objects owned by this pass. Deleting the wrapper releases the
-            // underlying ComPtr-held D3D12 state object / SBT buffers.
-            if (m_shader_binding_table != nullptr)
-            {
-                m_rhi->destroyShaderBindingTable(m_shader_binding_table);
-            }
-            if (m_ray_tracing_pipeline != nullptr)
-            {
-                m_rhi->destroyRayTracingPipeline(m_ray_tracing_pipeline);
-            }
+            return;
         }
+
+        if (m_shader_binding_table != nullptr)
+        {
+            m_rhi->destroyShaderBindingTable(m_shader_binding_table);
+            m_shader_binding_table = nullptr;
+        }
+        if (m_ray_tracing_pipeline != nullptr)
+        {
+            m_rhi->destroyRayTracingPipeline(m_ray_tracing_pipeline);
+            m_ray_tracing_pipeline = nullptr;
+        }
+
+        destroyTopLevelAS();
+        destroyAccumulationImage();
+
+        if (m_frame_data_buffer != nullptr)
+        {
+            m_rhi->destroyBuffer(m_frame_data_buffer);
+            m_frame_data_buffer = nullptr;
+        }
+        if (m_frame_data_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_frame_data_memory);
+            m_frame_data_memory = nullptr;
+        }
+
+        m_descriptor_set = nullptr;
+        delete m_descriptor_set_layout;
+        m_descriptor_set_layout = nullptr;
+        delete m_pipeline_layout;
+        m_pipeline_layout = nullptr;
+
+        m_static_descriptors_written = false;
+        m_texture_array_views.clear();
     }
 
     void PathTracingPass::initialize(const RenderPassInitInfo* init_info)
@@ -59,7 +89,7 @@ namespace Piccolo
         }
 
         m_render_resource_impl = std::static_pointer_cast<RenderResource>(m_render_resource);
-        if (m_rhi == nullptr || !m_rhi->supportsRayTracing())
+        if (m_rhi == nullptr || !supportsPathTracing(*m_rhi))
         {
             return;
         }
@@ -97,7 +127,7 @@ namespace Piccolo
             m_render_resource_impl == nullptr ||
             m_scene_output_image == nullptr ||
             m_scene_output_image_view == nullptr ||
-            !m_rhi->supportsRayTracing())
+            !supportsPathTracing(*m_rhi))
         {
             return false;
         }
@@ -598,12 +628,25 @@ namespace Piccolo
             const auto& texture_views = m_render_resource_impl->getPathTracingMaterialTextureViews();
             m_texture_array_views.clear();
             m_texture_array_views.reserve(texture_views.size() * 4);
+            const auto fallback_texture_view = [&](RHIImageView* view) {
+                return view != nullptr ? view : m_specular_texture_view;
+            };
             for (const auto& tv : texture_views)
             {
-                m_texture_array_views.push_back({nullptr, tv.base_color_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                m_texture_array_views.push_back({nullptr, tv.metallic_roughness_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                m_texture_array_views.push_back({nullptr, tv.normal_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                m_texture_array_views.push_back({nullptr, tv.emissive_image_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back(
+                    {nullptr, fallback_texture_view(tv.base_color_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back({nullptr,
+                                                 fallback_texture_view(tv.metallic_roughness_image_view),
+                                                 RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back(
+                    {nullptr, fallback_texture_view(tv.normal_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                m_texture_array_views.push_back(
+                    {nullptr, fallback_texture_view(tv.emissive_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            }
+            if (m_texture_array_views.empty())
+            {
+                m_texture_array_views.push_back(
+                    {nullptr, m_specular_texture_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             }
         }
 
@@ -673,11 +716,6 @@ namespace Piccolo
         specular_info.imageView   = m_specular_texture_view;
         specular_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         specular_info.sampler     = m_linear_sampler;
-
-        RHIDescriptorImageInfo null_image_info {};
-        null_image_info.imageView   = nullptr;
-        null_image_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        null_image_info.sampler     = nullptr;
 
         RHIWriteDescriptorSet writes[15] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -761,8 +799,8 @@ namespace Piccolo
         writes[11].dstSet          = m_descriptor_set;
         writes[11].dstBinding      = 11;
         writes[11].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[11].descriptorCount = static_cast<uint32_t>(std::max(m_texture_array_views.size(), size_t(1)));
-        writes[11].pImageInfo      = m_texture_array_views.empty() ? &null_image_info : m_texture_array_views.data();
+        writes[11].descriptorCount = static_cast<uint32_t>(m_texture_array_views.size());
+        writes[11].pImageInfo      = m_texture_array_views.data();
 
         writes[12].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[12].dstSet          = m_descriptor_set;

@@ -7550,7 +7550,9 @@ bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDe
     acceleration_structure_impl->type = build_desc->type;
     acceleration_structure_impl->allow_update = build_desc->allow_update;
     acceleration_structure_impl->result_size = prebuild_info.ResultDataMaxSizeInBytes;
-    acceleration_structure_impl->scratch_size = prebuild_info.ScratchDataSizeInBytes;
+    const uint64_t scratch_size = std::max(prebuild_info.ScratchDataSizeInBytes,
+                                           prebuild_info.UpdateScratchDataSizeInBytes);
+    acceleration_structure_impl->scratch_size        = scratch_size;
     acceleration_structure_impl->update_scratch_size = prebuild_info.UpdateScratchDataSizeInBytes;
 
     const bool result_created =
@@ -7561,7 +7563,7 @@ bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDe
                                acceleration_structure_impl->result.ReleaseAndGetAddressOf());
     const bool scratch_created =
         createRayTracingBuffer(m_d3d12_device.Get(),
-                               prebuild_info.ScratchDataSizeInBytes,
+                               scratch_size,
                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
                                acceleration_structure_impl->scratch.ReleaseAndGetAddressOf());

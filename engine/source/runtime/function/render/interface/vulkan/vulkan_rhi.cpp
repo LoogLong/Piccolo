@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 // https://gcc.gnu.org/onlinedocs/cpp/Stringizing.html
 #define PICCOLO_XSTR(s) PICCOLO_STR(s)
@@ -904,7 +905,7 @@ namespace Piccolo
 
         if (vkCreateDevice(m_physical_device, &device_create_info, nullptr, &m_device) != VK_SUCCESS)
         {
-            LOG_ERROR("vk create device");
+            throw std::runtime_error("VulkanRHI: vkCreateDevice failed");
         }
 
         // initialize queues of this device
@@ -974,7 +975,22 @@ namespace Piccolo
                 return false;
             }
         }
-        return true;
+
+        VkPhysicalDeviceFeatures2                        features2 {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceVulkan12Features                 vulkan12_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR ray_tracing_pipeline_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+        features2.pNext                         = &vulkan12_features;
+        vulkan12_features.pNext                 = &acceleration_structure_features;
+        acceleration_structure_features.pNext   = &ray_tracing_pipeline_features;
+        vkGetPhysicalDeviceFeatures2(physical_device, &features2);
+
+        return vulkan12_features.bufferDeviceAddress == VK_TRUE &&
+               acceleration_structure_features.accelerationStructure == VK_TRUE &&
+               ray_tracing_pipeline_features.rayTracingPipeline == VK_TRUE;
     }
 
     void VulkanRHI::loadRayTracingFunctions()
@@ -1006,11 +1022,17 @@ namespace Piccolo
         {
             LOG_WARN("Ray tracing extension entry points missing; disabling Vulkan ray tracing.");
             m_ray_tracing_enabled = false;
+            m_ray_tracing_capabilities.support_level = RHIRayTracingSupportLevel::Unsupported;
         }
     }
 
     void VulkanRHI::queryRayTracingProperties()
     {
+        if (!m_ray_tracing_enabled)
+        {
+            m_ray_tracing_capabilities.support_level = RHIRayTracingSupportLevel::Unsupported;
+            return;
+        }
         m_ray_tracing_pipeline_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
         m_acceleration_structure_properties.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
@@ -2409,7 +2431,15 @@ namespace Piccolo
                 {
                     vk_descriptor_image_info.sampler = ((VulkanSampler*)rhi_write_descriptor_set_element.pImageInfo->sampler)->getResource();
                 }
-                vk_descriptor_image_info.imageView = ((VulkanImageView*)rhi_write_descriptor_set_element.pImageInfo->imageView)->getResource();
+                if (rhi_write_descriptor_set_element.pImageInfo->imageView == nullptr)
+                {
+                    vk_descriptor_image_info.imageView = VK_NULL_HANDLE;
+                }
+                else
+                {
+                    vk_descriptor_image_info.imageView =
+                        ((VulkanImageView*)rhi_write_descriptor_set_element.pImageInfo->imageView)->getResource();
+                }
                 vk_descriptor_image_info.imageLayout = (VkImageLayout)rhi_write_descriptor_set_element.pImageInfo->imageLayout;
 
                 vk_descriptor_image_info_ptr = &vk_descriptor_image_info;

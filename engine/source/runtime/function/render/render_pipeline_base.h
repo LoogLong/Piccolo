@@ -55,6 +55,8 @@ namespace Piccolo
         RenderSceneRenderMode m_requested_scene_render_mode {RenderSceneRenderMode::Raster};
         RenderSceneRenderMode m_effective_scene_render_mode {RenderSceneRenderMode::Raster};
         bool                  m_scene_render_mode_fallback_logged {false};
+        bool                  m_path_tracing_runtime_fallback {false};
+        bool                  m_path_tracing_dispatch_fail_logged {false};
 
         std::shared_ptr<RenderPassBase> m_gpu_skinning_pass;
         std::shared_ptr<RenderPassBase> m_directional_light_pass;
