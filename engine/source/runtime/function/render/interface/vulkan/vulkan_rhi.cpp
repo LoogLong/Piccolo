@@ -74,111 +74,11 @@
 #include <stdexcept>
 #include <string>
 
-#include <imgui.h>
-#include <backends/imgui_impl_glfw.h>
-#include <backends/imgui_impl_vulkan.h>
-
 namespace Piccolo
 {
     VulkanRHI::~VulkanRHI()
     {
         // TODO
-    }
-
-    bool VulkanRHI::initializeImGuiRenderBackend(RHIRenderPass* ui_render_pass, uint32_t ui_subpass)
-    {
-        if (ui_render_pass == nullptr)
-        {
-            return false;
-        }
-
-        if (!ImGui_ImplGlfw_InitForVulkan(m_window, true))
-        {
-            LOG_WARN("Failed to initialize ImGui GLFW backend for Vulkan");
-            return false;
-        }
-
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance                  = m_instance;
-        init_info.PhysicalDevice            = m_physical_device;
-        init_info.Device                    = m_device;
-        init_info.QueueFamily               = getQueueFamilyIndices().graphics_family.value();
-        init_info.Queue                     = ((VulkanQueue*)getGraphicsQueue())->getResource();
-        init_info.DescriptorPool            = m_vk_descriptor_pool;
-        init_info.Subpass                   = ui_subpass;
-
-        // may be different from the real swapchain image count
-        // see ImGui_ImplVulkanH_GetMinImageCountFromPresentMode
-        init_info.MinImageCount = 3;
-        init_info.ImageCount    = 3;
-        if (!ImGui_ImplVulkan_Init(&init_info, ((VulkanRenderPass*)ui_render_pass)->getResource()))
-        {
-            LOG_WARN("Failed to initialize ImGui Vulkan renderer backend");
-            ImGui_ImplGlfw_Shutdown();
-            return false;
-        }
-        return true;
-    }
-
-    void VulkanRHI::shutdownImGuiRenderBackend()
-    {
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-    }
-
-    void VulkanRHI::newFrameImGui()
-    {
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-    }
-
-    void VulkanRHI::renderImGuiDrawData()
-    {
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), m_vk_current_command_buffer);
-    }
-
-    void VulkanRHI::uploadImGuiFonts()
-    {
-        RHICommandBufferAllocateInfo allocInfo = {};
-        allocInfo.sType                        = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.level                        = RHI_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool                  = getCommandPoor();
-        allocInfo.commandBufferCount           = 1;
-
-        RHICommandBuffer* commandBuffer = nullptr;
-        if (RHI_SUCCESS != allocateCommandBuffers(&allocInfo, commandBuffer) || commandBuffer == nullptr)
-        {
-            throw std::runtime_error("failed to allocate command buffers!");
-        }
-
-        RHICommandBufferBeginInfo beginInfo = {};
-        beginInfo.sType                     = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags                     = RHI_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        if (RHI_SUCCESS != beginCommandBuffer(commandBuffer, &beginInfo))
-        {
-            throw std::runtime_error("Could not create one-time command buffer!");
-        }
-
-        auto* vulkan_command_buffer = static_cast<VulkanCommandBuffer*>(commandBuffer);
-        ImGui_ImplVulkan_CreateFontsTexture(vulkan_command_buffer->getResource());
-
-        if (RHI_SUCCESS != endCommandBuffer(commandBuffer))
-        {
-            throw std::runtime_error("failed to record command buffer!");
-        }
-
-        RHISubmitInfo submitInfo {};
-        submitInfo.sType              = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers    = &commandBuffer;
-
-        queueSubmit(getGraphicsQueue(), 1, &submitInfo, RHI_NULL_HANDLE);
-        queueWaitIdle(getGraphicsQueue());
-
-        freeCommandBuffers(getCommandPoor(), 1, commandBuffer);
-
-        ImGui_ImplVulkan_DestroyFontUploadObjects();
     }
 
     void VulkanRHI::initialize(RHIInitInfo init_info)

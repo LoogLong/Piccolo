@@ -19,38 +19,37 @@ namespace Piccolo
     {
         shutdownUIRenderBackend();
 
-        // The concrete ImGui platform + renderer backend binding lives inside the active RHI backend,
-        // so UIPass does not need to know whether it is running on Vulkan or D3D12.
-        if (m_rhi->initializeImGuiRenderBackend(m_framebuffer.render_pass, _main_camera_subpass_ui))
+        // The concrete ImGui platform + renderer backend binding lives in a UI-layer adapter, so UIPass
+        // does not need to know whether it is running on Vulkan or D3D12, and the RHI stays ImGui-free.
+        m_imgui_backend = createImGuiRenderBackend(m_rhi);
+        if (m_imgui_backend != nullptr &&
+            m_imgui_backend->initialize(m_framebuffer.render_pass, _main_camera_subpass_ui))
         {
-            m_renderer_backend_initialized = true;
-            m_window_ui                    = window_ui;
-            m_rhi->uploadImGuiFonts();
+            m_imgui_backend->uploadFonts();
+            m_window_ui = window_ui;
         }
         else
         {
+            m_imgui_backend.reset();
             LOG_WARN("Failed to initialize the ImGui render backend for the active RHI");
         }
     }
 
     void UIPass::shutdownUIRenderBackend()
     {
-        if (m_renderer_backend_initialized)
-        {
-            m_rhi->shutdownImGuiRenderBackend();
-            m_renderer_backend_initialized = false;
-        }
+        // RAII: destroying the adapter shuts down its ImGui platform + renderer backends.
+        m_imgui_backend.reset();
         m_window_ui = nullptr;
     }
 
     void UIPass::draw()
     {
-        if (m_window_ui == nullptr)
+        if (m_window_ui == nullptr || m_imgui_backend == nullptr)
         {
             return;
         }
 
-        m_rhi->newFrameImGui();
+        m_imgui_backend->newFrame();
         ImGui::NewFrame();
 
         m_window_ui->preRender();
@@ -59,7 +58,7 @@ namespace Piccolo
         m_rhi->pushEvent(m_rhi->getCurrentCommandBuffer(), "ImGUI", color);
 
         ImGui::Render();
-        m_rhi->renderImGuiDrawData();
+        m_imgui_backend->renderDrawData();
 
         m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
     }

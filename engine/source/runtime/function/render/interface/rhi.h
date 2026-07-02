@@ -174,15 +174,6 @@ namespace Piccolo
         // projection matrices. D3D12 uses [0,1] depth with Y-up, so it returns false (the default).
         virtual bool usesVulkanClipSpace() const { return false; }
 
-        // ImGui render-backend binding. Each RHI backend owns the ImGui platform+renderer backend
-        // (ImGui_ImplGlfw + ImGui_Impl{Vulkan,DX12}) so that UIPass stays backend-neutral and does not
-        // static_cast to a concrete RHI. Default implementations are no-ops for backends without UI.
-        virtual bool initializeImGuiRenderBackend(RHIRenderPass* ui_render_pass, uint32_t ui_subpass) { return false; }
-        virtual void shutdownImGuiRenderBackend() {}
-        virtual void newFrameImGui() {}
-        virtual void renderImGuiDrawData() {}
-        virtual void uploadImGuiFonts() {}
-
         virtual void resetCommandPool() = 0;
         virtual void waitForFences() = 0;
 

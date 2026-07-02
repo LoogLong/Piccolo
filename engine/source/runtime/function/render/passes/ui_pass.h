@@ -1,6 +1,9 @@
 #pragma once
 
+#include "runtime/function/render/passes/ui_imgui_backend.h"
 #include "runtime/function/render/render_pass.h"
+
+#include <memory>
 
 namespace Piccolo
 {
@@ -20,7 +23,7 @@ namespace Piccolo
         void draw() override final;
 
     private:
-        WindowUI* m_window_ui {nullptr};
-        bool      m_renderer_backend_initialized {false};
+        WindowUI*                           m_window_ui {nullptr};
+        std::unique_ptr<ImGuiRenderBackend> m_imgui_backend;
     };
 } // namespace Piccolo
