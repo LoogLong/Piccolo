@@ -2118,6 +2118,11 @@ void D3D12RHI::destroyCommandPool(RHICommandPool* commandPool)
 }
 void D3D12RHI::destroyBuffer(RHIBuffer* &buffer)
 {
+    if (buffer == nullptr)
+    {
+        return;
+    }
+
     auto* d3d_buffer = static_cast<D3D12RHIBuffer*>(buffer);
 #ifdef _WIN32
     unregisterHostVisibleDefaultBuffer(d3d_buffer);

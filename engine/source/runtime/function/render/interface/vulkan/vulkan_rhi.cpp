@@ -4270,7 +4270,12 @@ namespace Piccolo
 
     void VulkanRHI::destroyBuffer(RHIBuffer* &buffer)
     {
-        vkDestroyBuffer(m_device, ((VulkanBuffer*)buffer)->getResource(), nullptr);
+        if (buffer == nullptr)
+        {
+            return;
+        }
+
+        vkDestroyBuffer(m_device, static_cast<VulkanBuffer*>(buffer)->getResource(), nullptr);
         RHI_DELETE_PTR(buffer);
     }
 
@@ -4354,7 +4359,12 @@ namespace Piccolo
 
     void VulkanRHI::freeMemory(RHIDeviceMemory* &memory)
     {
-        vkFreeMemory(m_device, ((VulkanDeviceMemory*)memory)->getResource(), nullptr);
+        if (memory == nullptr)
+        {
+            return;
+        }
+
+        vkFreeMemory(m_device, static_cast<VulkanDeviceMemory*>(memory)->getResource(), nullptr);
         RHI_DELETE_PTR(memory);
     }
 

@@ -499,21 +499,38 @@ namespace Piccolo
         m_skin_compute_descriptor_set_layout = nullptr;
         m_skin_compute_descriptor_set = nullptr;
 
-        m_rhi->destroyBuffer(m_joint_matrix_buffer);
-        m_joint_matrix_buffer = nullptr;
-        m_rhi->freeMemory(m_joint_matrix_memory);
-        m_joint_matrix_memory = nullptr;
+        if (m_joint_matrix_buffer != nullptr)
+        {
+            m_rhi->destroyBuffer(m_joint_matrix_buffer);
+        }
+        if (m_joint_matrix_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_joint_matrix_memory);
+        }
         m_joint_matrix_buffer_capacity = 0;
 
-        m_rhi->destroyBuffer(m_skin_constants_buffer);
-        m_skin_constants_buffer = nullptr;
-        m_rhi->freeMemory(m_skin_constants_memory);
-        m_skin_constants_memory = nullptr;
+        if (m_skin_constants_buffer != nullptr)
+        {
+            m_rhi->destroyBuffer(m_skin_constants_buffer);
+        }
+        if (m_skin_constants_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_skin_constants_memory);
+        }
 
-        m_rhi->destroyBuffer(m_skinned_vertex_output_buffer);
-        m_skinned_vertex_output_buffer = nullptr;
-        m_rhi->freeMemory(m_skinned_vertex_output_memory);
-        m_skinned_vertex_output_memory = nullptr;
+        if (m_skinned_vertex_output_buffer != nullptr)
+        {
+            m_rhi->destroyBuffer(m_skinned_vertex_output_buffer);
+        }
+        if (m_skinned_vertex_output_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_skinned_vertex_output_memory);
+        }
         m_skinned_vertex_output_capacity = 0;
+
+        if (m_render_resource_impl != nullptr)
+        {
+            m_render_resource_impl->setSkinnedVertexBuffer(nullptr);
+        }
     }
 } // namespace Piccolo
