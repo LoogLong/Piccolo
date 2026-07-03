@@ -220,6 +220,8 @@ namespace Piccolo
         virtual void destroyDevice() = 0;
         virtual void destroyCommandPool(RHICommandPool* commandPool) = 0;
         virtual void destroyBuffer(RHIBuffer* &buffer) = 0;
+        virtual void destroyBufferWithAllocation(RHIBuffer*& buffer, RHIAllocation*& allocation) = 0;
+        virtual void destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation) = 0;
         virtual void freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers) = 0;
 
         // memory

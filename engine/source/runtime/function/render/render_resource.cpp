@@ -47,24 +47,136 @@ namespace Piccolo
 
     void RenderResource::clear()
     {
-        RHI* path_tracing_rhi = m_path_tracing_rhi;
-        if (path_tracing_rhi != nullptr)
+        RHI* rhi = m_gpu_resource_rhi != nullptr ? m_gpu_resource_rhi : m_path_tracing_rhi;
+
+        if (rhi != nullptr)
         {
+            auto release_legacy_buffer = [rhi](RHIBuffer*& buffer, RHIDeviceMemory*& memory) {
+                if (buffer != nullptr)
+                {
+                    rhi->destroyBuffer(buffer);
+                    buffer = nullptr;
+                }
+                if (memory != nullptr)
+                {
+                    rhi->freeMemory(memory);
+                    memory = nullptr;
+                }
+            };
+
+            auto release_vma_buffer = [rhi](RHIBuffer*& buffer, RHIAllocation*& allocation) {
+                rhi->destroyBufferWithAllocation(buffer, allocation);
+            };
+
+            auto release_vma_image = [rhi](RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation) {
+                rhi->destroyImageWithAllocation(image, image_view, allocation);
+            };
+
             for (auto& mesh_entry : m_meshes)
             {
                 RenderMeshGPUResource& mesh = mesh_entry.second;
+
                 if (mesh.path_tracing_bottom_level_as != nullptr)
                 {
-                    path_tracing_rhi->destroyAccelerationStructure(mesh.path_tracing_bottom_level_as);
+                    rhi->destroyAccelerationStructure(mesh.path_tracing_bottom_level_as);
                     mesh.path_tracing_bottom_level_as = nullptr;
                 }
-                mesh.path_tracing_blas_dirty = true;
+
+                for (auto& skinned_resource : mesh.path_tracing_skinned_resources)
+                {
+                    if (skinned_resource.second.blas != nullptr)
+                    {
+                        rhi->destroyAccelerationStructure(skinned_resource.second.blas);
+                        skinned_resource.second.blas = nullptr;
+                    }
+                }
+                mesh.path_tracing_skinned_resources.clear();
+
+                for (auto& skinned_output : mesh.skinned_mesh_outputs)
+                {
+                    release_legacy_buffer(skinned_output.second.skinned_position_buffer,
+                                            skinned_output.second.skinned_position_memory);
+                }
+                mesh.skinned_mesh_outputs.clear();
+
+                release_vma_buffer(mesh.mesh_vertex_position_buffer, mesh.mesh_vertex_position_buffer_allocation);
+                release_vma_buffer(mesh.mesh_vertex_varying_enable_blending_buffer,
+                                   mesh.mesh_vertex_varying_enable_blending_buffer_allocation);
+                release_vma_buffer(mesh.mesh_vertex_joint_binding_buffer, mesh.mesh_vertex_joint_binding_buffer_allocation);
+                release_vma_buffer(mesh.mesh_vertex_varying_buffer, mesh.mesh_vertex_varying_buffer_allocation);
+                release_vma_buffer(mesh.mesh_index_buffer, mesh.mesh_index_buffer_allocation);
             }
+            m_meshes.clear();
+
+            for (auto& material_entry : m_pbr_materials)
+            {
+                RenderPBRMaterialGPUResource& material = material_entry.second;
+                release_vma_image(material.base_color_texture_image,
+                                    material.base_color_image_view,
+                                    material.base_color_image_allocation);
+                release_vma_image(material.metallic_roughness_texture_image,
+                                    material.metallic_roughness_image_view,
+                                    material.metallic_roughness_image_allocation);
+                release_vma_image(material.normal_texture_image,
+                                    material.normal_image_view,
+                                    material.normal_image_allocation);
+                release_vma_image(material.occlusion_texture_image,
+                                    material.occlusion_image_view,
+                                    material.occlusion_image_allocation);
+                release_vma_image(material.emissive_texture_image,
+                                    material.emissive_image_view,
+                                    material.emissive_image_allocation);
+                release_vma_buffer(material.material_uniform_buffer, material.material_uniform_buffer_allocation);
+            }
+            m_pbr_materials.clear();
+
+            IBLResource& ibl = m_global_render_resource._ibl_resource;
+            if (ibl._brdfLUT_texture_sampler != nullptr)
+            {
+                rhi->destroySampler(ibl._brdfLUT_texture_sampler);
+                ibl._brdfLUT_texture_sampler = nullptr;
+            }
+            if (ibl._irradiance_texture_sampler != nullptr)
+            {
+                rhi->destroySampler(ibl._irradiance_texture_sampler);
+                ibl._irradiance_texture_sampler = nullptr;
+            }
+            if (ibl._specular_texture_sampler != nullptr)
+            {
+                rhi->destroySampler(ibl._specular_texture_sampler);
+                ibl._specular_texture_sampler = nullptr;
+            }
+            release_vma_image(ibl._brdfLUT_texture_image, ibl._brdfLUT_texture_image_view, ibl._brdfLUT_texture_image_allocation);
+            release_vma_image(ibl._irradiance_texture_image,
+                              ibl._irradiance_texture_image_view,
+                              ibl._irradiance_texture_image_allocation);
+            release_vma_image(ibl._specular_texture_image,
+                              ibl._specular_texture_image_view,
+                              ibl._specular_texture_image_allocation);
+
+            ColorGradingResource& color_grading = m_global_render_resource._color_grading_resource;
+            release_vma_image(color_grading._color_grading_LUT_texture_image,
+                              color_grading._color_grading_LUT_texture_image_view,
+                              color_grading._color_grading_LUT_texture_image_allocation);
+
+            StorageBuffer& storage = m_global_render_resource._storage_buffer;
+            if (storage._global_upload_ringbuffer_memory != nullptr)
+            {
+                rhi->unmapMemory(storage._global_upload_ringbuffer_memory);
+                storage._global_upload_ringbuffer_memory_pointer = nullptr;
+            }
+            if (storage._axis_inefficient_storage_buffer_memory != nullptr)
+            {
+                rhi->unmapMemory(storage._axis_inefficient_storage_buffer_memory);
+                storage._axis_inefficient_storage_buffer_memory_pointer = nullptr;
+            }
+            release_legacy_buffer(storage._global_upload_ringbuffer, storage._global_upload_ringbuffer_memory);
+            release_legacy_buffer(storage._global_null_descriptor_storage_buffer,
+                                  storage._global_null_descriptor_storage_buffer_memory);
+            release_legacy_buffer(storage._axis_inefficient_storage_buffer, storage._axis_inefficient_storage_buffer_memory);
         }
 
-        // Release the path tracing scene buffers owned by RenderResource. The RHI handle is cached
-        // while those buffers exist (see updatePathTracingSceneBuffers) and is still valid here, as
-        // RenderResource::clear() runs before RHI::clear() during shutdown.
+        // Release path tracing scene buffers (legacy VkDeviceMemory, not VMA).
         if (m_path_tracing_rhi != nullptr)
         {
             auto destroy_buffer = [this](RHIBuffer*& buffer, RHIDeviceMemory*& memory) {
@@ -94,8 +206,8 @@ namespace Piccolo
             m_path_tracing_rhi                      = nullptr;
         }
 
-        // The skinned vertex buffer is owned by GpuSkinningPass; only drop the non-owning reference.
         m_skinned_vertex_buffer = nullptr;
+        m_gpu_resource_rhi      = nullptr;
 
         m_path_tracing_vertex_data.clear();
         m_path_tracing_index_data.clear();
@@ -107,6 +219,11 @@ namespace Piccolo
 
     void RenderResource::uploadGlobalRenderResource(std::shared_ptr<RHI> rhi, LevelResourceDesc level_resource_desc)
     {
+        if (m_gpu_resource_rhi == nullptr)
+        {
+            m_gpu_resource_rhi = rhi.get();
+        }
+
         // create and map global storage buffer
         createAndMapStorageBuffer(rhi);
 
@@ -179,6 +296,10 @@ namespace Piccolo
         RenderMeshData       mesh_data,
         RenderMaterialData   material_data)
     {
+        if (m_gpu_resource_rhi == nullptr)
+        {
+            m_gpu_resource_rhi = rhi.get();
+        }
         getOrCreateMesh(rhi, render_entity, mesh_data);
         getOrCreateMaterial(rhi, render_entity, material_data);
     }
@@ -187,6 +308,10 @@ namespace Piccolo
         RenderEntity         render_entity,
         RenderMeshData       mesh_data)
     {
+        if (m_gpu_resource_rhi == nullptr)
+        {
+            m_gpu_resource_rhi = rhi.get();
+        }
         getOrCreateMesh(rhi, render_entity, mesh_data);
     }
 
@@ -194,6 +319,10 @@ namespace Piccolo
         RenderEntity         render_entity,
         RenderMaterialData   material_data)
     {
+        if (m_gpu_resource_rhi == nullptr)
+        {
+            m_gpu_resource_rhi = rhi.get();
+        }
         getOrCreateMaterial(rhi, render_entity, material_data);
     }
 

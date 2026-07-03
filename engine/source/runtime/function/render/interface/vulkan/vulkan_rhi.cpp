@@ -4217,6 +4217,67 @@ namespace Piccolo
         RHI_DELETE_PTR(buffer);
     }
 
+    void VulkanRHI::destroyBufferWithAllocation(RHIBuffer*& buffer, RHIAllocation*& allocation)
+    {
+        if (buffer == nullptr)
+        {
+            freeAllocation(allocation);
+            return;
+        }
+
+        auto* vulkan_buffer = static_cast<VulkanBuffer*>(buffer);
+        VkBuffer            vk_buffer = vulkan_buffer->getResource();
+
+        if (allocation != nullptr && m_assets_allocator != VK_NULL_HANDLE &&
+            static_cast<VulkanAllocation*>(allocation)->allocation != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(m_assets_allocator, vk_buffer, static_cast<VulkanAllocation*>(allocation)->allocation);
+            delete static_cast<VulkanAllocation*>(allocation);
+            allocation = nullptr;
+            delete vulkan_buffer;
+            buffer = nullptr;
+            return;
+        }
+
+        destroyBuffer(buffer);
+        freeAllocation(allocation);
+    }
+
+    void VulkanRHI::destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation)
+    {
+        if (image_view != nullptr)
+        {
+            destroyImageView(image_view);
+            delete image_view;
+            image_view = nullptr;
+        }
+
+        if (image == nullptr)
+        {
+            freeAllocation(allocation);
+            return;
+        }
+
+        auto* vulkan_image = static_cast<VulkanImage*>(image);
+        VkImage             vk_image = vulkan_image->getResource();
+
+        if (allocation != nullptr && m_assets_allocator != VK_NULL_HANDLE &&
+            static_cast<VulkanAllocation*>(allocation)->allocation != VK_NULL_HANDLE)
+        {
+            vmaDestroyImage(m_assets_allocator, vk_image, static_cast<VulkanAllocation*>(allocation)->allocation);
+            delete static_cast<VulkanAllocation*>(allocation);
+            allocation = nullptr;
+            delete vulkan_image;
+            image = nullptr;
+            return;
+        }
+
+        destroyImage(image);
+        delete vulkan_image;
+        image = nullptr;
+        freeAllocation(allocation);
+    }
+
     void VulkanRHI::freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers)
     {
         VkCommandBuffer vk_command_buffer = ((VulkanCommandBuffer*)pCommandBuffers)->getResource();

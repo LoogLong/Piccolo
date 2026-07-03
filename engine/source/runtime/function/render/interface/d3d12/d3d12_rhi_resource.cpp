@@ -2106,6 +2106,27 @@ void D3D12RHI::destroyBuffer(RHIBuffer* &buffer)
     buffer = nullptr;
     return;
 }
+void D3D12RHI::destroyBufferWithAllocation(RHIBuffer*& buffer, RHIAllocation*& allocation)
+{
+    destroyBuffer(buffer);
+    freeAllocation(allocation);
+}
+void D3D12RHI::destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation)
+{
+    if (image_view != nullptr)
+    {
+        destroyImageView(image_view);
+        delete image_view;
+        image_view = nullptr;
+    }
+    if (image != nullptr)
+    {
+        destroyImage(image);
+        delete image;
+        image = nullptr;
+    }
+    freeAllocation(allocation);
+}
 void D3D12RHI::freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers)
 {
     (void)commandPool;

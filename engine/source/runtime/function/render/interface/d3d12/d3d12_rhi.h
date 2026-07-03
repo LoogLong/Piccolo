@@ -152,6 +152,8 @@ namespace Piccolo
     void destroyDevice() override;
     void destroyCommandPool(RHICommandPool* commandPool) override;
     void destroyBuffer(RHIBuffer* &buffer) override;
+    void destroyBufferWithAllocation(RHIBuffer*& buffer, RHIAllocation*& allocation) override;
+    void destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation) override;
     void freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers) override;
     void freeAllocation(RHIAllocation*& allocation) override;
     void freeMemory(RHIDeviceMemory* &memory) override;
