@@ -77,10 +77,7 @@ namespace Piccolo
 
     struct RenderPathTracingMaterialTextureViews
     {
-        RHIImageView* base_color_image_view {nullptr};
-        RHIImageView* metallic_roughness_image_view {nullptr};
-        RHIImageView* normal_image_view {nullptr};
-        RHIImageView* emissive_image_view {nullptr};
+        RenderPBRMaterialGPUResource* material {nullptr};
     };
 
     struct IBLResource

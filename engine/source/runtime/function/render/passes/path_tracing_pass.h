@@ -54,11 +54,15 @@ namespace Piccolo
         bool setupShaderBindingTable();
         bool ensureFrameDataBuffer();
         bool ensureAccumulationImage();
+        bool ensureSkinnedVertexFallbackBuffer();
+        void destroySkinnedVertexFallbackBuffer();
         bool updateFrameData(uint32_t instance_count);
         bool updateDescriptorSet();
         bool buildTopLevelAS(RenderScene& scene);
         void destroyTopLevelAS();
         void destroyAccumulationImage();
+        void invalidateStaticDescriptors();
+        void flushPendingDestroys();
         void teardown();
         void logInitializeSkipOnce(const char* reason);
         void logDispatchFailureOnce(const char* reason);
@@ -90,6 +94,9 @@ namespace Piccolo
         RHIBuffer*       m_frame_data_buffer {nullptr};
         RHIDeviceMemory* m_frame_data_memory {nullptr};
 
+        RHIBuffer*       m_skinned_vertex_fallback_buffer {nullptr};
+        RHIDeviceMemory* m_skinned_vertex_fallback_memory {nullptr};
+
         RHIDescriptorSetLayout* m_descriptor_set_layout {nullptr};
         RHIDescriptorSet*       m_descriptor_set {nullptr};
         RHIPipelineLayout*      m_pipeline_layout {nullptr};
@@ -98,6 +105,7 @@ namespace Piccolo
 
         RHIAccelerationStructure* m_top_level_as {nullptr};
         uint32_t                  m_tlas_instance_count {0};
+        std::vector<RHIAccelerationStructure*> m_pending_destroy_acceleration_structures;
 
         uint32_t  m_sample_index {0};
         RHIExtent2D m_extent {0, 0};

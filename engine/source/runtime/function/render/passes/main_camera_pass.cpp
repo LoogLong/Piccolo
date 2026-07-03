@@ -416,6 +416,9 @@ namespace Piccolo
 
     void MainCameraPass::setupPathTracingCompositeRenderPass()
     {
+        // Subpass layout and dependencies must stay compatible with setupRenderPass() so graphics
+        // pipelines created against m_framebuffer.render_pass work inside this pass. When changing
+        // raster subpass topology, update this function in parallel.
         auto initColorAttachment = [](RHIAttachmentDescription& attachment,
                                       RHIFormat                 format,
                                       RHIAttachmentLoadOp       load_op,
@@ -490,6 +493,46 @@ namespace Piccolo
         swapchain.finalLayout    = RHI_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
         RHISubpassDescription subpasses[_main_camera_subpass_count] = {};
+
+        RHIAttachmentReference base_pass_color_attachments_reference[3] = {};
+        base_pass_color_attachments_reference[0].attachment = _main_camera_pass_gbuffer_a;
+        base_pass_color_attachments_reference[0].layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        base_pass_color_attachments_reference[1].attachment = _main_camera_pass_gbuffer_b;
+        base_pass_color_attachments_reference[1].layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        base_pass_color_attachments_reference[2].attachment = _main_camera_pass_gbuffer_c;
+        base_pass_color_attachments_reference[2].layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        RHIAttachmentReference base_pass_depth_attachment_reference {};
+        base_pass_depth_attachment_reference.attachment = _main_camera_pass_depth;
+        base_pass_depth_attachment_reference.layout     = RHI_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        RHISubpassDescription& base_pass = subpasses[_main_camera_subpass_basepass];
+        base_pass.pipelineBindPoint       = RHI_PIPELINE_BIND_POINT_GRAPHICS;
+        base_pass.colorAttachmentCount    = 3;
+        base_pass.pColorAttachments       = base_pass_color_attachments_reference;
+        base_pass.pDepthStencilAttachment = &base_pass_depth_attachment_reference;
+
+        RHIAttachmentReference deferred_lighting_pass_input_attachments_reference[4] = {};
+        deferred_lighting_pass_input_attachments_reference[0].attachment = _main_camera_pass_gbuffer_a;
+        deferred_lighting_pass_input_attachments_reference[0].layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        deferred_lighting_pass_input_attachments_reference[1].attachment = _main_camera_pass_gbuffer_b;
+        deferred_lighting_pass_input_attachments_reference[1].layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        deferred_lighting_pass_input_attachments_reference[2].attachment = _main_camera_pass_gbuffer_c;
+        deferred_lighting_pass_input_attachments_reference[2].layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        deferred_lighting_pass_input_attachments_reference[3].attachment = _main_camera_pass_depth;
+        deferred_lighting_pass_input_attachments_reference[3].layout     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIAttachmentReference deferred_lighting_pass_color_attachment_reference {};
+        deferred_lighting_pass_color_attachment_reference.attachment = _main_camera_pass_backup_buffer_odd;
+        deferred_lighting_pass_color_attachment_reference.layout     = RHI_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        RHISubpassDescription& deferred_lighting_pass = subpasses[_main_camera_subpass_deferred_lighting];
+        deferred_lighting_pass.pipelineBindPoint      = RHI_PIPELINE_BIND_POINT_GRAPHICS;
+        deferred_lighting_pass.inputAttachmentCount   = 4;
+        deferred_lighting_pass.pInputAttachments        = deferred_lighting_pass_input_attachments_reference;
+        deferred_lighting_pass.colorAttachmentCount     = 1;
+        deferred_lighting_pass.pColorAttachments        = &deferred_lighting_pass_color_attachment_reference;
+
         for (uint32_t i = 0; i < _main_camera_subpass_count; ++i)
         {
             subpasses[i].pipelineBindPoint = RHI_PIPELINE_BIND_POINT_GRAPHICS;
@@ -562,47 +605,84 @@ namespace Piccolo
         subpasses[_main_camera_subpass_combine_ui].colorAttachmentCount = 1;
         subpasses[_main_camera_subpass_combine_ui].pColorAttachments    = &combine_color;
 
-        RHISubpassDependency dependencies[5] = {};
+        RHISubpassDependency dependencies[8] = {};
 
-        dependencies[0].srcSubpass    = _main_camera_subpass_forward_lighting;
-        dependencies[0].dstSubpass    = _main_camera_subpass_tone_mapping;
-        dependencies[0].srcStageMask  = RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
-        dependencies[0].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                        RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[0].srcAccessMask = RHI_ACCESS_SHADER_WRITE_BIT;
-        dependencies[0].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[0].srcSubpass      = RHI_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass      = _main_camera_subpass_deferred_lighting;
+        dependencies[0].srcStageMask    = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].dstStageMask      = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[0].srcAccessMask     = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[0].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT;
+        dependencies[0].dependencyFlags   = 0;
 
-        dependencies[1].srcSubpass    = _main_camera_subpass_tone_mapping;
-        dependencies[1].dstSubpass    = _main_camera_subpass_color_grading;
-        dependencies[1].srcStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[1].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        dependencies[1].srcSubpass      = _main_camera_subpass_basepass;
+        dependencies[1].dstSubpass      = _main_camera_subpass_deferred_lighting;
+        dependencies[1].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                           RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[1].srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        dependencies[1].dependencyFlags = RHI_DEPENDENCY_BY_REGION_BIT;
 
-        dependencies[2].srcSubpass    = _main_camera_subpass_color_grading;
-        dependencies[2].dstSubpass    = _main_camera_subpass_fxaa;
-        dependencies[2].srcStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[2].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                        RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[2].srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dependencies[2].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[2].srcSubpass      = _main_camera_subpass_deferred_lighting;
+        dependencies[2].dstSubpass      = _main_camera_subpass_forward_lighting;
+        dependencies[2].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[2].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[2].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[2].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        dependencies[2].dependencyFlags = RHI_DEPENDENCY_BY_REGION_BIT;
 
-        dependencies[3].srcSubpass    = _main_camera_subpass_fxaa;
-        dependencies[3].dstSubpass    = _main_camera_subpass_ui;
-        dependencies[3].srcStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                        RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[3].dstStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[3].srcAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dependencies[3].dstAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[3].srcSubpass      = _main_camera_subpass_forward_lighting;
+        dependencies[3].dstSubpass      = _main_camera_subpass_tone_mapping;
+        dependencies[3].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[3].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[3].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[3].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        dependencies[3].dependencyFlags = RHI_DEPENDENCY_BY_REGION_BIT;
 
-        dependencies[4].srcSubpass    = _main_camera_subpass_ui;
-        dependencies[4].dstSubpass    = _main_camera_subpass_combine_ui;
-        dependencies[4].srcStageMask  = RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[4].dstStageMask  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                        RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[4].srcAccessMask = RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dependencies[4].dstAccessMask = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[4].srcSubpass      = _main_camera_subpass_tone_mapping;
+        dependencies[4].dstSubpass      = _main_camera_subpass_color_grading;
+        dependencies[4].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[4].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[4].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[4].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        dependencies[4].dependencyFlags = RHI_DEPENDENCY_BY_REGION_BIT;
+
+        dependencies[5].srcSubpass      = _main_camera_subpass_color_grading;
+        dependencies[5].dstSubpass      = _main_camera_subpass_fxaa;
+        dependencies[5].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[5].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[5].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[5].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+
+        dependencies[6].srcSubpass      = _main_camera_subpass_fxaa;
+        dependencies[6].dstSubpass      = _main_camera_subpass_ui;
+        dependencies[6].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[6].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[6].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[6].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        dependencies[6].dependencyFlags = RHI_DEPENDENCY_BY_REGION_BIT;
+
+        dependencies[7].srcSubpass      = _main_camera_subpass_ui;
+        dependencies[7].dstSubpass      = _main_camera_subpass_combine_ui;
+        dependencies[7].srcStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[7].dstStageMask    = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                          RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[7].srcAccessMask   = RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[7].dstAccessMask     = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        dependencies[7].dependencyFlags = RHI_DEPENDENCY_BY_REGION_BIT;
 
         RHIRenderPassCreateInfo create_info {};
         create_info.sType           = RHI_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -2059,6 +2139,7 @@ namespace Piccolo
             clear_values[_main_camera_pass_gbuffer_a].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
             clear_values[_main_camera_pass_gbuffer_b].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
             clear_values[_main_camera_pass_gbuffer_c].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            // backup_odd uses LOAD_OP_LOAD in the PT composite pass; clear value is ignored.
             clear_values[_main_camera_pass_backup_buffer_odd].color        = {{0.0f, 0.0f, 0.0f, 1.0f}};
             clear_values[_main_camera_pass_backup_buffer_even].color       = {{0.0f, 0.0f, 0.0f, 1.0f}};
             clear_values[_main_camera_pass_post_process_buffer_odd].color  = {{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -2211,6 +2292,7 @@ namespace Piccolo
             clear_values[_main_camera_pass_gbuffer_a].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
             clear_values[_main_camera_pass_gbuffer_b].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
             clear_values[_main_camera_pass_gbuffer_c].color                = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            // backup_odd uses LOAD_OP_LOAD in the PT composite pass; clear value is ignored.
             clear_values[_main_camera_pass_backup_buffer_odd].color        = {{0.0f, 0.0f, 0.0f, 1.0f}};
             clear_values[_main_camera_pass_backup_buffer_even].color       = {{0.0f, 0.0f, 0.0f, 1.0f}};
             clear_values[_main_camera_pass_post_process_buffer_odd].color  = {{0.0f, 0.0f, 0.0f, 1.0f}};

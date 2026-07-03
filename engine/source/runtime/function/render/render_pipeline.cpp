@@ -402,13 +402,42 @@ namespace Piccolo
             return false;
         }
 
+        MainCameraPass& main_camera_pass = *(static_cast<MainCameraPass*>(m_main_camera_pass.get()));
+        if (RHIImage* backup_odd_image = main_camera_pass.getBackupOddImage(); backup_odd_image != nullptr)
+        {
+            RHIImageMemoryBarrier barrier {};
+            barrier.sType                         = RHI_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.srcAccessMask                 = RHI_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask                 = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+            barrier.oldLayout                     = RHI_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout                     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcQueueFamilyIndex           = RHI_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex           = RHI_QUEUE_FAMILY_IGNORED;
+            barrier.image                         = backup_odd_image;
+            barrier.subresourceRange.aspectMask     = RHI_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel   = 0;
+            barrier.subresourceRange.levelCount     = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount     = 1;
+            render_rhi->cmdPipelineBarrier(render_rhi->getCurrentCommandBuffer(),
+                                           RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                           RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                               RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                           0,
+                                           0,
+                                           nullptr,
+                                           0,
+                                           nullptr,
+                                           1,
+                                           &barrier);
+        }
+
         ParticlePass&    particle_pass   = *(static_cast<ParticlePass*>(m_particle_pass.get()));
         UIPass&           ui_pass         = *(static_cast<UIPass*>(m_ui_pass.get()));
         CombineUIPass&    combine_ui_pass = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
 
         const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
-        static_cast<MainCameraPass*>(m_main_camera_pass.get())
-            ->drawPathTracing(particle_pass,
+        main_camera_pass.drawPathTracing(particle_pass,
                               ui_pass,
                               combine_ui_pass,
                               current_swapchain_image_index);

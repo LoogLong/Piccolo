@@ -33,6 +33,16 @@ namespace Piccolo
             }
             return usage;
         }
+        RHIBufferUsageFlags withPathTracingIndexBuildInputUsage(RHIBufferUsageFlags usage,
+                                                               const std::shared_ptr<RHI>& rhi)
+        {
+            if (rhi != nullptr && rhi->supportsRayTracing())
+            {
+                usage |= RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                         RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            }
+            return usage;
+        }
     } // namespace
 
     void RenderResource::clear()
@@ -273,6 +283,13 @@ namespace Piccolo
             mesh.mesh_index_count == 0)
         {
             LOG_WARN("Path tracing BLAS build skipped because mesh buffers are incomplete");
+            return;
+        }
+
+        if (!mesh.path_tracing_vertex_blas_input_ready || !mesh.path_tracing_index_blas_input_ready)
+        {
+            LOG_WARN("Path tracing BLAS build skipped because mesh buffers lack RT build-input usage");
+            mesh.path_tracing_blas_dirty = true;
             return;
         }
 
@@ -553,15 +570,9 @@ namespace Piccolo
             const uint32_t shader_material_index = static_cast<uint32_t>(m_path_tracing_material_data.size());
             m_path_tracing_material_data.push_back(material_data);
 
-            // Build texture views record
+            // Build texture views record (material pointer resolved live during descriptor updates)
             RenderPathTracingMaterialTextureViews texture_views{};
-            if (source_instance.material != nullptr)
-            {
-                texture_views.base_color_image_view = source_instance.material->base_color_image_view;
-                texture_views.metallic_roughness_image_view = source_instance.material->metallic_roughness_image_view;
-                texture_views.normal_image_view = source_instance.material->normal_image_view;
-                texture_views.emissive_image_view = source_instance.material->emissive_image_view;
-            }
+            texture_views.material = source_instance.material;
             m_path_tracing_material_texture_views.push_back(texture_views);
 
             // Update material texture indices (each material has 4 textures: base_color=0, metallic_roughness=1, normal=2, emissive=3)
@@ -1273,6 +1284,7 @@ namespace Piccolo
                 rhi,
                 !enable_vertex_blending);
             bufferInfo.usage = vertex_buffer_usage;
+            now_mesh.path_tracing_vertex_blas_input_ready = supportsPathTracingMeshInputs(rhi, !enable_vertex_blending);
             bufferInfo.size = vertex_position_buffer_size;
             rhi->createBufferWithAllocation(&bufferInfo,
                                             RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1463,6 +1475,7 @@ namespace Piccolo
                 rhi,
                 !enable_vertex_blending);
             bufferInfo.usage = vertex_buffer_usage;
+            now_mesh.path_tracing_vertex_blas_input_ready = supportsPathTracingMeshInputs(rhi, !enable_vertex_blending);
 
             bufferInfo.size = vertex_position_buffer_size;
             rhi->createBufferWithAllocation(&bufferInfo,
@@ -1574,10 +1587,10 @@ namespace Piccolo
         // allocate asset index buffer in device local memory
         RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = buffer_size;
-        bufferInfo.usage = withPathTracingBuildInputUsage(
+        bufferInfo.usage = withPathTracingIndexBuildInputUsage(
             RHI_BUFFER_USAGE_INDEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
-            rhi,
-            now_mesh.path_tracing_static_opaque_supported);
+            rhi);
+        now_mesh.path_tracing_index_blas_input_ready = rhi != nullptr && rhi->supportsRayTracing();
 
         rhi->createBufferWithAllocation(&bufferInfo,
                                         RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,

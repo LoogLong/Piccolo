@@ -991,6 +991,8 @@ namespace Piccolo
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR    ray_tracing_pipeline_features {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+        VkPhysicalDeviceRayQueryFeaturesKHR              ray_query_features {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
 
         if (m_ray_tracing_enabled)
         {
@@ -998,6 +1000,7 @@ namespace Piccolo
             enabled_device_extensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
             enabled_device_extensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
             enabled_device_extensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+            enabled_device_extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
 
             vulkan12_features.bufferDeviceAddress                       = VK_TRUE;
             vulkan12_features.descriptorIndexing                        = VK_TRUE;
@@ -1008,11 +1011,13 @@ namespace Piccolo
 
             acceleration_structure_features.accelerationStructure = VK_TRUE;
             ray_tracing_pipeline_features.rayTracingPipeline      = VK_TRUE;
+            ray_query_features.rayQuery                           = VK_TRUE;
 
             features2.features               = physical_device_features;
             features2.pNext                  = &vulkan12_features;
             vulkan12_features.pNext          = &acceleration_structure_features;
             acceleration_structure_features.pNext = &ray_tracing_pipeline_features;
+            ray_tracing_pipeline_features.pNext   = &ray_query_features;
         }
 
         // device create info
@@ -2518,11 +2523,11 @@ namespace Piccolo
             const auto& rhi_write_descriptor_set_element = pDescriptorWrites[i];
             if (rhi_write_descriptor_set_element.pImageInfo != nullptr)
             {
-                image_info_count++;
+                image_info_count += static_cast<int>(rhi_write_descriptor_set_element.descriptorCount);
             }
             if (rhi_write_descriptor_set_element.pBufferInfo != nullptr)
             {
-                buffer_info_count++;
+                buffer_info_count += static_cast<int>(rhi_write_descriptor_set_element.descriptorCount);
             }
             if (rhi_write_descriptor_set_element.pAccelerationStructureInfo != nullptr)
             {
@@ -2550,40 +2555,61 @@ namespace Piccolo
             const VkDescriptorImageInfo* vk_descriptor_image_info_ptr = nullptr;
             if (rhi_write_descriptor_set_element.pImageInfo != nullptr)
             {
-                auto& vk_descriptor_image_info = vk_descriptor_image_info_list[image_info_current];
-                if (rhi_write_descriptor_set_element.pImageInfo->sampler == nullptr)
+                vk_descriptor_image_info_ptr = &vk_descriptor_image_info_list[image_info_current];
+                for (uint32_t descriptor_index = 0;
+                     descriptor_index < rhi_write_descriptor_set_element.descriptorCount;
+                     ++descriptor_index)
                 {
-                    vk_descriptor_image_info.sampler = nullptr;
+                    auto& vk_descriptor_image_info = vk_descriptor_image_info_list[image_info_current++];
+                    const RHIDescriptorImageInfo& rhi_image_info =
+                        rhi_write_descriptor_set_element.pImageInfo[descriptor_index];
+                    if (rhi_image_info.sampler == nullptr)
+                    {
+                        vk_descriptor_image_info.sampler = nullptr;
+                    }
+                    else
+                    {
+                        vk_descriptor_image_info.sampler =
+                            ((VulkanSampler*)rhi_image_info.sampler)->getResource();
+                    }
+                    if (rhi_image_info.imageView == nullptr)
+                    {
+                        vk_descriptor_image_info.imageView = VK_NULL_HANDLE;
+                    }
+                    else
+                    {
+                        VkImageView image_view =
+                            ((VulkanImageView*)rhi_image_info.imageView)->getResource();
+                        vk_descriptor_image_info.imageView = image_view != VK_NULL_HANDLE ? image_view :
+                                                                                              VK_NULL_HANDLE;
+                    }
+                    vk_descriptor_image_info.imageLayout = (VkImageLayout)rhi_image_info.imageLayout;
                 }
-                else
-                {
-                    vk_descriptor_image_info.sampler = ((VulkanSampler*)rhi_write_descriptor_set_element.pImageInfo->sampler)->getResource();
-                }
-                if (rhi_write_descriptor_set_element.pImageInfo->imageView == nullptr)
-                {
-                    vk_descriptor_image_info.imageView = VK_NULL_HANDLE;
-                }
-                else
-                {
-                    vk_descriptor_image_info.imageView =
-                        ((VulkanImageView*)rhi_write_descriptor_set_element.pImageInfo->imageView)->getResource();
-                }
-                vk_descriptor_image_info.imageLayout = (VkImageLayout)rhi_write_descriptor_set_element.pImageInfo->imageLayout;
-
-                vk_descriptor_image_info_ptr = &vk_descriptor_image_info;
-                image_info_current++;
             }
 
             const VkDescriptorBufferInfo* vk_descriptor_buffer_info_ptr = nullptr;
             if (rhi_write_descriptor_set_element.pBufferInfo != nullptr)
             {
-                auto& vk_descriptor_buffer_info = vk_descriptor_buffer_info_list[buffer_info_current];
-                vk_descriptor_buffer_info.buffer = ((VulkanBuffer*)rhi_write_descriptor_set_element.pBufferInfo->buffer)->getResource();
-                vk_descriptor_buffer_info.offset = (VkDeviceSize)rhi_write_descriptor_set_element.pBufferInfo->offset;
-                vk_descriptor_buffer_info.range = (VkDeviceSize)rhi_write_descriptor_set_element.pBufferInfo->range;
-
-                vk_descriptor_buffer_info_ptr = &vk_descriptor_buffer_info;
-                buffer_info_current++;
+                vk_descriptor_buffer_info_ptr = &vk_descriptor_buffer_info_list[buffer_info_current];
+                for (uint32_t descriptor_index = 0;
+                     descriptor_index < rhi_write_descriptor_set_element.descriptorCount;
+                     ++descriptor_index)
+                {
+                    auto& vk_descriptor_buffer_info = vk_descriptor_buffer_info_list[buffer_info_current++];
+                    const RHIDescriptorBufferInfo& rhi_buffer_info =
+                        rhi_write_descriptor_set_element.pBufferInfo[descriptor_index];
+                    if (rhi_buffer_info.buffer == nullptr)
+                    {
+                        vk_descriptor_buffer_info.buffer = VK_NULL_HANDLE;
+                    }
+                    else
+                    {
+                        vk_descriptor_buffer_info.buffer =
+                            ((VulkanBuffer*)rhi_buffer_info.buffer)->getResource();
+                    }
+                    vk_descriptor_buffer_info.offset = (VkDeviceSize)rhi_buffer_info.offset;
+                    vk_descriptor_buffer_info.range  = (VkDeviceSize)rhi_buffer_info.range;
+                }
             }
 
             vk_write_descriptor_set_element.sType = (VkStructureType)rhi_write_descriptor_set_element.sType;

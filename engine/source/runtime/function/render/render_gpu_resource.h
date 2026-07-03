@@ -41,6 +41,8 @@ namespace Piccolo
         RHIAccelerationStructure* path_tracing_bottom_level_as {nullptr};
         bool                      path_tracing_blas_dirty {true};
         bool                      path_tracing_static_opaque_supported {false};
+        bool                      path_tracing_index_blas_input_ready {false};
+        bool                      path_tracing_vertex_blas_input_ready {false};
 
         std::vector<Vector3>  path_tracing_positions;
         std::vector<Vector3>  path_tracing_normals;

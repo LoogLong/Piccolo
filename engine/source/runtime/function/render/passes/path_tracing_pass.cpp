@@ -21,6 +21,8 @@ namespace Piccolo
         constexpr const wchar_t* kPathTracingClosestHitExport = L"PathTracingClosestHit";
         constexpr const wchar_t* kPathTracingHitGroupExport   = L"PathTracingHitGroup";
 
+        constexpr uint32_t kPathTracingMaterialTextureCount = 1024u;
+
         bool matrixEquals(const Matrix4x4& lhs, const Matrix4x4& rhs)
         {
             return std::memcmp(lhs.m_mat, rhs.m_mat, sizeof(lhs.m_mat)) == 0;
@@ -85,6 +87,8 @@ namespace Piccolo
 
         destroyTopLevelAS();
         destroyAccumulationImage();
+        destroySkinnedVertexFallbackBuffer();
+        flushPendingDestroys();
 
         if (m_frame_data_buffer != nullptr)
         {
@@ -187,6 +191,8 @@ namespace Piccolo
             logDispatchFailureOnce("path tracing is not supported on the active backend");
             return false;
         }
+
+        flushPendingDestroys();
 
         auto render_scene = m_render_resource_impl->getCurrentRenderScene();
         if (render_scene == nullptr)
@@ -340,7 +346,7 @@ namespace Piccolo
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
-        bindings[0].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+        bindings[0].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[1].binding         = 1;
         bindings[1].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -529,6 +535,47 @@ namespace Piccolo
         return m_frame_data_buffer != nullptr && m_frame_data_memory != nullptr;
     }
 
+    void PathTracingPass::destroySkinnedVertexFallbackBuffer()
+    {
+        if (m_rhi == nullptr)
+        {
+            m_skinned_vertex_fallback_buffer = nullptr;
+            m_skinned_vertex_fallback_memory = nullptr;
+            return;
+        }
+        if (m_skinned_vertex_fallback_buffer != nullptr)
+        {
+            m_rhi->destroyBuffer(m_skinned_vertex_fallback_buffer);
+            m_skinned_vertex_fallback_buffer = nullptr;
+        }
+        if (m_skinned_vertex_fallback_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_skinned_vertex_fallback_memory);
+            m_skinned_vertex_fallback_memory = nullptr;
+        }
+    }
+
+    bool PathTracingPass::ensureSkinnedVertexFallbackBuffer()
+    {
+        if (m_rhi == nullptr)
+        {
+            return false;
+        }
+        if (m_skinned_vertex_fallback_buffer != nullptr && m_skinned_vertex_fallback_memory != nullptr)
+        {
+            return true;
+        }
+
+        destroySkinnedVertexFallbackBuffer();
+        static constexpr size_t k_fallback_skinned_vertex_buffer_size = 16;
+        m_rhi->createBuffer(k_fallback_skinned_vertex_buffer_size,
+                            RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                            m_skinned_vertex_fallback_buffer,
+                            m_skinned_vertex_fallback_memory);
+        return m_skinned_vertex_fallback_buffer != nullptr && m_skinned_vertex_fallback_memory != nullptr;
+    }
+
     bool PathTracingPass::ensureAccumulationImage()
     {
         if (m_rhi == nullptr)
@@ -686,35 +733,62 @@ namespace Piccolo
             m_irradiance_texture_view = m_render_resource_impl->m_global_render_resource._ibl_resource._irradiance_texture_image_view;
             m_specular_texture_view   = m_render_resource_impl->m_global_render_resource._ibl_resource._specular_texture_image_view;
             m_linear_sampler          = m_render_resource_impl->m_global_render_resource._ibl_resource._irradiance_texture_sampler;
+        }
 
-            const auto& texture_views = m_render_resource_impl->getPathTracingMaterialTextureViews();
-            m_texture_array_views.clear();
-            m_texture_array_views.reserve(texture_views.size() * 4);
+        if (!m_static_descriptors_written)
+        {
+            const RHIDescriptorImageInfo fallback_info {
+                nullptr, m_specular_texture_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            m_texture_array_views.assign(kPathTracingMaterialTextureCount, fallback_info);
+
             const auto fallback_texture_view = [&](RHIImageView* view) {
                 return view != nullptr ? view : m_specular_texture_view;
             };
-            for (const auto& tv : texture_views)
+            const auto& material_records = m_render_resource_impl->getPathTracingMaterialTextureViews();
+            for (uint32_t material_index = 0; material_index < material_records.size(); ++material_index)
             {
-                m_texture_array_views.push_back(
-                    {nullptr, fallback_texture_view(tv.base_color_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                m_texture_array_views.push_back({nullptr,
-                                                 fallback_texture_view(tv.metallic_roughness_image_view),
-                                                 RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                m_texture_array_views.push_back(
-                    {nullptr, fallback_texture_view(tv.normal_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-                m_texture_array_views.push_back(
-                    {nullptr, fallback_texture_view(tv.emissive_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-            }
-            if (m_texture_array_views.empty())
-            {
-                m_texture_array_views.push_back(
-                    {nullptr, m_specular_texture_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+                const RenderPBRMaterialGPUResource* material = material_records[material_index].material;
+                if (material == nullptr)
+                {
+                    continue;
+                }
+
+                const uint32_t texture_base = material_index * 4u;
+                if (texture_base + 3u >= kPathTracingMaterialTextureCount)
+                {
+                    break;
+                }
+
+                m_texture_array_views[texture_base + 0] = {
+                    nullptr, fallback_texture_view(material->base_color_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                m_texture_array_views[texture_base + 1] = {
+                    nullptr,
+                    fallback_texture_view(material->metallic_roughness_image_view),
+                    RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                m_texture_array_views[texture_base + 2] = {
+                    nullptr, fallback_texture_view(material->normal_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                m_texture_array_views[texture_base + 3] = {
+                    nullptr, fallback_texture_view(material->emissive_image_view), RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             }
         }
 
-        if (m_specular_texture_view == nullptr || m_linear_sampler == nullptr)
+        if (m_specular_texture_view == nullptr || m_linear_sampler == nullptr || m_irradiance_texture_view == nullptr)
         {
             return false;
+        }
+        if (m_accumulation_image_view != nullptr && m_accumulation_prev_image_view == nullptr)
+        {
+            return false;
+        }
+
+        RHIBuffer* skinned_vertex_buffer = m_render_resource_impl->getSkinnedVertexBuffer();
+        if (skinned_vertex_buffer == nullptr)
+        {
+            if (!ensureSkinnedVertexFallbackBuffer())
+            {
+                return false;
+            }
+            skinned_vertex_buffer = m_skinned_vertex_fallback_buffer;
         }
 
         RHIDescriptorImageInfo scene_output_info {};
@@ -760,7 +834,7 @@ namespace Piccolo
         instance_buffer_info.range  = RHI_WHOLE_SIZE;
 
         RHIDescriptorBufferInfo skinned_vertex_buffer_info {};
-        skinned_vertex_buffer_info.buffer = m_render_resource_impl->getSkinnedVertexBuffer();
+        skinned_vertex_buffer_info.buffer = skinned_vertex_buffer;
         skinned_vertex_buffer_info.offset = 0;
         skinned_vertex_buffer_info.range  = RHI_WHOLE_SIZE;
 
@@ -861,7 +935,7 @@ namespace Piccolo
         writes[11].dstSet          = m_descriptor_set;
         writes[11].dstBinding      = 11;
         writes[11].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[11].descriptorCount = static_cast<uint32_t>(m_texture_array_views.size());
+        writes[11].descriptorCount = kPathTracingMaterialTextureCount;
         writes[11].pImageInfo      = m_texture_array_views.data();
 
         writes[12].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -987,6 +1061,10 @@ namespace Piccolo
             {
                 continue;
             }
+            if (!mesh->path_tracing_index_blas_input_ready)
+            {
+                continue;
+            }
 
             // Per-instance BLAS: create with allow_update on first frame, update in-place thereafter
             auto& pt_resources = mesh->path_tracing_skinned_resources[inst_id];
@@ -1045,6 +1123,10 @@ namespace Piccolo
         // Full rebuild only when static data changed (new meshes, first frame).
         // Otherwise only instance+geometry buffers are updated (transforms + skinned vertex_offset).
         const bool static_data_changed = scene.isPathTracingTLASDirty();
+        if (static_data_changed)
+        {
+            invalidateStaticDescriptors();
+        }
         if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances,
                                                                     static_data_changed))
         {
@@ -1114,13 +1196,37 @@ namespace Piccolo
         return true;
     }
 
+    void PathTracingPass::invalidateStaticDescriptors()
+    {
+        m_static_descriptors_written = false;
+        m_texture_array_views.clear();
+        m_specular_texture_view   = nullptr;
+        m_irradiance_texture_view = nullptr;
+        m_linear_sampler          = nullptr;
+    }
+
+    void PathTracingPass::flushPendingDestroys()
+    {
+        if (m_rhi == nullptr)
+        {
+            m_pending_destroy_acceleration_structures.clear();
+            return;
+        }
+
+        for (RHIAccelerationStructure* acceleration_structure : m_pending_destroy_acceleration_structures)
+        {
+            m_rhi->destroyAccelerationStructure(acceleration_structure);
+        }
+        m_pending_destroy_acceleration_structures.clear();
+    }
+
     void PathTracingPass::destroyTopLevelAS()
     {
-        if (m_rhi != nullptr && m_top_level_as != nullptr)
+        if (m_top_level_as != nullptr)
         {
-            m_rhi->destroyAccelerationStructure(m_top_level_as);
+            m_pending_destroy_acceleration_structures.push_back(m_top_level_as);
         }
-        m_top_level_as = nullptr;
+        m_top_level_as        = nullptr;
         m_tlas_instance_count = 0;
     }
 
