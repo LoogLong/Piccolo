@@ -368,7 +368,7 @@ bool createCpuDescriptorHeap(ID3D12Device* device,
                                 descriptor_next);
 }
 
-void logD3D12InfoQueueMessages(ID3D12Device* device, const char* context, UINT64 max_messages = 16)
+void logD3D12InfoQueueMessages(ID3D12Device* device, const char* context, UINT64 max_messages)
 {
     if (device == nullptr)
     {
@@ -3013,13 +3013,6 @@ DXGI_FORMAT indexFormat(RHIIndexType index_type)
 }
 
 #if PICCOLO_D3D12_HAS_DXR
-// Default DXIL export names matching the path tracing HLSL library entry points. Only used as a
-// fallback when the caller does not provide explicit export names in the create info.
-constexpr const wchar_t* kDefaultRayGenExport     = L"PathTracingRayGen";
-constexpr const wchar_t* kDefaultMissExport       = L"PathTracingMiss";
-constexpr const wchar_t* kDefaultClosestHitExport = L"PathTracingClosestHit";
-constexpr const wchar_t* kDefaultHitGroupExport   = L"PathTracingHitGroup";
-
 const wchar_t* rayTracingExportOrDefault(const wchar_t* export_name, const wchar_t* default_export)
 {
     return export_name != nullptr ? export_name : default_export;

@@ -97,7 +97,7 @@ bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDe
     acceleration_structure_impl->type = build_desc->type;
     acceleration_structure_impl->allow_update = build_desc->allow_update;
     acceleration_structure_impl->result_size = prebuild_info.ResultDataMaxSizeInBytes;
-    const uint64_t scratch_size = std::max(prebuild_info.ScratchDataSizeInBytes,
+    const uint64_t scratch_size = (std::max)(prebuild_info.ScratchDataSizeInBytes,
                                            prebuild_info.UpdateScratchDataSizeInBytes);
     acceleration_structure_impl->scratch_size        = scratch_size;
     acceleration_structure_impl->update_scratch_size = prebuild_info.UpdateScratchDataSizeInBytes;

@@ -135,6 +135,7 @@ void ensureImageSubresourceStates(D3D12RHIImage& image);
 bool transitionImageSubresource(ID3D12GraphicsCommandList* command_list, D3D12RHIImage& image, uint32_t subresource, D3D12_RESOURCE_STATES target_state);
 uint32_t normalizedSubresourceCount(uint32_t total_count, uint32_t base_index, uint32_t requested_count);
 uint32_t transitionImageSubresourceRange(ID3D12GraphicsCommandList* command_list, D3D12RHIImage& image, uint32_t base_mip_level, uint32_t level_count, uint32_t base_array_layer, uint32_t layer_count, D3D12_RESOURCE_STATES target_state);
+uint32_t transitionImageSubresourceRange(ID3D12GraphicsCommandList* command_list, D3D12RHIImage& image, const RHIImageSubresourceRange& range, D3D12_RESOURCE_STATES target_state);
 bool imageSubresourceRangeInState(D3D12RHIImage& image, const RHIImageSubresourceRange& range, D3D12_RESOURCE_STATES state);
 bool isValidAttachmentIndex(uint32_t attachment_index);
 D3D12_RESOURCE_STATES shaderReadableAttachmentState();
@@ -169,6 +170,13 @@ UINT sampleCount(RHISampleCountFlagBits sample_count);
 const char* semanticNameForLocation(uint32_t location);
 UINT semanticIndexForLocation(uint32_t location);
 DXGI_FORMAT indexFormat(RHIIndexType index_type);
+#if PICCOLO_D3D12_HAS_DXR
+constexpr const wchar_t* kDefaultRayGenExport     = L"PathTracingRayGen";
+constexpr const wchar_t* kDefaultMissExport       = L"PathTracingMiss";
+constexpr const wchar_t* kDefaultClosestHitExport = L"PathTracingClosestHit";
+constexpr const wchar_t* kDefaultHitGroupExport   = L"PathTracingHitGroup";
+#endif
+
 const wchar_t* rayTracingExportOrDefault(const wchar_t* export_name, const wchar_t* default_export);
 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS rayTracingBuildFlags(const RHIAccelerationStructureBuildDesc& build_desc);
 bool fillRayTracingBuildInputs(const RHIAccelerationStructureBuildDesc& build_desc, std::vector<D3D12_RAYTRACING_GEOMETRY_DESC>& geometries, D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS& inputs);

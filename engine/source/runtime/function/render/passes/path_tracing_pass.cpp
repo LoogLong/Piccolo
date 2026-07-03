@@ -37,6 +37,34 @@ namespace Piccolo
         teardown();
     }
 
+    void PathTracingPass::logInitializeSkipOnce(const char* reason)
+    {
+        if (m_initialize_skip_logged)
+        {
+            return;
+        }
+
+        const bool rt_supported     = m_rhi != nullptr && m_rhi->supportsRayTracing();
+        const bool bytecode_available = m_rhi != nullptr && pathTracingBytecodeAvailable(*m_rhi);
+        LOG_INFO("Path tracing pass skipped during initialize: {} (ray_tracing_supported={}, "
+                 "path_tracing_shader_bytecode={})",
+                 reason,
+                 rt_supported,
+                 bytecode_available);
+        m_initialize_skip_logged = true;
+    }
+
+    void PathTracingPass::logDispatchFailureOnce(const char* reason)
+    {
+        if (m_dispatch_failure_logged)
+        {
+            return;
+        }
+
+        LOG_WARN("Path tracing dispatch failed: {}", reason);
+        m_dispatch_failure_logged = true;
+    }
+
     void PathTracingPass::teardown()
     {
         if (m_rhi == nullptr)
@@ -89,8 +117,21 @@ namespace Piccolo
         }
 
         m_render_resource_impl = std::static_pointer_cast<RenderResource>(m_render_resource);
-        if (m_rhi == nullptr || !supportsPathTracing(*m_rhi))
+        if (m_rhi == nullptr)
         {
+            logInitializeSkipOnce("RHI is null");
+            return;
+        }
+        if (!supportsPathTracing(*m_rhi))
+        {
+            if (!m_rhi->supportsRayTracing())
+            {
+                logInitializeSkipOnce("ray tracing is not supported by the active backend");
+            }
+            else
+            {
+                logInitializeSkipOnce("path tracing shader bytecode is unavailable");
+            }
             return;
         }
 
@@ -101,13 +142,16 @@ namespace Piccolo
             setupDescriptorSet();
             if (!ensureFrameDataBuffer())
             {
+                logInitializeSkipOnce("failed to create path tracing frame data buffer");
                 return;
             }
             if (!setupRayTracingPipeline() || !setupShaderBindingTable())
             {
+                logInitializeSkipOnce("failed to create ray tracing pipeline or shader binding table");
                 return;
             }
             updateDescriptorSet();
+            LOG_INFO("Path tracing pass initialized successfully");
         }
         catch (const std::exception& e)
         {
@@ -123,18 +167,31 @@ namespace Piccolo
 
     bool PathTracingPass::dispatch()
     {
-        if (m_rhi == nullptr ||
-            m_render_resource_impl == nullptr ||
-            m_scene_output_image == nullptr ||
-            m_scene_output_image_view == nullptr ||
-            !supportsPathTracing(*m_rhi))
+        if (m_rhi == nullptr)
         {
+            logDispatchFailureOnce("RHI is null");
+            return false;
+        }
+        if (m_render_resource_impl == nullptr)
+        {
+            logDispatchFailureOnce("render resource is null");
+            return false;
+        }
+        if (m_scene_output_image == nullptr || m_scene_output_image_view == nullptr)
+        {
+            logDispatchFailureOnce("scene output image is not ready");
+            return false;
+        }
+        if (!supportsPathTracing(*m_rhi))
+        {
+            logDispatchFailureOnce("path tracing is not supported on the active backend");
             return false;
         }
 
         auto render_scene = m_render_resource_impl->getCurrentRenderScene();
         if (render_scene == nullptr)
         {
+            logDispatchFailureOnce("render scene is null");
             return false;
         }
 
@@ -152,25 +209,30 @@ namespace Piccolo
         }
         if (!ensureFrameDataBuffer() || !ensureAccumulationImage())
         {
+            logDispatchFailureOnce("failed to ensure frame data or accumulation image");
             return false;
         }
         if (!setupRayTracingPipeline() || !setupShaderBindingTable())
         {
+            logDispatchFailureOnce("failed to ensure ray tracing pipeline or shader binding table");
             return false;
         }
         if (!buildTopLevelAS(*render_scene) || m_top_level_as == nullptr || m_tlas_instance_count == 0)
         {
+            logDispatchFailureOnce("top-level acceleration structure is empty or failed to build");
             resetAccumulation();
             return false;
         }
         if (!updateFrameData(m_tlas_instance_count) || !updateDescriptorSet())
         {
+            logDispatchFailureOnce("failed to update path tracing frame data or descriptors");
             return false;
         }
 
         RHICommandBuffer* command_buffer = m_rhi->getCurrentCommandBuffer();
         if (command_buffer == nullptr)
         {
+            logDispatchFailureOnce("command buffer is null");
             return false;
         }
 

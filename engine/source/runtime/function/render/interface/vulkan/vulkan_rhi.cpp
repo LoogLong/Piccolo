@@ -1876,7 +1876,7 @@ namespace Piccolo
             totalAttachmentRefenrence += rhi_desc.colorAttachmentCount; // pColorAttachments
             if (rhi_desc.pDepthStencilAttachment != nullptr)
             {
-                totalAttachmentRefenrence += rhi_desc.colorAttachmentCount; // pDepthStencilAttachment
+                totalAttachmentRefenrence += 1;
             }
             if (rhi_desc.pResolveAttachments != nullptr)
             {
@@ -1940,16 +1940,13 @@ namespace Piccolo
             if (rhi_desc.pDepthStencilAttachment != nullptr)
             {
                 vk_desc.pDepthStencilAttachment = &vk_attachment_reference[currentAttachmentRefence];
-                for (int i = 0; i < (rhi_desc).colorAttachmentCount; ++i)
-                {
-                    const auto& rhi_attachment_refence_depth = (rhi_desc).pDepthStencilAttachment[i];
-                    auto& vk_attachment_refence_depth = vk_attachment_reference[currentAttachmentRefence];
+                const auto& rhi_attachment_refence_depth = *(rhi_desc).pDepthStencilAttachment;
+                auto& vk_attachment_refence_depth = vk_attachment_reference[currentAttachmentRefence];
 
-                    vk_attachment_refence_depth.attachment = rhi_attachment_refence_depth.attachment;
-                    vk_attachment_refence_depth.layout = (VkImageLayout)(rhi_attachment_refence_depth.layout);
+                vk_attachment_refence_depth.attachment = rhi_attachment_refence_depth.attachment;
+                vk_attachment_refence_depth.layout = (VkImageLayout)(rhi_attachment_refence_depth.layout);
 
-                    currentAttachmentRefence += 1;
-                };
+                currentAttachmentRefence += 1;
             };
         };
         if (currentAttachmentRefence != totalAttachmentRefenrence)

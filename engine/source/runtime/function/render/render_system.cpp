@@ -177,6 +177,30 @@ namespace Piccolo
         m_render_pipeline->m_rhi = m_rhi;
         m_render_pipeline->initialize(pipeline_init_info);
 
+        LOG_INFO("Render system startup: binary_root='{}', ini_RenderBackend='{}', configured_backend={}, "
+                 "active_backend={}, ini_RenderSceneMode='{}', allow_backend_fallback={}, "
+                 "ray_tracing_supported={}, path_tracing_shader_bytecode={}, path_tracing_ready={}, "
+                 "requested_scene_mode={}, effective_scene_mode={}",
+                 config_manager->getRootFolder().generic_string(),
+                 config_manager->getRenderBackend(),
+                 renderBackendToString(configured_backend),
+                 renderBackendToString(m_rhi->getBackendType()),
+                 config_manager->getRenderSceneMode(),
+                 config_manager->getRenderBackendAllowFallback(),
+                 m_rhi->supportsRayTracing(),
+                 pathTracingBytecodeAvailable(*m_rhi),
+                 supportsPathTracing(*m_rhi),
+                 m_render_pipeline->getRequestedSceneRenderMode() == RenderSceneRenderMode::PathTracing ? "PathTracing"
+                                                                                                        : "Raster",
+                 m_render_pipeline->getEffectiveSceneRenderMode() == RenderSceneRenderMode::PathTracing ? "PathTracing"
+                                                                                                        : "Raster");
+#if PICCOLO_ENABLE_D3D12_BACKEND && defined(_WIN32)
+        if (m_rhi->getBackendType() == RHIBackendType::D3D12)
+        {
+            LOG_INFO("D3D12 shader bytecode available: {}", d3d12ShaderBytecodeAvailable());
+        }
+#endif
+
         // descriptor set layout in main camera pass will be used when uploading resource
         std::static_pointer_cast<RenderResource>(m_render_resource)->m_mesh_descriptor_set_layout =
             &static_cast<RenderPass*>(m_render_pipeline->m_main_camera_pass.get())

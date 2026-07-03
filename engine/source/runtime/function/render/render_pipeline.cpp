@@ -1,5 +1,6 @@
 #include "runtime/function/render/render_pipeline.h"
 #include "runtime/function/render/render_shader_bytecode.h"
+#include "runtime/function/render/render_backend.h"
 #include "runtime/function/render/passes/color_grading_pass.h"
 #include "runtime/function/render/passes/combine_ui_pass.h"
 #include "runtime/function/render/passes/directional_light_pass.h"
@@ -33,6 +34,31 @@ namespace Piccolo
                 LOG_WARN("Unknown RenderSceneMode '{}'; falling back to Raster", mode);
             }
             return RenderSceneRenderMode::Raster;
+        }
+
+        const char* renderSceneModeToString(RenderSceneRenderMode mode)
+        {
+            switch (mode)
+            {
+                case RenderSceneRenderMode::PathTracing:
+                    return "PathTracing";
+                case RenderSceneRenderMode::Raster:
+                default:
+                    return "Raster";
+            }
+        }
+
+        void logSceneRenderModeState(RHI& rhi, RenderPipeline& pipeline, const char* context)
+        {
+            LOG_INFO("{}: requested_scene_mode={}, effective_scene_mode={}, ray_tracing_supported={}, "
+                     "path_tracing_shader_bytecode={}, path_tracing_ready={}, runtime_fallback={}",
+                     context,
+                     renderSceneModeToString(pipeline.getRequestedSceneRenderMode()),
+                     renderSceneModeToString(pipeline.getEffectiveSceneRenderMode()),
+                     rhi.supportsRayTracing(),
+                     pathTracingBytecodeAvailable(rhi),
+                     supportsPathTracing(rhi),
+                     pipeline.hasPathTracingRuntimeFallback());
         }
     } // namespace
 
@@ -148,6 +174,24 @@ namespace Piccolo
             _main_camera_pass->getFramebufferImageViews()[_main_camera_pass_post_process_buffer_odd];
         m_fxaa_pass->initialize(&fxaa_init_info);
 
+        if (m_rhi)
+        {
+            updateSceneRenderMode(*m_rhi);
+            logSceneRenderModeState(*m_rhi, *this, "Render pipeline initialized");
+        }
+    }
+
+    void RenderPipeline::logRasterPathOnce(const char* pipeline_name)
+    {
+        if (m_raster_path_logged)
+        {
+            return;
+        }
+
+        LOG_INFO("Raster rendering active: pipeline={}, effective_scene_mode={}, path_tracing_in_use=false",
+                 pipeline_name,
+                 renderSceneModeToString(m_effective_scene_render_mode));
+        m_raster_path_logged = true;
     }
 
     void RenderPipeline::forwardRender(std::shared_ptr<RHI> rhi, std::shared_ptr<RenderResourceBase> render_resource)
@@ -156,6 +200,7 @@ namespace Piccolo
         RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
 
         render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
+        logRasterPathOnce("Forward");
 
         render_rhi->waitForFences();
 
@@ -216,6 +261,7 @@ namespace Piccolo
         RenderResource* render_resource_impl = static_cast<RenderResource*>(render_resource.get());
 
         render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
+        logRasterPathOnce("Deferred");
 
         render_rhi->waitForFences();
 
@@ -370,28 +416,58 @@ namespace Piccolo
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
         static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
+
+        if (!m_path_tracing_frame_logged)
+        {
+            LOG_INFO("Path tracing rendering active: path_tracing_in_use=true, backend={}, effective_scene_mode={}",
+                     renderBackendToString(render_rhi->getBackendType()),
+                     renderSceneModeToString(m_effective_scene_render_mode));
+            m_path_tracing_frame_logged = true;
+            m_raster_path_logged        = false;
+        }
         return true;
     }
 
     void RenderPipeline::updateSceneRenderMode(RHI& rhi)
     {
+        const RenderSceneRenderMode previous_effective_mode = m_effective_scene_render_mode;
+
         if (m_requested_scene_render_mode != RenderSceneRenderMode::PathTracing)
         {
             m_effective_scene_render_mode     = RenderSceneRenderMode::Raster;
             m_path_tracing_runtime_fallback   = false;
             m_path_tracing_dispatch_fail_logged = false;
+            if (previous_effective_mode != m_effective_scene_render_mode)
+            {
+                LOG_INFO("Scene render mode resolved: requested={}, effective={}, path_tracing_in_use=false",
+                         renderSceneModeToString(m_requested_scene_render_mode),
+                         renderSceneModeToString(m_effective_scene_render_mode));
+            }
             return;
         }
 
         if (m_path_tracing_runtime_fallback)
         {
             m_effective_scene_render_mode = RenderSceneRenderMode::Raster;
+            if (previous_effective_mode != m_effective_scene_render_mode)
+            {
+                LOG_WARN("Scene render mode resolved: requested={}, effective={}, path_tracing_in_use=false "
+                         "(runtime fallback after path tracing dispatch failure)",
+                         renderSceneModeToString(m_requested_scene_render_mode),
+                         renderSceneModeToString(m_effective_scene_render_mode));
+            }
             return;
         }
 
         if (supportsPathTracing(rhi))
         {
             m_effective_scene_render_mode = RenderSceneRenderMode::PathTracing;
+            if (previous_effective_mode != m_effective_scene_render_mode)
+            {
+                LOG_INFO("Scene render mode resolved: requested={}, effective={}, path_tracing_in_use=true",
+                         renderSceneModeToString(m_requested_scene_render_mode),
+                         renderSceneModeToString(m_effective_scene_render_mode));
+            }
             return;
         }
 
@@ -413,5 +489,11 @@ namespace Piccolo
         }
 
         m_effective_scene_render_mode = RenderSceneRenderMode::Raster;
+        if (previous_effective_mode != m_effective_scene_render_mode)
+        {
+            LOG_INFO("Scene render mode resolved: requested={}, effective={}, path_tracing_in_use=false",
+                     renderSceneModeToString(m_requested_scene_render_mode),
+                     renderSceneModeToString(m_effective_scene_render_mode));
+        }
     }
 } // namespace Piccolo

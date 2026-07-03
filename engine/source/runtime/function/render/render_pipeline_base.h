@@ -49,6 +49,7 @@ namespace Piccolo
         {
             return m_effective_scene_render_mode == RenderSceneRenderMode::PathTracing;
         }
+        bool hasPathTracingRuntimeFallback() const { return m_path_tracing_runtime_fallback; }
 
     protected:
         std::shared_ptr<RHI> m_rhi;

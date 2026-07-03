@@ -60,6 +60,8 @@ namespace Piccolo
         void destroyTopLevelAS();
         void destroyAccumulationImage();
         void teardown();
+        void logInitializeSkipOnce(const char* reason);
+        void logDispatchFailureOnce(const char* reason);
 
         void transitionImage(RHIImage*              image,
                              RHIImageLayout        old_layout,
@@ -103,6 +105,8 @@ namespace Piccolo
         Vector3   m_last_camera_position {Vector3::ZERO};
         bool      m_has_last_camera_state {false};
         bool      m_static_descriptors_written {false};
+        bool      m_initialize_skip_logged {false};
+        bool      m_dispatch_failure_logged {false};
 
         RHIImageView* m_irradiance_texture_view {nullptr};
         RHIImageView* m_specular_texture_view {nullptr};
