@@ -2119,6 +2119,43 @@ namespace Piccolo
         setupParticlePass();
     }
 
+    void MainCameraPass::teardown()
+    {
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        for (size_t i = 0; i < m_framebuffer.attachments.size(); i++)
+        {
+            m_rhi->destroyImage(m_framebuffer.attachments[i].image);
+            m_rhi->destroyImageView(m_framebuffer.attachments[i].view);
+            m_rhi->freeMemory(m_framebuffer.attachments[i].mem);
+        }
+        m_framebuffer.attachments.clear();
+
+        for (auto& framebuffer : m_swapchain_framebuffers)
+        {
+            m_rhi->destroyFramebuffer(framebuffer);
+            framebuffer = nullptr;
+        }
+        m_swapchain_framebuffers.clear();
+
+        for (auto& framebuffer : m_path_tracing_composite_swapchain_framebuffers)
+        {
+            m_rhi->destroyFramebuffer(framebuffer);
+            framebuffer = nullptr;
+        }
+        m_path_tracing_composite_swapchain_framebuffers.clear();
+
+        m_rhi->destroyRenderPass(m_path_tracing_composite_render_pass);
+        m_path_tracing_composite_render_pass = nullptr;
+
+        m_particle_pass.reset();
+
+        teardownCommonResources(true);
+    }
+
     void MainCameraPass::draw(ColorGradingPass& color_grading_pass,
                               FXAAPass&         fxaa_pass,
                               ToneMappingPass&  tone_mapping_pass,

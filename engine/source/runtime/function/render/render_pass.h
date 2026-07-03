@@ -94,7 +94,12 @@ namespace Piccolo
         virtual std::vector<RHIImageView*>           getFramebufferImageViews() const;
         virtual std::vector<RHIDescriptorSetLayout*> getDescriptorSetLayouts() const;
 
+        void teardown() override;
+
         static VisiableNodes m_visiable_nodes;
+
+    protected:
+        void teardownCommonResources(bool destroy_render_pass);
 
     private:
     };

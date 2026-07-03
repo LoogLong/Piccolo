@@ -7,6 +7,8 @@ namespace Piccolo
     class RenderPipeline : public RenderPipelineBase
     {
     public:
+        void clear() override;
+
         virtual void initialize(RenderPipelineInitInfo init_info) override final;
 
         virtual void forwardRender(std::shared_ptr<RHI>                rhi,

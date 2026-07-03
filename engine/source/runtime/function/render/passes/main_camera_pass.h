@@ -96,6 +96,8 @@ namespace Piccolo
 
         void updateAfterFramebufferRecreate();
 
+        void teardown() override;
+
         RHICommandBuffer* getRenderCommandBuffer();
 
         void setParticlePass(std::shared_ptr<ParticlePass> pass);

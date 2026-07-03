@@ -168,6 +168,10 @@ namespace Piccolo
         void destroyDefaultSampler(RHIDefaultSamplerType type) override;
         void destroyMipmappedSampler() override;
         void destroyShaderModule(RHIShader* shader) override;
+        void destroyPipeline(RHIPipeline*& pipeline) override;
+        void destroyPipelineLayout(RHIPipelineLayout*& pipeline_layout) override;
+        void destroyRenderPass(RHIRenderPass*& render_pass) override;
+        void destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_set_layout) override;
         void destroySemaphore(RHISemaphore* semaphore) override;
         void destroySampler(RHISampler* sampler) override;
         void destroyInstance(RHIInstance* instance) override;

@@ -130,50 +130,7 @@ namespace Piccolo
             }
             m_pbr_materials.clear();
 
-            IBLResource& ibl = m_global_render_resource._ibl_resource;
-            if (ibl._brdfLUT_texture_sampler != nullptr)
-            {
-                rhi->destroySampler(ibl._brdfLUT_texture_sampler);
-                ibl._brdfLUT_texture_sampler = nullptr;
-            }
-            if (ibl._irradiance_texture_sampler != nullptr)
-            {
-                rhi->destroySampler(ibl._irradiance_texture_sampler);
-                ibl._irradiance_texture_sampler = nullptr;
-            }
-            if (ibl._specular_texture_sampler != nullptr)
-            {
-                rhi->destroySampler(ibl._specular_texture_sampler);
-                ibl._specular_texture_sampler = nullptr;
-            }
-            release_vma_image(ibl._brdfLUT_texture_image, ibl._brdfLUT_texture_image_view, ibl._brdfLUT_texture_image_allocation);
-            release_vma_image(ibl._irradiance_texture_image,
-                              ibl._irradiance_texture_image_view,
-                              ibl._irradiance_texture_image_allocation);
-            release_vma_image(ibl._specular_texture_image,
-                              ibl._specular_texture_image_view,
-                              ibl._specular_texture_image_allocation);
-
-            ColorGradingResource& color_grading = m_global_render_resource._color_grading_resource;
-            release_vma_image(color_grading._color_grading_LUT_texture_image,
-                              color_grading._color_grading_LUT_texture_image_view,
-                              color_grading._color_grading_LUT_texture_image_allocation);
-
-            StorageBuffer& storage = m_global_render_resource._storage_buffer;
-            if (storage._global_upload_ringbuffer_memory != nullptr)
-            {
-                rhi->unmapMemory(storage._global_upload_ringbuffer_memory);
-                storage._global_upload_ringbuffer_memory_pointer = nullptr;
-            }
-            if (storage._axis_inefficient_storage_buffer_memory != nullptr)
-            {
-                rhi->unmapMemory(storage._axis_inefficient_storage_buffer_memory);
-                storage._axis_inefficient_storage_buffer_memory_pointer = nullptr;
-            }
-            release_legacy_buffer(storage._global_upload_ringbuffer, storage._global_upload_ringbuffer_memory);
-            release_legacy_buffer(storage._global_null_descriptor_storage_buffer,
-                                  storage._global_null_descriptor_storage_buffer_memory);
-            release_legacy_buffer(storage._axis_inefficient_storage_buffer, storage._axis_inefficient_storage_buffer_memory);
+            releaseGlobalGPUResources(rhi);
         }
 
         // Release path tracing scene buffers (legacy VkDeviceMemory, not VMA).
@@ -217,11 +174,85 @@ namespace Piccolo
         m_path_tracing_material_texture_views.clear();
     }
 
+    void RenderResource::releaseGlobalGPUResources(RHI* rhi)
+    {
+        if (rhi == nullptr)
+        {
+            return;
+        }
+
+        auto release_legacy_buffer = [rhi](RHIBuffer*& buffer, RHIDeviceMemory*& memory) {
+            if (buffer != nullptr)
+            {
+                rhi->destroyBuffer(buffer);
+                buffer = nullptr;
+            }
+            if (memory != nullptr)
+            {
+                rhi->freeMemory(memory);
+                memory = nullptr;
+            }
+        };
+
+        auto release_vma_image = [rhi](RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation) {
+            rhi->destroyImageWithAllocation(image, image_view, allocation);
+        };
+
+        IBLResource& ibl = m_global_render_resource._ibl_resource;
+        if (ibl._brdfLUT_texture_sampler != nullptr)
+        {
+            rhi->destroySampler(ibl._brdfLUT_texture_sampler);
+            ibl._brdfLUT_texture_sampler = nullptr;
+        }
+        if (ibl._irradiance_texture_sampler != nullptr)
+        {
+            rhi->destroySampler(ibl._irradiance_texture_sampler);
+            ibl._irradiance_texture_sampler = nullptr;
+        }
+        if (ibl._specular_texture_sampler != nullptr)
+        {
+            rhi->destroySampler(ibl._specular_texture_sampler);
+            ibl._specular_texture_sampler = nullptr;
+        }
+        release_vma_image(ibl._brdfLUT_texture_image, ibl._brdfLUT_texture_image_view, ibl._brdfLUT_texture_image_allocation);
+        release_vma_image(ibl._irradiance_texture_image,
+                          ibl._irradiance_texture_image_view,
+                          ibl._irradiance_texture_image_allocation);
+        release_vma_image(ibl._specular_texture_image,
+                          ibl._specular_texture_image_view,
+                          ibl._specular_texture_image_allocation);
+
+        ColorGradingResource& color_grading = m_global_render_resource._color_grading_resource;
+        release_vma_image(color_grading._color_grading_LUT_texture_image,
+                          color_grading._color_grading_LUT_texture_image_view,
+                          color_grading._color_grading_LUT_texture_image_allocation);
+
+        StorageBuffer& storage = m_global_render_resource._storage_buffer;
+        if (storage._global_upload_ringbuffer_memory != nullptr)
+        {
+            rhi->unmapMemory(storage._global_upload_ringbuffer_memory);
+            storage._global_upload_ringbuffer_memory_pointer = nullptr;
+        }
+        if (storage._axis_inefficient_storage_buffer_memory != nullptr)
+        {
+            rhi->unmapMemory(storage._axis_inefficient_storage_buffer_memory);
+            storage._axis_inefficient_storage_buffer_memory_pointer = nullptr;
+        }
+        release_legacy_buffer(storage._global_upload_ringbuffer, storage._global_upload_ringbuffer_memory);
+        release_legacy_buffer(storage._global_null_descriptor_storage_buffer,
+                              storage._global_null_descriptor_storage_buffer_memory);
+        release_legacy_buffer(storage._axis_inefficient_storage_buffer, storage._axis_inefficient_storage_buffer_memory);
+    }
+
     void RenderResource::uploadGlobalRenderResource(std::shared_ptr<RHI> rhi, LevelResourceDesc level_resource_desc)
     {
         if (m_gpu_resource_rhi == nullptr)
         {
             m_gpu_resource_rhi = rhi.get();
+        }
+        else if (m_global_render_resource._ibl_resource._brdfLUT_texture_image != nullptr)
+        {
+            releaseGlobalGPUResources(rhi.get());
         }
 
         // create and map global storage buffer

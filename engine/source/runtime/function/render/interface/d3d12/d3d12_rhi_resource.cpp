@@ -1970,6 +1970,26 @@ void D3D12RHI::destroyShaderModule(RHIShader* shader)
     delete shader;
     return;
 }
+void D3D12RHI::destroyPipeline(RHIPipeline*& pipeline)
+{
+    delete static_cast<D3D12RHIPipeline*>(pipeline);
+    pipeline = nullptr;
+}
+void D3D12RHI::destroyPipelineLayout(RHIPipelineLayout*& pipeline_layout)
+{
+    delete static_cast<D3D12RHIPipelineLayout*>(pipeline_layout);
+    pipeline_layout = nullptr;
+}
+void D3D12RHI::destroyRenderPass(RHIRenderPass*& render_pass)
+{
+    delete static_cast<D3D12RHIRenderPass*>(render_pass);
+    render_pass = nullptr;
+}
+void D3D12RHI::destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_set_layout)
+{
+    delete static_cast<D3D12RHIDescriptorSetLayout*>(descriptor_set_layout);
+    descriptor_set_layout = nullptr;
+}
 void D3D12RHI::destroySemaphore(RHISemaphore* semaphore)
 {
     delete static_cast<D3D12RHISemaphore*>(semaphore);

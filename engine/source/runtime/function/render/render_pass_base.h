@@ -28,6 +28,7 @@ namespace Piccolo
         virtual void preparePassData(std::shared_ptr<RenderResourceBase> render_resource);
         virtual void initializeUIRenderBackend(WindowUI* window_ui);
         virtual void shutdownUIRenderBackend();
+        virtual void teardown() {}
 
     protected:
         std::shared_ptr<RHI>                m_rhi;

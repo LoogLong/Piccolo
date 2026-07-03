@@ -291,6 +291,132 @@ namespace Piccolo
         m_rhi->queueWaitIdle(m_rhi->getGraphicsQueue());
     }
 
+    ParticlePass::~ParticlePass() {}
+
+    void ParticlePass::teardown()
+    {
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        for (ParticleEmitterBufferBatch& batch : m_emitter_buffer_batches)
+        {
+            batch.freeUpBatch(m_rhi);
+        }
+        m_emitter_buffer_batches.clear();
+
+        teardownAttachments();
+
+        m_rhi->destroyPipeline(m_kickoff_pipeline);
+        m_rhi->destroyPipeline(m_emit_pipeline);
+        m_rhi->destroyPipeline(m_simulate_pipeline);
+
+        m_rhi->destroyBuffer(m_scene_uniform_buffer);
+        m_scene_uniform_buffer = nullptr;
+        m_rhi->destroyBuffer(m_compute_uniform_buffer);
+        m_compute_uniform_buffer = nullptr;
+        m_rhi->destroyBuffer(m_particle_billboard_uniform_buffer);
+        m_particle_billboard_uniform_buffer = nullptr;
+        m_scene_uniform_buffer_mapped = nullptr;
+        m_particle_compute_buffer_mapped = nullptr;
+        m_particle_billboard_uniform_buffer_mapped = nullptr;
+
+        if (m_compute_command_buffer != nullptr)
+        {
+            m_rhi->freeCommandBuffers(m_rhi->getCommandPoor(), 1, m_compute_command_buffer);
+            m_compute_command_buffer = nullptr;
+        }
+
+        for (RHICommandBuffer*& copy_command_buffer : m_copy_command_buffers)
+        {
+            if (copy_command_buffer != nullptr)
+            {
+                m_rhi->freeCommandBuffers(m_rhi->getCommandPoor(), 1, copy_command_buffer);
+                copy_command_buffer = nullptr;
+            }
+        }
+        m_copy_command_buffers.clear();
+
+        if (m_rhi->usesDedicatedComputeSubmission())
+        {
+            for (RHICommandBuffer*& compute_command_buffer : m_compute_command_buffers)
+            {
+                if (compute_command_buffer != nullptr)
+                {
+                    m_rhi->freeCommandBuffers(m_rhi->getCommandPoor(), 1, compute_command_buffer);
+                    compute_command_buffer = nullptr;
+                }
+            }
+            m_compute_command_buffers.clear();
+
+            for (RHIFence*& compute_fence : m_compute_fences)
+            {
+                if (compute_fence != nullptr)
+                {
+                    m_rhi->destroyFence(compute_fence);
+                    compute_fence = nullptr;
+                }
+            }
+            m_compute_fences.clear();
+        }
+
+        if (m_fence != nullptr)
+        {
+            m_rhi->destroyFence(m_fence);
+            m_fence = nullptr;
+        }
+
+        teardownCommonResources(false);
+        m_render_pass = nullptr;
+    }
+
+    void ParticlePass::teardownAttachments()
+    {
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        m_rhi->destroyImageWithAllocation(m_particle_billboard_texture_image,
+                                          m_particle_billboard_texture_image_view,
+                                          m_particle_billboard_texture_allocation);
+        m_rhi->destroyImageWithAllocation(m_piccolo_logo_texture_image,
+                                          m_piccolo_logo_texture_image_view,
+                                          m_piccolo_logo_texture_allocation);
+
+        if (m_src_depth_image_view != nullptr)
+        {
+            m_rhi->destroyImageView(m_src_depth_image_view);
+            m_src_depth_image_view = nullptr;
+        }
+        if (m_src_normal_image_view != nullptr)
+        {
+            m_rhi->destroyImageView(m_src_normal_image_view);
+            m_src_normal_image_view = nullptr;
+        }
+        if (m_dst_depth_image != nullptr)
+        {
+            m_rhi->destroyImage(m_dst_depth_image);
+            m_dst_depth_image = nullptr;
+        }
+        if (m_dst_depth_image_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_dst_depth_image_memory);
+            m_dst_depth_image_memory = nullptr;
+        }
+        if (m_dst_normal_image != nullptr)
+        {
+            m_rhi->destroyImage(m_dst_normal_image);
+            m_dst_normal_image = nullptr;
+        }
+        if (m_dst_normal_image_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_dst_normal_image_memory);
+            m_dst_normal_image_memory = nullptr;
+        }
+    }
+
     void ParticlePass::updateAfterFramebufferRecreate()
     {
         m_rhi->destroyImage(m_dst_depth_image);

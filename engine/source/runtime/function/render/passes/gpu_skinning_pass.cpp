@@ -483,4 +483,37 @@ namespace Piccolo
         dispatchSkinCompute(command_buffer, skinned_meshes);
         return true;
     }
+
+    void GpuSkinningPass::teardown()
+    {
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        m_rhi->destroyPipeline(m_skin_compute_pipeline);
+        m_rhi->destroyPipelineLayout(m_skin_compute_pipeline_layout);
+        m_rhi->destroyDescriptorSetLayout(m_skin_compute_descriptor_set_layout);
+        m_skin_compute_pipeline = nullptr;
+        m_skin_compute_pipeline_layout = nullptr;
+        m_skin_compute_descriptor_set_layout = nullptr;
+        m_skin_compute_descriptor_set = nullptr;
+
+        m_rhi->destroyBuffer(m_joint_matrix_buffer);
+        m_joint_matrix_buffer = nullptr;
+        m_rhi->freeMemory(m_joint_matrix_memory);
+        m_joint_matrix_memory = nullptr;
+        m_joint_matrix_buffer_capacity = 0;
+
+        m_rhi->destroyBuffer(m_skin_constants_buffer);
+        m_skin_constants_buffer = nullptr;
+        m_rhi->freeMemory(m_skin_constants_memory);
+        m_skin_constants_memory = nullptr;
+
+        m_rhi->destroyBuffer(m_skinned_vertex_output_buffer);
+        m_skinned_vertex_output_buffer = nullptr;
+        m_rhi->freeMemory(m_skinned_vertex_output_memory);
+        m_skinned_vertex_output_memory = nullptr;
+        m_skinned_vertex_output_capacity = 0;
+    }
 } // namespace Piccolo

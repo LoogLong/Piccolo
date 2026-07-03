@@ -4166,6 +4166,63 @@ namespace Piccolo
         delete(shaderModule);
     }
 
+    void VulkanRHI::destroyPipeline(RHIPipeline*& pipeline)
+    {
+        if (pipeline != nullptr && m_device != nullptr)
+        {
+            VkPipeline vk_pipeline = static_cast<VulkanPipeline*>(pipeline)->getResource();
+            if (vk_pipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(m_device, vk_pipeline, nullptr);
+            }
+            delete pipeline;
+        }
+        pipeline = nullptr;
+    }
+
+    void VulkanRHI::destroyPipelineLayout(RHIPipelineLayout*& pipeline_layout)
+    {
+        if (pipeline_layout != nullptr && m_device != nullptr)
+        {
+            VkPipelineLayout vk_layout = static_cast<VulkanPipelineLayout*>(pipeline_layout)->getResource();
+            if (vk_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(m_device, vk_layout, nullptr);
+            }
+            delete pipeline_layout;
+        }
+        pipeline_layout = nullptr;
+    }
+
+    void VulkanRHI::destroyRenderPass(RHIRenderPass*& render_pass)
+    {
+        if (render_pass != nullptr && m_device != nullptr)
+        {
+            VkRenderPass vk_render_pass = static_cast<VulkanRenderPass*>(render_pass)->getResource();
+            if (vk_render_pass != VK_NULL_HANDLE)
+            {
+                vkDestroyRenderPass(m_device, vk_render_pass, nullptr);
+            }
+            delete render_pass;
+        }
+        render_pass = nullptr;
+    }
+
+    void VulkanRHI::destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_set_layout)
+    {
+        if (descriptor_set_layout != nullptr && m_device != nullptr)
+        {
+            VkDescriptorSetLayout vk_layout =
+                static_cast<VulkanDescriptorSetLayout*>(descriptor_set_layout)->getResource();
+            if (vk_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_device, vk_layout, nullptr);
+            }
+            delete descriptor_set_layout;
+        }
+        descriptor_set_layout = nullptr;
+    }
+
     void VulkanRHI::destroySemaphore(RHISemaphore* semaphore)
     {
         vkDestroySemaphore(m_device, ((VulkanSemaphore*)semaphore)->getResource(), nullptr);

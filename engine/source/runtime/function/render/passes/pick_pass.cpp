@@ -408,6 +408,33 @@ namespace Piccolo
         setupAttachments();
         setupFramebuffer();
     }
+
+    void PickPass::teardown()
+    {
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        if (_object_id_image_view != nullptr)
+        {
+            m_rhi->destroyImageView(_object_id_image_view);
+            _object_id_image_view = nullptr;
+        }
+        if (_object_id_image != nullptr)
+        {
+            m_rhi->destroyImage(_object_id_image);
+            _object_id_image = nullptr;
+        }
+        if (_object_id_image_memory != nullptr)
+        {
+            m_rhi->freeMemory(_object_id_image_memory);
+            _object_id_image_memory = nullptr;
+        }
+
+        RenderPass::teardown();
+    }
+
     uint32_t PickPass::pick(const Vector2& picked_uv)
     {
         uint32_t pixel_x =

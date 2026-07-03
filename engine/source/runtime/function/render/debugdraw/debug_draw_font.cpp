@@ -105,9 +105,12 @@ namespace Piccolo
     void DebugDrawFont::destroy()
     {
         std::shared_ptr<RHI> rhi = g_runtime_global_context.m_render_system->getRHI();
-        rhi->freeMemory(m_font_imageMemory);
-        rhi->destroyImageView(m_font_imageView);
-        rhi->destroyImage(m_font_image);
+        if (rhi == nullptr)
+        {
+            return;
+        }
+
+        rhi->destroyImageWithAllocation(m_font_image, m_font_imageView, m_allocation);
     }
 
     RHIImageView* DebugDrawFont::getImageView() const

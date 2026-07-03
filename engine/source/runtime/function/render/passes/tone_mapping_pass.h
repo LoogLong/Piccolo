@@ -18,6 +18,8 @@ namespace Piccolo
 
         void updateAfterFramebufferRecreate(RHIImageView* input_attachment);
 
+        void teardown() override;
+
     private:
         void setupDescriptorSetLayout();
         void setupPipelines();

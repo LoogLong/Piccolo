@@ -525,4 +525,28 @@ namespace Piccolo
                      renderSceneModeToString(m_effective_scene_render_mode));
         }
     }
+
+    void RenderPipeline::clear()
+    {
+        auto teardown_pass = [](std::shared_ptr<RenderPassBase>& pass) {
+            if (pass != nullptr)
+            {
+                pass->teardown();
+                pass.reset();
+            }
+        };
+
+        teardown_pass(m_path_tracing_pass);
+        teardown_pass(m_pick_pass);
+        teardown_pass(m_combine_ui_pass);
+        teardown_pass(m_ui_pass);
+        teardown_pass(m_fxaa_pass);
+        teardown_pass(m_color_grading_pass);
+        teardown_pass(m_tone_mapping_pass);
+        teardown_pass(m_particle_pass);
+        teardown_pass(m_main_camera_pass);
+        teardown_pass(m_directional_light_pass);
+        teardown_pass(m_point_light_shadow_pass);
+        teardown_pass(m_gpu_skinning_pass);
+    }
 } // namespace Piccolo

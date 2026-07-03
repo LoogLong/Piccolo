@@ -242,4 +242,10 @@ namespace Piccolo
 
         m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
     }
+
+    void ToneMappingPass::teardown()
+    {
+        teardownCommonResources(false);
+        m_framebuffer.render_pass = nullptr;
+    }
 } // namespace Piccolo

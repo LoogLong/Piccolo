@@ -282,6 +282,7 @@ namespace Piccolo
         RHI* m_path_tracing_rhi {nullptr};
 
         void createAndMapStorageBuffer(std::shared_ptr<RHI> rhi);
+        void releaseGlobalGPUResources(RHI* rhi);
         void createIBLSamplers(std::shared_ptr<RHI> rhi);
         void createIBLTextures(std::shared_ptr<RHI>                        rhi,
                                std::array<std::shared_ptr<TextureData>, 6> irradiance_maps,

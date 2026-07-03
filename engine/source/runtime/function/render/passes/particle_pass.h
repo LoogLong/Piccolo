@@ -52,6 +52,8 @@ namespace Piccolo
     class ParticlePass : public RenderPass
     {
     public:
+        ~ParticlePass() override;
+
         void initialize(const RenderPassInitInfo* init_info) override final;
 
         void preparePassData(std::shared_ptr<RenderResourceBase> render_resource) override final;
@@ -72,6 +74,8 @@ namespace Piccolo
 
         void updateAfterFramebufferRecreate();
 
+        void teardown() override;
+
         void setEmitterCount(int count);
 
         void createEmitter(int id, const ParticleEmitterDesc& desc);
@@ -83,6 +87,8 @@ namespace Piccolo
         void setTransformIndices(const std::vector<ParticleEmitterTransformDesc>& transform_indices);
 
     private:
+        void teardownAttachments();
+
         void updateUniformBuffer();
 
         void updateEmitterTransform();

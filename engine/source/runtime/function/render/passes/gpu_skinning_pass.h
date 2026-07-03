@@ -40,6 +40,8 @@ namespace Piccolo
         bool setup();
         bool dispatch();
 
+        void teardown() override;
+
     private:
         bool setupSkinComputePipeline();
         bool uploadJointMatrices(const std::vector<CollectedSkinnedMesh>& instances);

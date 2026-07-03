@@ -23,6 +23,8 @@ namespace Piccolo
         uint32_t pick(const Vector2& picked_uv);
         void     recreateFramebuffer();
 
+        void teardown() override;
+
         MeshInefficientPickPerframeStorageBufferObject _mesh_inefficient_pick_perframe_storage_buffer_object;
 
     private:

@@ -27,10 +27,9 @@ namespace Piccolo
         const int m_bitmap_w = m_singleCharacterWidth * m_numOfCharacterInOneLine;
         const int m_bitmap_h = m_singleCharacterHeight * ((m_numOfCharacter + m_numOfCharacterInOneLine - 1) / m_numOfCharacterInOneLine);
 
-        RHIImage*        m_font_image = nullptr;
-        RHIImageView*    m_font_imageView = nullptr;
-        RHIDeviceMemory* m_font_imageMemory = nullptr;
-        RHIAllocation*   m_allocation {nullptr};
+        RHIImage*      m_font_image = nullptr;
+        RHIImageView*  m_font_imageView = nullptr;
+        RHIAllocation* m_allocation {nullptr};
 
         void loadFont();
 

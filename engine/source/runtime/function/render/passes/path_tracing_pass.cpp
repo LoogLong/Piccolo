@@ -102,9 +102,9 @@ namespace Piccolo
         }
 
         m_descriptor_set = nullptr;
-        delete m_descriptor_set_layout;
+        m_rhi->destroyDescriptorSetLayout(m_descriptor_set_layout);
         m_descriptor_set_layout = nullptr;
-        delete m_pipeline_layout;
+        m_rhi->destroyPipelineLayout(m_pipeline_layout);
         m_pipeline_layout = nullptr;
 
         m_static_descriptors_written = false;

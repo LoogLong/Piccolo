@@ -274,4 +274,10 @@ namespace Piccolo
 
         m_rhi->popEvent(m_rhi->getCurrentCommandBuffer());
     }
+
+    void CombineUIPass::teardown()
+    {
+        teardownCommonResources(false);
+        m_framebuffer.render_pass = nullptr;
+    }
 } // namespace Piccolo

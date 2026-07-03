@@ -35,9 +35,13 @@ namespace Piccolo
 
         m_buffer_allocator->destory();
         delete m_buffer_allocator;
-        
-        //m_font->destroy();
-        delete m_font;
+
+        if (m_font != nullptr)
+        {
+            m_font->destroy();
+            delete m_font;
+            m_font = nullptr;
+        }
     }
     void DebugDrawManager::clear()
     {

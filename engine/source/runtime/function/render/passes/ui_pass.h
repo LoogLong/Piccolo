@@ -22,6 +22,8 @@ namespace Piccolo
         void shutdownUIRenderBackend() override final;
         void draw() override final;
 
+        void teardown() override;
+
     private:
         WindowUI*                           m_window_ui {nullptr};
         std::unique_ptr<ImGuiRenderBackend> m_imgui_backend;

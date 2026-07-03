@@ -210,6 +210,13 @@ namespace Piccolo
         virtual void destroyDefaultSampler(RHIDefaultSamplerType type) = 0;
         virtual void destroyMipmappedSampler() = 0;
         virtual void destroyShaderModule(RHIShader* shader) = 0;
+        virtual void destroyPipeline(RHIPipeline*& pipeline) { pipeline = nullptr; }
+        virtual void destroyPipelineLayout(RHIPipelineLayout*& pipeline_layout) { pipeline_layout = nullptr; }
+        virtual void destroyRenderPass(RHIRenderPass*& render_pass) { render_pass = nullptr; }
+        virtual void destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_set_layout)
+        {
+            descriptor_set_layout = nullptr;
+        }
         virtual void destroySemaphore(RHISemaphore* semaphore) = 0;
         virtual void destroySampler(RHISampler* sampler) = 0;
         virtual void destroyInstance(RHIInstance* instance) = 0;

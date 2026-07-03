@@ -29,6 +29,7 @@ namespace Piccolo
         bool dispatch();
         void updateAfterFramebufferRecreate(RHIImage* scene_output_image, RHIImageView* scene_output_image_view);
         void resetAccumulation();
+        void teardown() override;
 
     private:
         struct FrameData
@@ -63,7 +64,6 @@ namespace Piccolo
         void destroyAccumulationImage();
         void invalidateStaticDescriptors();
         void flushPendingDestroys();
-        void teardown();
         void logInitializeSkipOnce(const char* reason);
         void logDispatchFailureOnce(const char* reason);
 

@@ -318,7 +318,30 @@ namespace Piccolo
 
     void DebugDrawPipeline::destory()
     {
-        
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        for (auto& framebuffer : m_framebuffer.framebuffers)
+        {
+            if (framebuffer != nullptr)
+            {
+                m_rhi->destroyFramebuffer(framebuffer);
+                framebuffer = nullptr;
+            }
+        }
+        m_framebuffer.framebuffers.clear();
+
+        for (auto& render_pipeline : m_render_pipelines)
+        {
+            m_rhi->destroyPipeline(render_pipeline.pipeline);
+            m_rhi->destroyPipelineLayout(render_pipeline.layout);
+        }
+        m_render_pipelines.clear();
+
+        m_rhi->destroyDescriptorSetLayout(m_descriptor_layout);
+        m_rhi->destroyRenderPass(m_framebuffer.render_pass);
     }
     const DebugDrawPipelineBase &DebugDrawPipeline::getPipeline() const
     {
