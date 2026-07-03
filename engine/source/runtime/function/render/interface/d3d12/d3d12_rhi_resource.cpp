@@ -1968,7 +1968,6 @@ void D3D12RHI::destroyMipmappedSampler()
 void D3D12RHI::destroyShaderModule(RHIShader* shader)
 {
     delete shader;
-    return;
 }
 void D3D12RHI::destroyPipeline(RHIPipeline*& pipeline)
 {
@@ -1993,7 +1992,6 @@ void D3D12RHI::destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_se
 void D3D12RHI::destroySemaphore(RHISemaphore* semaphore)
 {
     delete static_cast<D3D12RHISemaphore*>(semaphore);
-    return;
 }
 void D3D12RHI::destroySampler(RHISampler* sampler)
 {
@@ -2028,7 +2026,6 @@ void D3D12RHI::destroySampler(RHISampler* sampler)
 void D3D12RHI::destroyInstance(RHIInstance* instance)
 {
     delete instance;
-    return;
 }
 void D3D12RHI::destroyImageView(RHIImageView* imageView)
 {
@@ -2077,7 +2074,6 @@ void D3D12RHI::destroyImage(RHIImage* image)
 void D3D12RHI::destroyFramebuffer(RHIFramebuffer* framebuffer)
 {
     delete static_cast<D3D12RHIFramebuffer*>(framebuffer);
-    return;
 }
 void D3D12RHI::destroyFence(RHIFence* fence)
 {
@@ -2157,19 +2153,16 @@ void D3D12RHI::freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandB
     (void)commandPool;
     (void)commandBufferCount;
     delete static_cast<D3D12RHICommandBuffer*>(pCommandBuffers);
-    return;
 }
 void D3D12RHI::freeAllocation(RHIAllocation*& allocation)
 {
     delete allocation;
     allocation = nullptr;
-    return;
 }
 void D3D12RHI::freeMemory(RHIDeviceMemory* &memory)
 {
     delete static_cast<D3D12RHIDeviceMemory*>(memory);
     memory = nullptr;
-    return;
 }
 bool D3D12RHI::mapMemory(RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size, RHIMemoryMapFlags flags, void** ppData)
 {

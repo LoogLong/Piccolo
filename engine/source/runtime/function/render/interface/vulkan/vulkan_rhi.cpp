@@ -4161,9 +4161,13 @@ namespace Piccolo
 
     void VulkanRHI::destroyShaderModule(RHIShader* shaderModule)
     {
-        vkDestroyShaderModule(m_device, ((VulkanShader*)shaderModule)->getResource(), nullptr);
+        if (shaderModule == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
 
-        delete(shaderModule);
+        vkDestroyShaderModule(m_device, static_cast<VulkanShader*>(shaderModule)->getResource(), nullptr);
+        delete shaderModule;
     }
 
     void VulkanRHI::destroyPipeline(RHIPipeline*& pipeline)
@@ -4225,37 +4229,72 @@ namespace Piccolo
 
     void VulkanRHI::destroySemaphore(RHISemaphore* semaphore)
     {
-        vkDestroySemaphore(m_device, ((VulkanSemaphore*)semaphore)->getResource(), nullptr);
+        if (semaphore == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroySemaphore(m_device, static_cast<VulkanSemaphore*>(semaphore)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroySampler(RHISampler* sampler)
     {
-        vkDestroySampler(m_device, ((VulkanSampler*)sampler)->getResource(), nullptr);
+        if (sampler == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroySampler(m_device, static_cast<VulkanSampler*>(sampler)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyInstance(RHIInstance* instance)
     {
-        vkDestroyInstance(((VulkanInstance*)instance)->getResource(), nullptr);
+        if (instance == nullptr)
+        {
+            return;
+        }
+
+        vkDestroyInstance(static_cast<VulkanInstance*>(instance)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyImageView(RHIImageView* imageView)
     {
-        vkDestroyImageView(m_device, ((VulkanImageView*)imageView)->getResource(), nullptr);
+        if (imageView == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroyImageView(m_device, static_cast<VulkanImageView*>(imageView)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyImage(RHIImage* image)
     {
-        vkDestroyImage(m_device, ((VulkanImage*)image)->getResource(), nullptr);
+        if (image == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroyImage(m_device, static_cast<VulkanImage*>(image)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyFramebuffer(RHIFramebuffer* framebuffer)
     {
-        vkDestroyFramebuffer(m_device, ((VulkanFramebuffer*)framebuffer)->getResource(), nullptr);
+        if (framebuffer == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroyFramebuffer(m_device, static_cast<VulkanFramebuffer*>(framebuffer)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyFence(RHIFence* fence)
     {
-        vkDestroyFence(m_device, ((VulkanFence*)fence)->getResource(), nullptr);
+        if (fence == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroyFence(m_device, static_cast<VulkanFence*>(fence)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyDevice()
@@ -4265,7 +4304,12 @@ namespace Piccolo
 
     void VulkanRHI::destroyCommandPool(RHICommandPool* commandPool)
     {
-        vkDestroyCommandPool(m_device, ((VulkanCommandPool*)commandPool)->getResource(), nullptr);
+        if (commandPool == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        vkDestroyCommandPool(m_device, static_cast<VulkanCommandPool*>(commandPool)->getResource(), nullptr);
     }
 
     void VulkanRHI::destroyBuffer(RHIBuffer* &buffer)
@@ -4275,7 +4319,10 @@ namespace Piccolo
             return;
         }
 
-        vkDestroyBuffer(m_device, static_cast<VulkanBuffer*>(buffer)->getResource(), nullptr);
+        if (m_device != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(m_device, static_cast<VulkanBuffer*>(buffer)->getResource(), nullptr);
+        }
         RHI_DELETE_PTR(buffer);
     }
 
@@ -4342,14 +4389,27 @@ namespace Piccolo
 
     void VulkanRHI::freeCommandBuffers(RHICommandPool* commandPool, uint32_t commandBufferCount, RHICommandBuffer* pCommandBuffers)
     {
-        VkCommandBuffer vk_command_buffer = ((VulkanCommandBuffer*)pCommandBuffers)->getResource();
-        vkFreeCommandBuffers(m_device, ((VulkanCommandPool*)commandPool)->getResource(), commandBufferCount, &vk_command_buffer);
+        if (commandPool == nullptr || pCommandBuffers == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        VkCommandBuffer vk_command_buffer = static_cast<VulkanCommandBuffer*>(pCommandBuffers)->getResource();
+        vkFreeCommandBuffers(m_device,
+                             static_cast<VulkanCommandPool*>(commandPool)->getResource(),
+                             commandBufferCount,
+                             &vk_command_buffer);
     }
 
     void VulkanRHI::freeAllocation(RHIAllocation*& allocation)
     {
+        if (allocation == nullptr)
+        {
+            return;
+        }
+
         auto* vulkan_allocation = static_cast<VulkanAllocation*>(allocation);
-        if (vulkan_allocation != nullptr && vulkan_allocation->allocation != nullptr)
+        if (m_assets_allocator != VK_NULL_HANDLE && vulkan_allocation->allocation != nullptr)
         {
             vmaFreeMemory(m_assets_allocator, vulkan_allocation->allocation);
         }
@@ -4364,7 +4424,10 @@ namespace Piccolo
             return;
         }
 
-        vkFreeMemory(m_device, static_cast<VulkanDeviceMemory*>(memory)->getResource(), nullptr);
+        if (m_device != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(m_device, static_cast<VulkanDeviceMemory*>(memory)->getResource(), nullptr);
+        }
         RHI_DELETE_PTR(memory);
     }
 
