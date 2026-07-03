@@ -70,46 +70,19 @@ if(PICCOLO_ENABLE_VULKAN_BACKEND)
     endif()
 endif()
 
-if(WIN32 AND PICCOLO_ENABLE_D3D12_BACKEND)
-    set(_dxc_search_paths
-        "${THIRD_PARTY_DIR}/VulkanSDK/bin/Win32"
-        "${THIRD_PARTY_DIR}/DirectXShaderCompiler/bin/x64"
-        "${THIRD_PARTY_DIR}/DXC/bin/x64")
+if(WIN32 AND (PICCOLO_ENABLE_D3D12_BACKEND OR PICCOLO_ENABLE_VULKAN_BACKEND))
+    include(${PICCOLO_ROOT_DIR}/cmake/PiccoloFindDXC.cmake)
+    piccolo_find_dxc(
+        OUT_EXECUTABLE PICCOLO_DXC_EXECUTABLE
+        OUT_SPIRV_EXECUTABLE PICCOLO_DXC_SPIRV_EXECUTABLE
+        REQUIRED_FOR_D3D12 ${PICCOLO_ENABLE_D3D12_BACKEND})
 
-    if(DEFINED ENV{VULKAN_SDK})
-        list(APPEND _dxc_search_paths "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/Bin32")
-    endif()
-
-    set(_windows_sdk_roots)
-    if(DEFINED ENV{WindowsSdkDir})
-        list(APPEND _windows_sdk_roots "$ENV{WindowsSdkDir}")
-    endif()
-    if(DEFINED ENV{ProgramFiles\(x86\)})
-        list(APPEND _windows_sdk_roots "$ENV{ProgramFiles\(x86\)}/Windows Kits/10")
-    endif()
-    if(DEFINED ENV{ProgramFiles})
-        list(APPEND _windows_sdk_roots "$ENV{ProgramFiles}/Windows Kits/10")
-    endif()
-    list(APPEND _windows_sdk_roots
-        "C:/Program Files (x86)/Windows Kits/10"
-        "C:/Program Files/Windows Kits/10")
-
-    foreach(_windows_sdk_root IN LISTS _windows_sdk_roots)
-        file(GLOB _windows_sdk_dxc_paths
-            "${_windows_sdk_root}/bin/*/x64"
-            "${_windows_sdk_root}/bin/x64")
-        list(APPEND _dxc_search_paths ${_windows_sdk_dxc_paths})
-    endforeach()
-    list(REMOVE_DUPLICATES _dxc_search_paths)
-
-    find_program(dxc_executable NAMES dxc.exe dxc HINTS ${_dxc_search_paths})
-
-    if(dxc_executable)
-        message(STATUS "Found dxc: ${dxc_executable}")
+    if(PICCOLO_DXC_EXECUTABLE AND PICCOLO_ENABLE_D3D12_BACKEND)
         add_compile_definitions(PICCOLO_D3D12_SHADER_BYTECODE_AVAILABLE=1)
-    else()
-        message(FATAL_ERROR "dxc.exe is required to build the D3D12 backend shaders. Install the Windows SDK, Vulkan SDK, or set dxc_executable.")
     endif()
+
+    set(dxc_executable "${PICCOLO_DXC_EXECUTABLE}")
+    set(dxc_spirv_executable "${PICCOLO_DXC_SPIRV_EXECUTABLE}")
 endif()
 
 

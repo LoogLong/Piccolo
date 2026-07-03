@@ -58,26 +58,20 @@ if(PICCOLO_ENABLE_VULKAN_BACKEND)
     "${GENERATED_SHADER_FOLDER}"
     "${glslangValidator_executable}")
 
-  # Vulkan ray tracing shaders are authored in HLSL (shared with D3D12) and compiled to SPIR-V via dxc.
-  # Developer-controlled (option b): if dxc is not found, ray tracing SPIR-V is simply not built and the
-  # engine falls back to rasterization at runtime. Install dxc (Vulkan SDK / Windows SDK) to enable it.
-  if(HLSL_RT_SHADER_FILES)
-    find_program(dxc_spirv_executable NAMES dxc dxc.exe)
-    if(dxc_spirv_executable)
-      message(STATUS "Found dxc for Vulkan ray tracing SPIR-V: ${dxc_spirv_executable}")
-      if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/vulkan_cpp)
-        file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/vulkan_cpp)
-      endif()
-      compile_hlsl_to_spirv(
-        "${HLSL_RT_SHADER_FILES}"
-        "${TARGET_NAME}"
-        "${HLSL_SHADER_INCLUDE_FOLDER}"
-        "${GENERATED_SHADER_FOLDER}"
-        "${dxc_spirv_executable}")
-    else()
-      message(STATUS "dxc not found; Vulkan ray tracing shaders will not be built. "
-                     "Path tracing will fall back to rasterization on Vulkan. Install dxc to enable it.")
+  # Vulkan ray tracing: same HLSL sources as D3D12, compiled to SPIR-V via SPIR-V-capable dxc.
+  if(HLSL_RT_SHADER_FILES AND dxc_spirv_executable)
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/vulkan_cpp)
+      file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${GENERATED_SHADER_FOLDER}/vulkan_cpp)
     endif()
+    compile_hlsl_to_spirv(
+      "${HLSL_RT_SHADER_FILES}"
+      "${TARGET_NAME}"
+      "${HLSL_SHADER_INCLUDE_FOLDER}"
+      "${GENERATED_SHADER_FOLDER}"
+      "${dxc_spirv_executable}")
+  elseif(HLSL_RT_SHADER_FILES)
+    message(STATUS "SPIR-V-capable dxc not found; Vulkan ray-tracing SPIR-V will not be built. "
+                   "Install the Vulkan SDK or set -DPICCOLO_DXC_SPIRV_EXECUTABLE=... to enable Vulkan path tracing.")
   endif()
 else()
   add_custom_target(${TARGET_NAME})
