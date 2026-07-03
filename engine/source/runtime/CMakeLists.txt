@@ -23,7 +23,8 @@ list(APPEND HEADER_FILES
 
 list(APPEND SOURCE_FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/path_tracing_pass.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/gpu_skinning_pass.cpp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/passes/gpu_skinning_pass.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/function/render/path_tracing_diagnostics.cpp")
 if(NOT PICCOLO_ENABLE_D3D12_BACKEND)
   list(FILTER HEADER_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.h$")
   list(FILTER SOURCE_FILES EXCLUDE REGEX ".*[/\\\\]interface[/\\\\]d3d12[/\\\\].*\\.cpp$")

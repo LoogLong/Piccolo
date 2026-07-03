@@ -8,6 +8,7 @@
 #include "runtime/function/render/render_camera.h"
 #include "runtime/function/render/render_backend.h"
 #include "runtime/function/render/render_shader_bytecode.h"
+#include "runtime/function/render/path_tracing_diagnostics.h"
 #include "runtime/function/render/render_pass.h"
 #include "runtime/function/render/render_pipeline.h"
 #include "runtime/function/render/render_resource.h"
@@ -210,6 +211,8 @@ namespace Piccolo
             &static_cast<RenderPass*>(m_render_pipeline->m_main_camera_pass.get())
                  ->m_descriptor_infos[MainCameraPass::LayoutType::_mesh_per_material]
                  .layout;
+
+        logPathTracingReadinessReport(*m_rhi, *m_render_pipeline);
     }
 
     void RenderSystem::tick(float delta_time)
