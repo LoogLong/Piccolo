@@ -4,9 +4,6 @@ build_dual_backend/
 build_vulkan_only/
 .worktrees/
 
-# local plans / agent notes (not version controlled)
-.local/
-
 # user-specific ImGui layout, must not be committed
 imgui.ini
 # large generated / runtime animation binaries, host via LFS or a download step
@@ -65,6 +62,7 @@ _deps
 *.so
 *.dylib
 *.dll
+!engine/3rdparty/dxc_*/bin/**/*.dll
 
 # Fortran module files
 *.mod
@@ -75,9 +73,11 @@ _deps
 *.la
 *.a
 *.lib
+!engine/3rdparty/dxc_*/lib/**/*.lib
 
 # Executables
 *.exe
+!engine/3rdparty/dxc_*/bin/**/*.exe
 *.out
 *.app
 # finish C++.gitignore
@@ -106,9 +106,15 @@ mono_crash.*
 [Rr]elease/
 [Rr]eleases/
 x64/
+!engine/3rdparty/dxc_*/bin/x64/
+!engine/3rdparty/dxc_*/lib/x64/
 x86/
+!engine/3rdparty/dxc_*/bin/x86/
+!engine/3rdparty/dxc_*/lib/x86/
 [Ww][Ii][Nn]32/
 [Aa][Rr][Mm]/
+!engine/3rdparty/dxc_*/bin/arm64/
+!engine/3rdparty/dxc_*/lib/arm64/
 [Aa][Rr][Mm]64/
 bld/
 [Bb]in/
@@ -445,4 +451,3 @@ MigrationBackup/
 FodyWeavers.xsd
 
 .claude
-Docs
