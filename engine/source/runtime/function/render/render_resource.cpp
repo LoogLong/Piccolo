@@ -136,6 +136,8 @@ namespace Piccolo
         // Release path tracing scene buffers (legacy VkDeviceMemory, not VMA).
         if (m_path_tracing_rhi != nullptr)
         {
+            flushPendingPathTracingBufferDestroys(0, true);
+
             auto destroy_buffer = [this](RHIBuffer*& buffer, RHIDeviceMemory*& memory) {
                 if (buffer != nullptr)
                 {
@@ -162,6 +164,7 @@ namespace Piccolo
             m_path_tracing_instance_buffer_capacity = 0;
             m_path_tracing_rhi                      = nullptr;
         }
+        m_pending_destroy_path_tracing_buffers.clear();
 
         m_skinned_vertex_buffer = nullptr;
         m_gpu_resource_rhi      = nullptr;
@@ -629,9 +632,41 @@ namespace Piccolo
         return m_current_render_scene.lock();
     }
 
+    void RenderResource::flushPendingPathTracingBufferDestroys(uint64_t current_dispatch_index, bool force_all)
+    {
+        if (m_path_tracing_rhi == nullptr)
+        {
+            m_pending_destroy_path_tracing_buffers.clear();
+            return;
+        }
+
+        const uint64_t max_frames_in_flight = m_path_tracing_rhi->getMaxFramesInFlight();
+        auto it = m_pending_destroy_path_tracing_buffers.begin();
+        while (it != m_pending_destroy_path_tracing_buffers.end())
+        {
+            if (force_all || it->queued_at_dispatch_index + max_frames_in_flight <= current_dispatch_index)
+            {
+                if (it->buffer != nullptr)
+                {
+                    m_path_tracing_rhi->destroyBuffer(it->buffer);
+                }
+                if (it->memory != nullptr)
+                {
+                    m_path_tracing_rhi->freeMemory(it->memory);
+                }
+                it = m_pending_destroy_path_tracing_buffers.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
     bool RenderResource::updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
                                                        const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
-                                                       bool full_rebuild)
+                                                       bool full_rebuild,
+                                                       uint64_t dispatch_index)
     {
         // Cache the RHI so the buffers created below can be released in clear().
         m_path_tracing_rhi = rhi.get();
@@ -781,12 +816,13 @@ namespace Piccolo
                                                          RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
         // Helper lambda to allocate or update a buffer
-        auto update_buffer = [rhi, usage, memory_properties](
+        auto update_buffer = [this, rhi, usage, memory_properties, dispatch_index](
             RHIBuffer*& buffer,
             RHIDeviceMemory*& buffer_memory,
             size_t& capacity,
             const void* data,
-            size_t data_size) -> bool
+            size_t data_size,
+            const char* debug_name) -> bool
         {
             if (data_size == 0)
             {
@@ -795,15 +831,11 @@ namespace Piccolo
 
             if (data_size > capacity)
             {
-                // Destroy old buffer and memory
-                if (buffer != nullptr)
+                if (buffer != nullptr || buffer_memory != nullptr)
                 {
-                    rhi->destroyBuffer(buffer);
-                    buffer = nullptr;
-                }
-                if (buffer_memory != nullptr)
-                {
-                    rhi->freeMemory(buffer_memory);
+                    m_pending_destroy_path_tracing_buffers.push_back(
+                        PendingPathTracingBufferDestroy {buffer, buffer_memory, dispatch_index});
+                    buffer        = nullptr;
                     buffer_memory = nullptr;
                 }
 
@@ -814,6 +846,10 @@ namespace Piccolo
                 {
                     LOG_ERROR("Failed to create path tracing buffer");
                     return false;
+                }
+                if (debug_name != nullptr)
+                {
+                    rhi->setDebugObjectName(buffer, debug_name);
                 }
             }
 
@@ -838,7 +874,8 @@ namespace Piccolo
                               m_path_tracing_vertex_buffer_memory,
                               m_path_tracing_vertex_buffer_capacity,
                               m_path_tracing_vertex_data.data(),
-                              m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData)))
+                              m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData),
+                              "PathTracing.vertex_buffer"))
             {
                 return false;
             }
@@ -847,7 +884,8 @@ namespace Piccolo
                               m_path_tracing_index_buffer_memory,
                               m_path_tracing_index_buffer_capacity,
                               m_path_tracing_index_data.data(),
-                              m_path_tracing_index_data.size() * sizeof(uint32_t)))
+                              m_path_tracing_index_data.size() * sizeof(uint32_t),
+                              "PathTracing.index_buffer"))
             {
                 return false;
             }
@@ -856,7 +894,8 @@ namespace Piccolo
                               m_path_tracing_material_buffer_memory,
                               m_path_tracing_material_buffer_capacity,
                               m_path_tracing_material_data.data(),
-                              m_path_tracing_material_data.size() * sizeof(RenderPathTracingMaterialGPUData)))
+                              m_path_tracing_material_data.size() * sizeof(RenderPathTracingMaterialGPUData),
+                              "PathTracing.material_buffer"))
             {
                 return false;
             }
@@ -866,7 +905,8 @@ namespace Piccolo
                           m_path_tracing_geometry_buffer_memory,
                           m_path_tracing_geometry_buffer_capacity,
                           m_path_tracing_geometry_data.data(),
-                          m_path_tracing_geometry_data.size() * sizeof(RenderPathTracingGeometryGPUData)))
+                          m_path_tracing_geometry_data.size() * sizeof(RenderPathTracingGeometryGPUData),
+                          "PathTracing.geometry_buffer"))
         {
             return false;
         }
@@ -875,7 +915,8 @@ namespace Piccolo
                           m_path_tracing_instance_buffer_memory,
                           m_path_tracing_instance_buffer_capacity,
                           m_path_tracing_instance_data.data(),
-                          m_path_tracing_instance_data.size() * sizeof(RenderPathTracingInstanceGPUData)))
+                          m_path_tracing_instance_data.size() * sizeof(RenderPathTracingInstanceGPUData),
+                          "PathTracing.instance_buffer"))
         {
             return false;
         }

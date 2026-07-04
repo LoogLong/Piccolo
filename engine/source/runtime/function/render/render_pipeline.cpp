@@ -404,39 +404,6 @@ namespace Piccolo
         }
 
         MainCameraPass& main_camera_pass = *(static_cast<MainCameraPass*>(m_main_camera_pass.get()));
-        if (RHIImage* backup_odd_image = main_camera_pass.getBackupOddImage(); backup_odd_image != nullptr)
-        {
-            constexpr float k_path_tracing_render_debug_color[4] = {0.9f, 0.5f, 0.2f, 1.0f};
-            render_rhi->pushEvent(render_rhi->getCurrentCommandBuffer(),
-                                  "PathTracingRender.backup_odd_barrier",
-                                  k_path_tracing_render_debug_color);
-            RHIImageMemoryBarrier barrier {};
-            barrier.sType                         = RHI_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.srcAccessMask                 = RHI_ACCESS_SHADER_WRITE_BIT;
-            barrier.dstAccessMask                 = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-            barrier.oldLayout                     = RHI_IMAGE_LAYOUT_GENERAL;
-            barrier.newLayout                     = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barrier.srcQueueFamilyIndex           = RHI_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex           = RHI_QUEUE_FAMILY_IGNORED;
-            barrier.image                         = backup_odd_image;
-            barrier.subresourceRange.aspectMask     = RHI_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel   = 0;
-            barrier.subresourceRange.levelCount     = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount     = 1;
-            render_rhi->cmdPipelineBarrier(render_rhi->getCurrentCommandBuffer(),
-                                           RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                                           RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                               RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                           0,
-                                           0,
-                                           nullptr,
-                                           0,
-                                           nullptr,
-                                           1,
-                                           &barrier);
-            render_rhi->popEvent(render_rhi->getCurrentCommandBuffer());
-        }
 
         ParticlePass&    particle_pass   = *(static_cast<ParticlePass*>(m_particle_pass.get()));
         UIPass&           ui_pass         = *(static_cast<UIPass*>(m_ui_pass.get()));
@@ -456,8 +423,21 @@ namespace Piccolo
         }
 
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
+
+        ParticlePass* particle_pass_ptr = static_cast<ParticlePass*>(m_particle_pass.get());
+        if (render_rhi->requiresDepthNormalCopyBeforeSubmit())
+        {
+            particle_pass_ptr->copyNormalAndDepthImage();
+        }
+
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
+
+        if (!render_rhi->requiresDepthNormalCopyBeforeSubmit())
+        {
+            particle_pass_ptr->copyNormalAndDepthImage();
+        }
+
+        particle_pass_ptr->simulate();
 
         if (!m_path_tracing_frame_logged)
         {

@@ -34,7 +34,7 @@ namespace Piccolo
         std::string m_debug_name;
     };
 
-    class VulkanBuffer : public RHIBuffer
+    class VulkanBuffer : public RHIBuffer, public VulkanDebugNameStorage
     {
     public:
         void setResource(VkBuffer res)

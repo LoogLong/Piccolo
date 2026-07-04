@@ -6,6 +6,7 @@
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace Piccolo
@@ -201,6 +202,7 @@ namespace Piccolo
                 RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 m_joint_matrix_buffer,
                 m_joint_matrix_memory);
+            m_rhi->setDebugObjectName(m_joint_matrix_buffer, "GpuSkinning.joint_matrix_buffer");
         }
 
         void* mapped = nullptr;
@@ -263,6 +265,12 @@ namespace Piccolo
                     RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                     output.skinned_position_buffer,
                     output.skinned_position_memory);
+                char skinned_position_debug_name[64];
+                std::snprintf(skinned_position_debug_name,
+                                sizeof(skinned_position_debug_name),
+                                "GpuSkinning.skinned_position[inst%u]",
+                                inst_id);
+                m_rhi->setDebugObjectName(output.skinned_position_buffer, skinned_position_debug_name);
                 output.vertex_count = vertex_count;
                 output.index_count  = mesh->mesh_index_count;
             }
@@ -475,6 +483,7 @@ namespace Piccolo
                 RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 m_skinned_vertex_output_buffer,
                 m_skinned_vertex_output_memory);
+            m_rhi->setDebugObjectName(m_skinned_vertex_output_buffer, "GpuSkinning.skinned_vertex_output_buffer");
         }
 
         // Expose the flat vertex buffer to consumers via RenderResource

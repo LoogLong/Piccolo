@@ -146,6 +146,7 @@ namespace Piccolo
     void setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name) override {}
     void setDebugObjectName(RHICommandBuffer* command_buffer, const char* name) override {}
     void setDebugObjectName(RHIPipeline* pipeline, const char* name) override {}
+    void setDebugObjectName(RHIBuffer* buffer, const char* name) override {}
     void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) override {}
     void clearSwapchain() override;
     void destroyDefaultSampler(RHIDefaultSamplerType type) override;

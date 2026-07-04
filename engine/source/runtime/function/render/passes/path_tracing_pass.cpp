@@ -6,6 +6,7 @@
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_set>
@@ -50,6 +51,22 @@ namespace Piccolo
                 rhi->setDebugObjectName(image_view, "PathTracing.scene_output_view (backup_odd)");
             }
         }
+
+        void formatPathTracingTLASDebugName(char* out, size_t out_size, uint32_t generation, bool pending)
+        {
+            if (out == nullptr || out_size == 0)
+            {
+                return;
+            }
+            if (pending)
+            {
+                std::snprintf(out, out_size, "PathTracing.tlas.pending.gen%u", generation);
+            }
+            else
+            {
+                std::snprintf(out, out_size, "PathTracing.tlas.gen%u", generation);
+            }
+        }
     } // namespace
 
     PathTracingPass::~PathTracingPass()
@@ -92,7 +109,7 @@ namespace Piccolo
             return;
         }
 
-        flushPendingDestroys();
+        flushPendingDestroys(true);
 
         if (m_shader_binding_table != nullptr)
         {
@@ -106,28 +123,18 @@ namespace Piccolo
         }
 
         destroyTopLevelAS();
-        flushPendingDestroys();
+        flushPendingDestroys(true);
         destroyAccumulationImage();
         destroySkinnedVertexFallbackBuffer();
+        destroyFrameDataBuffers();
 
-        if (m_frame_data_buffer != nullptr)
-        {
-            m_rhi->destroyBuffer(m_frame_data_buffer);
-            m_frame_data_buffer = nullptr;
-        }
-        if (m_frame_data_memory != nullptr)
-        {
-            m_rhi->freeMemory(m_frame_data_memory);
-            m_frame_data_memory = nullptr;
-        }
-
-        m_descriptor_set = nullptr;
+        m_descriptor_sets.clear();
+        m_static_descriptors_written.clear();
         m_rhi->destroyDescriptorSetLayout(m_descriptor_set_layout);
         m_descriptor_set_layout = nullptr;
         m_rhi->destroyPipelineLayout(m_pipeline_layout);
         m_pipeline_layout = nullptr;
 
-        m_static_descriptors_written = false;
         m_texture_array_views.clear();
     }
 
@@ -163,9 +170,9 @@ namespace Piccolo
         {
             setupDescriptorSetLayout();
             setupPipelineLayout();
-            setupDescriptorSet();
+            setupDescriptorSets();
             tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
-            if (!ensureFrameDataBuffer())
+            if (!ensureFrameDataBuffers())
             {
                 logInitializeSkipOnce("failed to create path tracing frame data buffer");
                 return;
@@ -175,7 +182,10 @@ namespace Piccolo
                 logInitializeSkipOnce("failed to create ray tracing pipeline or shader binding table");
                 return;
             }
-            updateDescriptorSet();
+            for (uint32_t frame_index = 0; frame_index < static_cast<uint32_t>(m_descriptor_sets.size()); ++frame_index)
+            {
+                updateDescriptorSet(frame_index);
+            }
             LOG_INFO("Path tracing pass initialized successfully");
         }
         catch (const std::exception& e)
@@ -213,7 +223,9 @@ namespace Piccolo
             return false;
         }
 
+        ++m_dispatch_index;
         flushPendingDestroys();
+        m_render_resource_impl->flushPendingPathTracingBufferDestroys(m_dispatch_index);
 
         auto render_scene = m_render_resource_impl->getCurrentRenderScene();
         if (render_scene == nullptr)
@@ -230,11 +242,11 @@ namespace Piccolo
         {
             setupPipelineLayout();
         }
-        if (m_descriptor_set == nullptr)
+        if (m_descriptor_sets.empty())
         {
-            setupDescriptorSet();
+            setupDescriptorSets();
         }
-        if (!ensureFrameDataBuffer() || !ensureAccumulationImage())
+        if (!ensureFrameDataBuffers() || !ensureAccumulationImage())
         {
             logDispatchFailureOnce("failed to ensure frame data or accumulation image");
             return false;
@@ -270,33 +282,31 @@ namespace Piccolo
 
         m_rhi->pushEvent(command_buffer, "PathTracing.layoutTransitions", debug_color);
         transitionImage(m_scene_output_image,
-                        RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        m_scene_output_image_layout,
                         RHI_IMAGE_LAYOUT_GENERAL,
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT,
                         RHI_ACCESS_SHADER_WRITE_BIT,
                         RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-        transitionImage(m_accumulation_image,
-                        m_accumulation_image_layout,
-                        RHI_IMAGE_LAYOUT_GENERAL,
-                        0,
-                        RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_SHADER_WRITE_BIT,
-                        RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
-        transitionImage(m_accumulation_prev_image,
-                        m_accumulation_prev_image_layout,
-                        RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        0,
-                        RHI_ACCESS_SHADER_READ_BIT,
-                        RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        m_scene_output_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+
+        if (m_accumulation_image_layout != RHI_IMAGE_LAYOUT_GENERAL)
+        {
+            transitionImage(m_accumulation_image,
+                            m_accumulation_image_layout,
+                            RHI_IMAGE_LAYOUT_GENERAL,
+                            0,
+                            RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+            m_accumulation_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+        }
 
         m_rhi->popEvent(command_buffer);
 
+        const uint32_t frame_index = m_rhi->getCurrentFrameIndex();
         m_rhi->pushEvent(command_buffer, "PathTracing.updateDescriptorSet", debug_color);
-        if (!updateDescriptorSet())
+        if (!updateDescriptorSet(frame_index))
         {
             m_rhi->popEvent(command_buffer);
             m_rhi->popEvent(command_buffer);
@@ -309,12 +319,13 @@ namespace Piccolo
         m_rhi->cmdBindPipelinePFN(command_buffer,
                                   RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                                   m_ray_tracing_pipeline);
+        RHIDescriptorSet* frame_descriptor_set = m_descriptor_sets[frame_index];
         m_rhi->cmdBindDescriptorSetsPFN(command_buffer,
                                         RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                                         m_pipeline_layout,
                                         0,
                                         1,
-                                        &m_descriptor_set,
+                                        &frame_descriptor_set,
                                         0,
                                         nullptr);
 
@@ -336,21 +347,7 @@ namespace Piccolo
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                         RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        transitionImage(m_accumulation_image,
-                        RHI_IMAGE_LAYOUT_GENERAL,
-                        RHI_IMAGE_LAYOUT_GENERAL,
-                        RHI_ACCESS_SHADER_WRITE_BIT,
-                        RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_SHADER_WRITE_BIT,
-                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-
-        std::swap(m_accumulation_image, m_accumulation_prev_image);
-        std::swap(m_accumulation_image_view, m_accumulation_prev_image_view);
-        std::swap(m_accumulation_memory, m_accumulation_prev_memory);
-        // After swap: former read buffer is next frame's accumulation write target;
-        // former write buffer is next frame's prev-read target.
-        m_accumulation_image_layout      = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+        m_scene_output_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         m_rhi->popEvent(command_buffer);
         m_rhi->popEvent(command_buffer);
@@ -368,6 +365,7 @@ namespace Piccolo
         m_scene_output_image      = scene_output_image;
         m_scene_output_image_view = scene_output_image_view;
         tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
+        m_scene_output_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         destroyAccumulationImage();
         resetAccumulation();
     }
@@ -375,6 +373,7 @@ namespace Piccolo
     void PathTracingPass::resetAccumulation()
     {
         m_sample_index = 0;
+        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         if (auto render_scene = m_render_resource_impl != nullptr ? m_render_resource_impl->getCurrentRenderScene() : nullptr)
         {
             render_scene->markPathTracingAccumulationDirty();
@@ -388,7 +387,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[15] {};
+        RHIDescriptorSetLayoutBinding bindings[14] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -459,11 +458,6 @@ namespace Piccolo
         bindings[13].descriptorCount = 1;
         bindings[13].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-        bindings[14].binding         = 1035;
-        bindings[14].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        bindings[14].descriptorCount = 1;
-        bindings[14].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
-
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         create_info.bindingCount = static_cast<uint32_t>(std::size(bindings));
@@ -492,23 +486,98 @@ namespace Piccolo
         }
     }
 
-    void PathTracingPass::setupDescriptorSet()
+    void PathTracingPass::setupDescriptorSets()
     {
-        if (m_descriptor_set != nullptr || m_rhi == nullptr || m_descriptor_set_layout == nullptr)
+        if (!m_descriptor_sets.empty() || m_rhi == nullptr || m_descriptor_set_layout == nullptr)
         {
             return;
         }
+
+        const uint32_t frame_count = m_rhi->getMaxFramesInFlight();
+        m_descriptor_sets.resize(frame_count, nullptr);
+        m_static_descriptors_written.assign(frame_count, false);
 
         RHIDescriptorSetAllocateInfo allocate_info {};
         allocate_info.sType              = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         allocate_info.descriptorPool     = m_rhi->getDescriptorPoor();
         allocate_info.descriptorSetCount = 1;
         allocate_info.pSetLayouts        = &m_descriptor_set_layout;
-        if (RHI_SUCCESS != m_rhi->allocateDescriptorSets(&allocate_info, m_descriptor_set))
+
+        for (uint32_t frame_index = 0; frame_index < frame_count; ++frame_index)
         {
-            throw std::runtime_error("allocate path tracing descriptor set");
+            if (RHI_SUCCESS != m_rhi->allocateDescriptorSets(&allocate_info, m_descriptor_sets[frame_index]))
+            {
+                throw std::runtime_error("allocate path tracing descriptor set");
+            }
+
+            char debug_name[64];
+            std::snprintf(debug_name, sizeof(debug_name), "PathTracing.descriptor_set[%u]", frame_index);
+            m_rhi->setDebugObjectName(m_descriptor_sets[frame_index], debug_name);
         }
-        m_rhi->setDebugObjectName(m_descriptor_set, "PathTracing.descriptor_set");
+    }
+
+    bool PathTracingPass::ensureFrameDataBuffers()
+    {
+        if (m_rhi == nullptr)
+        {
+            return false;
+        }
+
+        const uint32_t frame_count = m_rhi->getMaxFramesInFlight();
+        if (m_frame_data_buffers.size() == frame_count && m_frame_data_memories.size() == frame_count)
+        {
+            return m_frame_data_buffers[0] != nullptr && m_frame_data_memories[0] != nullptr;
+        }
+
+        destroyFrameDataBuffers();
+        m_frame_data_buffers.resize(frame_count, nullptr);
+        m_frame_data_memories.resize(frame_count, nullptr);
+
+        for (uint32_t frame_index = 0; frame_index < frame_count; ++frame_index)
+        {
+            m_rhi->createBuffer(sizeof(FrameData),
+                                RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                m_frame_data_buffers[frame_index],
+                                m_frame_data_memories[frame_index]);
+            if (m_frame_data_buffers[frame_index] == nullptr || m_frame_data_memories[frame_index] == nullptr)
+            {
+                return false;
+            }
+
+            char debug_name[64];
+            std::snprintf(debug_name, sizeof(debug_name), "PathTracing.frame_data[%u]", frame_index);
+            m_rhi->setDebugObjectName(m_frame_data_buffers[frame_index], debug_name);
+        }
+
+        return true;
+    }
+
+    void PathTracingPass::destroyFrameDataBuffers()
+    {
+        if (m_rhi == nullptr)
+        {
+            m_frame_data_buffers.clear();
+            m_frame_data_memories.clear();
+            return;
+        }
+
+        for (RHIBuffer* buffer : m_frame_data_buffers)
+        {
+            if (buffer != nullptr)
+            {
+                m_rhi->destroyBuffer(buffer);
+            }
+        }
+        for (RHIDeviceMemory* memory : m_frame_data_memories)
+        {
+            if (memory != nullptr)
+            {
+                m_rhi->freeMemory(memory);
+            }
+        }
+        m_frame_data_buffers.clear();
+        m_frame_data_memories.clear();
     }
 
     bool PathTracingPass::setupRayTracingPipeline()
@@ -567,25 +636,6 @@ namespace Piccolo
         create_info.hit_group_export     = kPathTracingHitGroupExport;
         return m_rhi->createShaderBindingTable(&create_info, m_shader_binding_table) &&
                m_shader_binding_table != nullptr;
-    }
-
-    bool PathTracingPass::ensureFrameDataBuffer()
-    {
-        if (m_frame_data_buffer != nullptr)
-        {
-            return true;
-        }
-        if (m_rhi == nullptr)
-        {
-            return false;
-        }
-
-        m_rhi->createBuffer(sizeof(FrameData),
-                            RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                            RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                            m_frame_data_buffer,
-                            m_frame_data_memory);
-        return m_frame_data_buffer != nullptr && m_frame_data_memory != nullptr;
     }
 
     void PathTracingPass::destroySkinnedVertexFallbackBuffer()
@@ -653,7 +703,7 @@ namespace Piccolo
                            extent.height,
                            RHI_FORMAT_R32G32B32A32_SFLOAT,
                            RHI_IMAGE_TILING_OPTIMAL,
-                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
+                           RHI_IMAGE_USAGE_STORAGE_BIT,
                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            m_accumulation_image,
                            m_accumulation_memory,
@@ -668,39 +718,28 @@ namespace Piccolo
                                1,
                                m_accumulation_image_view);
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
-
-        // Create prev accumulation image (for reading previous frame)
-        m_rhi->createImage(extent.width,
-                           extent.height,
-                           RHI_FORMAT_R32G32B32A32_SFLOAT,
-                           RHI_IMAGE_TILING_OPTIMAL,
-                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
-                           RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                           m_accumulation_prev_image,
-                           m_accumulation_prev_memory,
-                           0,
-                           1,
-                           1);
-        m_rhi->createImageView(m_accumulation_prev_image,
-                               RHI_FORMAT_R32G32B32A32_SFLOAT,
-                               RHI_IMAGE_ASPECT_COLOR_BIT,
-                               RHI_IMAGE_VIEW_TYPE_2D,
-                               1,
-                               1,
-                               m_accumulation_prev_image_view);
-        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_extent = extent;
-        m_rhi->setDebugObjectName(m_accumulation_image, "PathTracing.accumulation.write");
-        m_rhi->setDebugObjectName(m_accumulation_prev_image, "PathTracing.accumulation.prev_read");
-        m_rhi->setDebugObjectName(m_accumulation_image_view, "PathTracing.accumulation.write_view");
-        m_rhi->setDebugObjectName(m_accumulation_prev_image_view, "PathTracing.accumulation.prev_read_view");
+        m_rhi->setDebugObjectName(m_accumulation_image, "PathTracing.accumulation");
+        m_rhi->setDebugObjectName(m_accumulation_image_view, "PathTracing.accumulation_view");
         resetAccumulation();
         return m_accumulation_image != nullptr && m_accumulation_image_view != nullptr;
     }
 
     bool PathTracingPass::updateFrameData(uint32_t instance_count)
     {
-        if (m_rhi == nullptr || m_render_resource_impl == nullptr || m_frame_data_memory == nullptr)
+        if (m_rhi == nullptr || m_render_resource_impl == nullptr || m_frame_data_memories.empty())
+        {
+            return false;
+        }
+
+        const uint32_t frame_index = m_rhi->getCurrentFrameIndex();
+        if (frame_index >= m_frame_data_buffers.size() || frame_index >= m_frame_data_memories.size())
+        {
+            return false;
+        }
+
+        RHIDeviceMemory* frame_data_memory = m_frame_data_memories[frame_index];
+        if (frame_data_memory == nullptr)
         {
             return false;
         }
@@ -757,24 +796,26 @@ namespace Piccolo
         }
 
         void* mapped_data = nullptr;
-        if (!m_rhi->mapMemory(m_frame_data_memory, 0, sizeof(FrameData), 0, &mapped_data) ||
+        if (!m_rhi->mapMemory(frame_data_memory, 0, sizeof(FrameData), 0, &mapped_data) ||
             mapped_data == nullptr)
         {
             return false;
         }
         std::memcpy(mapped_data, &frame_data, sizeof(FrameData));
-        m_rhi->unmapMemory(m_frame_data_memory);
+        m_rhi->unmapMemory(frame_data_memory);
         return true;
     }
 
-    bool PathTracingPass::updateDescriptorSet()
+    bool PathTracingPass::updateDescriptorSet(uint32_t frame_index)
     {
         if (m_rhi == nullptr ||
-            m_descriptor_set == nullptr ||
+            frame_index >= m_descriptor_sets.size() ||
+            m_descriptor_sets[frame_index] == nullptr ||
             m_top_level_as == nullptr ||
             m_scene_output_image_view == nullptr ||
             m_accumulation_image_view == nullptr ||
-            m_frame_data_buffer == nullptr ||
+            frame_index >= m_frame_data_buffers.size() ||
+            m_frame_data_buffers[frame_index] == nullptr ||
             m_render_resource_impl == nullptr ||
             m_render_resource_impl->getPathTracingVertexBuffer() == nullptr ||
             m_render_resource_impl->getPathTracingIndexBuffer() == nullptr ||
@@ -799,7 +840,7 @@ namespace Piccolo
             return false;
         }
 
-        if (!m_static_descriptors_written)
+        if (m_texture_array_views.empty())
         {
             const RHIDescriptorImageInfo fallback_info {
                 nullptr, default_material_texture_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -844,10 +885,6 @@ namespace Piccolo
         {
             return false;
         }
-        if (m_accumulation_image_view != nullptr && m_accumulation_prev_image_view == nullptr)
-        {
-            return false;
-        }
 
         RHIBuffer* skinned_vertex_buffer = m_render_resource_impl->getSkinnedVertexBuffer();
         if (skinned_vertex_buffer == nullptr)
@@ -867,12 +904,8 @@ namespace Piccolo
         accumulation_info.imageView   = m_accumulation_image_view;
         accumulation_info.imageLayout = RHI_IMAGE_LAYOUT_GENERAL;
 
-        RHIDescriptorImageInfo accumulation_prev_info {};
-        accumulation_prev_info.imageView   = m_accumulation_prev_image_view;
-        accumulation_prev_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
         RHIDescriptorBufferInfo frame_data_info {};
-        frame_data_info.buffer = m_frame_data_buffer;
+        frame_data_info.buffer = m_frame_data_buffers[frame_index];
         frame_data_info.offset = 0;
         frame_data_info.range  = sizeof(FrameData);
 
@@ -921,118 +954,112 @@ namespace Piccolo
         specular_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         specular_info.sampler     = m_linear_sampler;
 
-        RHIWriteDescriptorSet writes[15] {};
+        RHIDescriptorSet* descriptor_set = m_descriptor_sets[frame_index];
+        RHIWriteDescriptorSet writes[14] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet                     = m_descriptor_set;
+        writes[0].dstSet                     = descriptor_set;
         writes[0].dstBinding                 = 0;
         writes[0].descriptorType             = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         writes[0].descriptorCount            = 1;
         writes[0].pAccelerationStructureInfo = &acceleration_structure_info;
 
         writes[1].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet          = m_descriptor_set;
+        writes[1].dstSet          = descriptor_set;
         writes[1].dstBinding      = 1;
         writes[1].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo      = &scene_output_info;
 
         writes[2].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet          = m_descriptor_set;
+        writes[2].dstSet          = descriptor_set;
         writes[2].dstBinding      = 2;
         writes[2].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[2].descriptorCount = 1;
         writes[2].pBufferInfo     = &frame_data_info;
 
         writes[3].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[3].dstSet          = m_descriptor_set;
+        writes[3].dstSet          = descriptor_set;
         writes[3].dstBinding      = 3;
         writes[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[3].descriptorCount = 1;
         writes[3].pImageInfo      = &accumulation_info;
 
         writes[4].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[4].dstSet          = m_descriptor_set;
+        writes[4].dstSet          = descriptor_set;
         writes[4].dstBinding      = 4;
         writes[4].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[4].descriptorCount = 1;
         writes[4].pBufferInfo     = &vertex_buffer_info;
 
         writes[5].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[5].dstSet          = m_descriptor_set;
+        writes[5].dstSet          = descriptor_set;
         writes[5].dstBinding      = 5;
         writes[5].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[5].descriptorCount = 1;
         writes[5].pBufferInfo     = &index_buffer_info;
 
         writes[6].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[6].dstSet          = m_descriptor_set;
+        writes[6].dstSet          = descriptor_set;
         writes[6].dstBinding      = 6;
         writes[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[6].descriptorCount = 1;
         writes[6].pBufferInfo     = &material_buffer_info;
 
         writes[7].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[7].dstSet          = m_descriptor_set;
+        writes[7].dstSet          = descriptor_set;
         writes[7].dstBinding      = 7;
         writes[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[7].descriptorCount = 1;
         writes[7].pBufferInfo     = &geometry_buffer_info;
 
         writes[8].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[8].dstSet          = m_descriptor_set;
+        writes[8].dstSet          = descriptor_set;
         writes[8].dstBinding      = 8;
         writes[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[8].descriptorCount = 1;
         writes[8].pBufferInfo     = &instance_buffer_info;
 
         writes[9].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[9].dstSet          = m_descriptor_set;
+        writes[9].dstSet          = descriptor_set;
         writes[9].dstBinding      = 9;
         writes[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[9].descriptorCount = 1;
         writes[9].pImageInfo      = &irradiance_info;
 
         writes[10].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[10].dstSet          = m_descriptor_set;
+        writes[10].dstSet          = descriptor_set;
         writes[10].dstBinding      = 10;
         writes[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[10].descriptorCount = 1;
         writes[10].pImageInfo      = &specular_info;
 
         writes[11].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[11].dstSet          = m_descriptor_set;
+        writes[11].dstSet          = descriptor_set;
         writes[11].dstBinding      = 11;
         writes[11].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         writes[11].descriptorCount = kPathTracingMaterialTextureCount;
         writes[11].pImageInfo      = m_texture_array_views.data();
 
         writes[12].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[12].dstSet          = m_descriptor_set;
+        writes[12].dstSet          = descriptor_set;
         writes[12].dstBinding      = 12;
         writes[12].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLER;
         writes[12].descriptorCount = 1;
         writes[12].pImageInfo      = &specular_info;
 
         writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[13].dstSet          = m_descriptor_set;
+        writes[13].dstSet          = descriptor_set;
         writes[13].dstBinding      = 1036;  // t1036: g_skinned_vertices
         writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[13].descriptorCount = 1;
         writes[13].pBufferInfo     = &skinned_vertex_buffer_info;
 
-        writes[14].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[14].dstSet          = m_descriptor_set;
-        writes[14].dstBinding      = 1035;
-        writes[14].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        writes[14].descriptorCount = 1;
-        writes[14].pImageInfo      = &accumulation_prev_info;
-
         // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
         // t11=texture_array); dynamic descriptors every frame.
-        if (m_static_descriptors_written)
+        if (m_static_descriptors_written[frame_index])
         {
             // Compact: write only dynamic bindings (skip static)
-            RHIWriteDescriptorSet dynamic_writes[10];
+            RHIWriteDescriptorSet dynamic_writes[9];
             uint32_t j = 0;
             for (uint32_t i = 0; i < std::size(writes); ++i)
             {
@@ -1045,7 +1072,7 @@ namespace Piccolo
         else
         {
             m_rhi->updateDescriptorSets(static_cast<uint32_t>(std::size(writes)), writes, 0, nullptr);
-            m_static_descriptors_written = true;
+            m_static_descriptors_written[frame_index] = true;
         }
         return true;
     }
@@ -1195,8 +1222,10 @@ namespace Piccolo
         {
             invalidateStaticDescriptors();
         }
-        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi, collected_instances,
-                                                                    static_data_changed))
+        if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi,
+                                                                    collected_instances,
+                                                                    static_data_changed,
+                                                                    m_dispatch_index))
         {
             return false;
         }
@@ -1254,9 +1283,12 @@ namespace Piccolo
         }
 
         destroyTopLevelAS();
-        m_top_level_as          = new_top_level_as;
-        m_tlas_instance_count   = instance_count;
-        m_rhi->setDebugObjectName(m_top_level_as, "PathTracing.tlas");
+        m_top_level_as        = new_top_level_as;
+        m_tlas_instance_count = instance_count;
+        ++m_top_level_as_generation;
+        char tlas_debug_name[64];
+        formatPathTracingTLASDebugName(tlas_debug_name, sizeof(tlas_debug_name), m_top_level_as_generation, false);
+        m_rhi->setDebugObjectName(m_top_level_as, tlas_debug_name);
         scene.clearPathTracingTLASDirty();
         if (static_data_changed)
         {
@@ -1267,14 +1299,17 @@ namespace Piccolo
 
     void PathTracingPass::invalidateStaticDescriptors()
     {
-        m_static_descriptors_written = false;
+        if (!m_static_descriptors_written.empty())
+        {
+            m_static_descriptors_written.assign(m_static_descriptors_written.size(), false);
+        }
         m_texture_array_views.clear();
         m_specular_texture_view   = nullptr;
         m_irradiance_texture_view = nullptr;
         m_linear_sampler          = nullptr;
     }
 
-    void PathTracingPass::flushPendingDestroys()
+    void PathTracingPass::flushPendingDestroys(bool force_all)
     {
         if (m_rhi == nullptr)
         {
@@ -1282,18 +1317,38 @@ namespace Piccolo
             return;
         }
 
-        for (RHIAccelerationStructure* acceleration_structure : m_pending_destroy_acceleration_structures)
+        const uint64_t max_frames_in_flight = m_rhi->getMaxFramesInFlight();
+        auto it = m_pending_destroy_acceleration_structures.begin();
+        while (it != m_pending_destroy_acceleration_structures.end())
         {
-            m_rhi->destroyAccelerationStructure(acceleration_structure);
+            if (force_all || it->queued_at_dispatch_index + max_frames_in_flight <= m_dispatch_index)
+            {
+                RHIAccelerationStructure* acceleration_structure = it->acceleration_structure;
+                m_rhi->destroyAccelerationStructure(acceleration_structure);
+                it = m_pending_destroy_acceleration_structures.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
         }
-        m_pending_destroy_acceleration_structures.clear();
     }
 
     void PathTracingPass::destroyTopLevelAS()
     {
         if (m_top_level_as != nullptr)
         {
-            m_pending_destroy_acceleration_structures.push_back(m_top_level_as);
+            if (m_rhi != nullptr && m_top_level_as_generation > 0)
+            {
+                char tlas_debug_name[64];
+                formatPathTracingTLASDebugName(tlas_debug_name,
+                                               sizeof(tlas_debug_name),
+                                               m_top_level_as_generation,
+                                               true);
+                m_rhi->setDebugObjectName(m_top_level_as, tlas_debug_name);
+            }
+            m_pending_destroy_acceleration_structures.push_back(
+                PendingTLASDestroy {m_top_level_as, m_dispatch_index});
         }
         m_top_level_as        = nullptr;
         m_tlas_instance_count = 0;
@@ -1324,22 +1379,6 @@ namespace Piccolo
             m_rhi->freeMemory(m_accumulation_memory);
             m_accumulation_memory = nullptr;
         }
-        if (m_accumulation_prev_image_view != nullptr)
-        {
-            m_rhi->destroyImageView(m_accumulation_prev_image_view);
-            m_accumulation_prev_image_view = nullptr;
-        }
-        if (m_accumulation_prev_image != nullptr)
-        {
-            m_rhi->destroyImage(m_accumulation_prev_image);
-            m_accumulation_prev_image = nullptr;
-        }
-        if (m_accumulation_prev_memory != nullptr)
-        {
-            m_rhi->freeMemory(m_accumulation_prev_memory);
-            m_accumulation_prev_memory = nullptr;
-        }
-        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_extent = {0, 0};
         m_accumulation_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
     }

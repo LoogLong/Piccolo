@@ -71,7 +71,9 @@
 #endif
 
 #include <cstring>
+#include <cctype>
 #include <cstdio>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -95,6 +97,29 @@ namespace Piccolo
             void*                        instance_mapped {nullptr};
             VkDeviceAddress              device_address {0};
             RHIAccelerationStructureType type {RHIAccelerationStructureType::BottomLevel};
+
+            void applyChildDebugNames(
+                const std::function<void(uint64_t object_handle, VkObjectType object_type, const char* name)>& apply,
+                const char* base_name) const
+            {
+                if (base_name == nullptr || base_name[0] == '\0')
+                {
+                    return;
+                }
+
+                auto apply_child = [&](const char* suffix, uint64_t object_handle, VkObjectType object_type) {
+                    if (object_handle == 0)
+                    {
+                        return;
+                    }
+                    const std::string child_name = std::string(base_name) + suffix;
+                    apply(object_handle, object_type, child_name.c_str());
+                };
+
+                apply_child(".as_buffer", reinterpret_cast<uint64_t>(as_buffer), VK_OBJECT_TYPE_BUFFER);
+                apply_child(".scratch_buffer", reinterpret_cast<uint64_t>(scratch_buffer), VK_OBJECT_TYPE_BUFFER);
+                apply_child(".instance_buffer", reinterpret_cast<uint64_t>(instance_buffer), VK_OBJECT_TYPE_BUFFER);
+            }
         };
 
         struct VulkanRHIShaderBindingTable : public RHIShaderBindingTable
@@ -858,7 +883,8 @@ namespace Piccolo
                 stream << " " << callback_data->pMessageIdName;
             }
 
-            stream << "\n  message: " << (callback_data->pMessage != nullptr ? callback_data->pMessage : "(null)");
+            const char* message = callback_data->pMessage != nullptr ? callback_data->pMessage : "(null)";
+            stream << "\n  message: " << message;
 
             if (callback_data->cmdBufLabelCount > 0)
             {
@@ -880,6 +906,37 @@ namespace Piccolo
                 }
             }
 
+            auto lookupEmbeddedName = [message](uint64_t object_handle) -> const char* {
+                if (message == nullptr || object_handle == 0)
+                {
+                    return nullptr;
+                }
+
+                char handle_pattern[32];
+                std::snprintf(handle_pattern, sizeof(handle_pattern), "0x%llx", static_cast<unsigned long long>(object_handle));
+                const char* handle_pos = std::strstr(message, handle_pattern);
+                if (handle_pos == nullptr)
+                {
+                    return nullptr;
+                }
+
+                const char* name_start = std::strchr(handle_pos, '[');
+                if (name_start == nullptr)
+                {
+                    return nullptr;
+                }
+                ++name_start;
+                const char* name_end = std::strchr(name_start, ']');
+                if (name_end == nullptr || name_end == name_start)
+                {
+                    return nullptr;
+                }
+
+                static thread_local std::string embedded_name;
+                embedded_name.assign(name_start, static_cast<size_t>(name_end - name_start));
+                return embedded_name.c_str();
+            };
+
             if (callback_data->objectCount > 0)
             {
                 stream << "\n  objects:";
@@ -888,10 +945,53 @@ namespace Piccolo
                     const VkDebugUtilsObjectNameInfoEXT& object = callback_data->pObjects[i];
                     stream << "\n    - type=" << vkObjectTypeName(object.objectType)
                            << " handle=0x" << std::hex << object.objectHandle << std::dec;
-                    if (object.pObjectName != nullptr && object.pObjectName[0] != '\0')
+                    const char* object_name = object.pObjectName;
+                    if (object_name == nullptr || object_name[0] == '\0')
                     {
-                        stream << " name=" << object.pObjectName;
+                        object_name = lookupEmbeddedName(object.objectHandle);
                     }
+                    if (object_name != nullptr && object_name[0] != '\0')
+                    {
+                        stream << " name=" << object_name;
+                    }
+                }
+            }
+
+            if (message != nullptr)
+            {
+                bool printed_embedded = false;
+                const char* scan = message;
+                while (*scan != '\0')
+                {
+                    if (scan[0] == '0' && scan[1] == 'x')
+                    {
+                        const char* hex_start = scan + 2;
+                        const char* cursor    = hex_start;
+                        while (*cursor != '\0' && std::isxdigit(static_cast<unsigned char>(*cursor)))
+                        {
+                            ++cursor;
+                        }
+                        if (cursor != hex_start && *cursor == '[')
+                        {
+                            const char* name_start = cursor + 1;
+                            const char* name_end   = std::strchr(name_start, ']');
+                            if (name_end != nullptr && name_end != name_start)
+                            {
+                                if (!printed_embedded)
+                                {
+                                    stream << "\n  message_embedded_names:";
+                                    printed_embedded = true;
+                                }
+                                stream << "\n    - handle=0x";
+                                stream.write(hex_start, static_cast<std::streamsize>(cursor - hex_start));
+                                stream << " name=";
+                                stream.write(name_start, static_cast<std::streamsize>(name_end - name_start));
+                            }
+                            scan = name_end != nullptr ? name_end + 1 : cursor;
+                            continue;
+                        }
+                    }
+                    ++scan;
                 }
             }
 
@@ -1354,6 +1454,20 @@ namespace Piccolo
                                   vk_pipeline->debugNameCStr());
     }
 
+    void VulkanRHI::setDebugObjectName(RHIBuffer* buffer, const char* name)
+    {
+        if (buffer == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_buffer = static_cast<VulkanBuffer*>(buffer);
+        vk_buffer->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_buffer->getResource()),
+                                  VK_OBJECT_TYPE_BUFFER,
+                                  vk_buffer->debugNameCStr());
+    }
+
     void VulkanRHI::setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name)
     {
         if (acceleration_structure == nullptr || name == nullptr)
@@ -1366,6 +1480,11 @@ namespace Piccolo
         applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_as->handle),
                                   VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
                                   vk_as->debugNameCStr());
+        vk_as->applyChildDebugNames(
+            [this](uint64_t object_handle, VkObjectType object_type, const char* child_name) {
+                applyDebugUtilsObjectName(object_handle, object_type, child_name);
+            },
+            name);
     }
 
     void VulkanRHI::loadRayTracingFunctions()
@@ -3857,7 +3976,7 @@ namespace Piccolo
             pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16});
             pool_sizes.push_back({VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4});
             pool_sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLER, 4});
-            // binding 11 is a 1024-element sampled-image array plus binding 1035 (previous accumulation).
+            // binding 11 is a 1024-element sampled-image array.
             pool_sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024 + 8});
             max_sets += 1;
         }

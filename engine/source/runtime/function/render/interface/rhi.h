@@ -212,6 +212,7 @@ namespace Piccolo
         virtual void setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name) {}
         virtual void setDebugObjectName(RHICommandBuffer* command_buffer, const char* name) {}
         virtual void setDebugObjectName(RHIPipeline* pipeline, const char* name) {}
+        virtual void setDebugObjectName(RHIBuffer* buffer, const char* name) {}
         virtual void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) {}
 
         // destory
