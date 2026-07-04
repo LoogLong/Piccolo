@@ -5,6 +5,7 @@
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 #include <optional>
+#include <string>
 
 namespace Piccolo
 {
@@ -12,6 +13,25 @@ namespace Piccolo
     {
     public:
         VmaAllocation allocation {nullptr};
+    };
+
+    class VulkanDebugNameStorage
+    {
+    public:
+        void setDebugName(const char* name)
+        {
+            if (name != nullptr)
+            {
+                m_debug_name = name;
+            }
+        }
+
+        const std::string& getDebugName() const { return m_debug_name; }
+
+        const char* debugNameCStr() const { return m_debug_name.empty() ? nullptr : m_debug_name.c_str(); }
+
+    private:
+        std::string m_debug_name;
     };
 
     class VulkanBuffer : public RHIBuffer
@@ -42,7 +62,7 @@ namespace Piccolo
     private:
         VkBufferView m_resource;
     };
-    class VulkanCommandBuffer : public RHICommandBuffer
+    class VulkanCommandBuffer : public RHICommandBuffer, public VulkanDebugNameStorage
     {
     public:
         void setResource(VkCommandBuffer res)
@@ -84,7 +104,7 @@ namespace Piccolo
     private:
         VkDescriptorPool m_resource;
     };
-    class VulkanDescriptorSet : public RHIDescriptorSet
+    class VulkanDescriptorSet : public RHIDescriptorSet, public VulkanDebugNameStorage
     {
     public:
         void setResource(VkDescriptorSet res)
@@ -182,7 +202,7 @@ namespace Piccolo
     private:
         VkFramebuffer m_resource;
     };
-    class VulkanImage : public RHIImage
+    class VulkanImage : public RHIImage, public VulkanDebugNameStorage
     {
     public:
         void setResource(VkImage res)
@@ -193,10 +213,14 @@ namespace Piccolo
         {
             return m_resource;
         }
+        VkImage getResource() const
+        {
+            return m_resource;
+        }
     private:
         VkImage m_resource;
     };
-    class VulkanImageView : public RHIImageView
+    class VulkanImageView : public RHIImageView, public VulkanDebugNameStorage
     {
     public:
         void setResource(VkImageView res)
@@ -252,7 +276,7 @@ namespace Piccolo
     private:
         VkPhysicalDevice m_resource;
     };
-    class VulkanPipeline : public RHIPipeline
+    class VulkanPipeline : public RHIPipeline, public VulkanDebugNameStorage
     {
     public:
         void setResource(VkPipeline res)

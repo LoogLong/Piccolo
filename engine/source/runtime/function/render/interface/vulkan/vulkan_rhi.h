@@ -163,6 +163,13 @@ namespace Piccolo
         void pushEvent(RHICommandBuffer* commond_buffer, const char* name, const float* color) override;
         void popEvent(RHICommandBuffer* commond_buffer) override;
 
+        void setDebugObjectName(RHIImage* image, const char* name) override;
+        void setDebugObjectName(RHIImageView* image_view, const char* name) override;
+        void setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name) override;
+        void setDebugObjectName(RHICommandBuffer* command_buffer, const char* name) override;
+        void setDebugObjectName(RHIPipeline* pipeline, const char* name) override;
+        void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) override;
+
         // destory
         virtual ~VulkanRHI() override;
         void clear() override;
@@ -246,6 +253,7 @@ namespace Piccolo
         // function pointers
         PFN_vkCmdBeginDebugUtilsLabelEXT _vkCmdBeginDebugUtilsLabelEXT;
         PFN_vkCmdEndDebugUtilsLabelEXT   _vkCmdEndDebugUtilsLabelEXT;
+        PFN_vkSetDebugUtilsObjectNameEXT _vkSetDebugUtilsObjectNameEXT {nullptr};
         PFN_vkWaitForFences         _vkWaitForFences;
         PFN_vkResetFences           _vkResetFences;
         PFN_vkResetCommandPool      _vkResetCommandPool;
@@ -308,8 +316,10 @@ namespace Piccolo
         // list and returns the pNext feature chain to enable on the device (valid while build vectors live).
         bool checkRayTracingSupport(VkPhysicalDevice physical_device) const;
         void loadRayTracingFunctions();
+        void loadDebugUtilsDeviceFunctions();
         void queryRayTracingProperties();
         VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer) const;
+        void applyDebugUtilsObjectName(uint64_t object_handle, VkObjectType object_type, const char* name);
 
         // default sampler cache
         RHISampler* m_linear_sampler = nullptr;

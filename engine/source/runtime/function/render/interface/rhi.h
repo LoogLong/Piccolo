@@ -206,6 +206,14 @@ namespace Piccolo
         virtual void pushEvent(RHICommandBuffer* commond_buffer, const char* name, const float* color) = 0;
         virtual void popEvent(RHICommandBuffer* commond_buffer) = 0;
 
+        // Debug-only: copies name into the backend wrapper and registers it with the validation layer.
+        virtual void setDebugObjectName(RHIImage* image, const char* name) {}
+        virtual void setDebugObjectName(RHIImageView* image_view, const char* name) {}
+        virtual void setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name) {}
+        virtual void setDebugObjectName(RHICommandBuffer* command_buffer, const char* name) {}
+        virtual void setDebugObjectName(RHIPipeline* pipeline, const char* name) {}
+        virtual void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) {}
+
         // destory
         virtual void clear() = 0;
         virtual void clearSwapchain() = 0;

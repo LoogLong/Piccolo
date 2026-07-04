@@ -406,6 +406,10 @@ namespace Piccolo
         MainCameraPass& main_camera_pass = *(static_cast<MainCameraPass*>(m_main_camera_pass.get()));
         if (RHIImage* backup_odd_image = main_camera_pass.getBackupOddImage(); backup_odd_image != nullptr)
         {
+            constexpr float k_path_tracing_render_debug_color[4] = {0.9f, 0.5f, 0.2f, 1.0f};
+            render_rhi->pushEvent(render_rhi->getCurrentCommandBuffer(),
+                                  "PathTracingRender.backup_odd_barrier",
+                                  k_path_tracing_render_debug_color);
             RHIImageMemoryBarrier barrier {};
             barrier.sType                         = RHI_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             barrier.srcAccessMask                 = RHI_ACCESS_SHADER_WRITE_BIT;
@@ -431,6 +435,7 @@ namespace Piccolo
                                            nullptr,
                                            1,
                                            &barrier);
+            render_rhi->popEvent(render_rhi->getCurrentCommandBuffer());
         }
 
         ParticlePass&    particle_pass   = *(static_cast<ParticlePass*>(m_particle_pass.get()));
@@ -438,10 +443,17 @@ namespace Piccolo
         CombineUIPass&    combine_ui_pass = *(static_cast<CombineUIPass*>(m_combine_ui_pass.get()));
 
         const uint32_t current_swapchain_image_index = render_rhi->getCurrentSwapchainImageIndex();
-        main_camera_pass.drawPathTracing(particle_pass,
-                              ui_pass,
-                              combine_ui_pass,
-                              current_swapchain_image_index);
+        {
+            constexpr float k_path_tracing_render_debug_color[4] = {0.9f, 0.5f, 0.2f, 1.0f};
+            render_rhi->pushEvent(render_rhi->getCurrentCommandBuffer(),
+                                  "PathTracingRender.composite_pass",
+                                  k_path_tracing_render_debug_color);
+            main_camera_pass.drawPathTracing(particle_pass,
+                                  ui_pass,
+                                  combine_ui_pass,
+                                  current_swapchain_image_index);
+            render_rhi->popEvent(render_rhi->getCurrentCommandBuffer());
+        }
 
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));

@@ -1,5 +1,6 @@
 #include "runtime/function/render/interface/vulkan/vulkan_rhi.h"
 #include "runtime/function/render/interface/vulkan/vulkan_util.h"
+#include "runtime/function/render/interface/vulkan/vulkan_rhi_resource.h"
 
 #include "runtime/function/render/window_system.h"
 #include "runtime/core/base/macro.h"
@@ -70,8 +71,10 @@
 #endif
 
 #include <cstring>
+#include <cstdio>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -80,7 +83,7 @@ namespace Piccolo
     namespace
     {
         // Vulkan-backed implementation of the opaque RHI ray tracing handles.
-        struct VulkanRHIAccelerationStructure : public RHIAccelerationStructure
+        struct VulkanRHIAccelerationStructure : public RHIAccelerationStructure, VulkanDebugNameStorage
         {
             VkAccelerationStructureKHR   handle {VK_NULL_HANDLE};
             VkBuffer                     as_buffer {VK_NULL_HANDLE};
@@ -809,12 +812,106 @@ namespace Piccolo
     }
 
     // debug callback
+    namespace
+    {
+        const char* vkObjectTypeName(VkObjectType object_type)
+        {
+            switch (object_type)
+            {
+                case VK_OBJECT_TYPE_INSTANCE: return "VK_OBJECT_TYPE_INSTANCE";
+                case VK_OBJECT_TYPE_PHYSICAL_DEVICE: return "VK_OBJECT_TYPE_PHYSICAL_DEVICE";
+                case VK_OBJECT_TYPE_DEVICE: return "VK_OBJECT_TYPE_DEVICE";
+                case VK_OBJECT_TYPE_QUEUE: return "VK_OBJECT_TYPE_QUEUE";
+                case VK_OBJECT_TYPE_SEMAPHORE: return "VK_OBJECT_TYPE_SEMAPHORE";
+                case VK_OBJECT_TYPE_COMMAND_BUFFER: return "VK_OBJECT_TYPE_COMMAND_BUFFER";
+                case VK_OBJECT_TYPE_FENCE: return "VK_OBJECT_TYPE_FENCE";
+                case VK_OBJECT_TYPE_DEVICE_MEMORY: return "VK_OBJECT_TYPE_DEVICE_MEMORY";
+                case VK_OBJECT_TYPE_BUFFER: return "VK_OBJECT_TYPE_BUFFER";
+                case VK_OBJECT_TYPE_IMAGE: return "VK_OBJECT_TYPE_IMAGE";
+                case VK_OBJECT_TYPE_EVENT: return "VK_OBJECT_TYPE_EVENT";
+                case VK_OBJECT_TYPE_QUERY_POOL: return "VK_OBJECT_TYPE_QUERY_POOL";
+                case VK_OBJECT_TYPE_BUFFER_VIEW: return "VK_OBJECT_TYPE_BUFFER_VIEW";
+                case VK_OBJECT_TYPE_IMAGE_VIEW: return "VK_OBJECT_TYPE_IMAGE_VIEW";
+                case VK_OBJECT_TYPE_SHADER_MODULE: return "VK_OBJECT_TYPE_SHADER_MODULE";
+                case VK_OBJECT_TYPE_PIPELINE_CACHE: return "VK_OBJECT_TYPE_PIPELINE_CACHE";
+                case VK_OBJECT_TYPE_PIPELINE_LAYOUT: return "VK_OBJECT_TYPE_PIPELINE_LAYOUT";
+                case VK_OBJECT_TYPE_RENDER_PASS: return "VK_OBJECT_TYPE_RENDER_PASS";
+                case VK_OBJECT_TYPE_PIPELINE: return "VK_OBJECT_TYPE_PIPELINE";
+                case VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT: return "VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT";
+                case VK_OBJECT_TYPE_SAMPLER: return "VK_OBJECT_TYPE_SAMPLER";
+                case VK_OBJECT_TYPE_DESCRIPTOR_POOL: return "VK_OBJECT_TYPE_DESCRIPTOR_POOL";
+                case VK_OBJECT_TYPE_DESCRIPTOR_SET: return "VK_OBJECT_TYPE_DESCRIPTOR_SET";
+                case VK_OBJECT_TYPE_FRAMEBUFFER: return "VK_OBJECT_TYPE_FRAMEBUFFER";
+                case VK_OBJECT_TYPE_COMMAND_POOL: return "VK_OBJECT_TYPE_COMMAND_POOL";
+                case VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR: return "VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR";
+                default: return "VK_OBJECT_TYPE_UNKNOWN";
+            }
+        }
+
+        std::string formatValidationMessage(const VkDebugUtilsMessengerCallbackDataEXT* callback_data)
+        {
+            std::ostringstream stream;
+            stream << "[Vulkan Validation]";
+
+            if (callback_data->pMessageIdName != nullptr && callback_data->pMessageIdName[0] != '\0')
+            {
+                stream << " " << callback_data->pMessageIdName;
+            }
+
+            stream << "\n  message: " << (callback_data->pMessage != nullptr ? callback_data->pMessage : "(null)");
+
+            if (callback_data->cmdBufLabelCount > 0)
+            {
+                stream << "\n  cmd_buf_labels:";
+                for (uint32_t i = 0; i < callback_data->cmdBufLabelCount; ++i)
+                {
+                    const char* label_name = callback_data->pCmdBufLabels[i].pLabelName;
+                    stream << "\n    - " << (label_name != nullptr ? label_name : "(null)");
+                }
+            }
+
+            if (callback_data->queueLabelCount > 0)
+            {
+                stream << "\n  queue_labels:";
+                for (uint32_t i = 0; i < callback_data->queueLabelCount; ++i)
+                {
+                    const char* label_name = callback_data->pQueueLabels[i].pLabelName;
+                    stream << "\n    - " << (label_name != nullptr ? label_name : "(null)");
+                }
+            }
+
+            if (callback_data->objectCount > 0)
+            {
+                stream << "\n  objects:";
+                for (uint32_t i = 0; i < callback_data->objectCount; ++i)
+                {
+                    const VkDebugUtilsObjectNameInfoEXT& object = callback_data->pObjects[i];
+                    stream << "\n    - type=" << vkObjectTypeName(object.objectType)
+                           << " handle=0x" << std::hex << object.objectHandle << std::dec;
+                    if (object.pObjectName != nullptr && object.pObjectName[0] != '\0')
+                    {
+                        stream << " name=" << object.pObjectName;
+                    }
+                }
+            }
+
+            return stream.str();
+        }
+    } // namespace
+
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT,
                                                         VkDebugUtilsMessageTypeFlagsEXT,
                                                         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                                                         void*)
     {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+        if (pCallbackData == nullptr)
+        {
+            return VK_FALSE;
+        }
+
+        const std::string formatted_message = formatValidationMessage(pCallbackData);
+        std::cerr << formatted_message << std::endl;
+        LOG_ERROR("{}", formatted_message);
         return VK_FALSE;
     }
 
@@ -1104,6 +1201,8 @@ namespace Piccolo
         _vkCmdBindDescriptorSets = (PFN_vkCmdBindDescriptorSets)vkGetDeviceProcAddr(m_device, "vkCmdBindDescriptorSets");
         _vkCmdClearAttachments   = (PFN_vkCmdClearAttachments)vkGetDeviceProcAddr(m_device, "vkCmdClearAttachments");
 
+        loadDebugUtilsDeviceFunctions();
+
         if (m_ray_tracing_enabled)
         {
             loadRayTracingFunctions();
@@ -1156,6 +1255,117 @@ namespace Piccolo
         return vulkan12_features.bufferDeviceAddress == VK_TRUE &&
                acceleration_structure_features.accelerationStructure == VK_TRUE &&
                ray_tracing_pipeline_features.rayTracingPipeline == VK_TRUE;
+    }
+
+    void VulkanRHI::loadDebugUtilsDeviceFunctions()
+    {
+        if (!m_enable_debug_utils_label || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        _vkSetDebugUtilsObjectNameEXT =
+            (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(m_device, "vkSetDebugUtilsObjectNameEXT");
+    }
+
+    void VulkanRHI::applyDebugUtilsObjectName(uint64_t object_handle, VkObjectType object_type, const char* name)
+    {
+        if (!m_enable_debug_utils_label || object_handle == 0 || name == nullptr || name[0] == '\0' ||
+            _vkSetDebugUtilsObjectNameEXT == nullptr || m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        VkDebugUtilsObjectNameInfoEXT name_info {};
+        name_info.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        name_info.objectType   = object_type;
+        name_info.objectHandle = object_handle;
+        name_info.pObjectName  = name;
+        _vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
+    }
+
+    void VulkanRHI::setDebugObjectName(RHIImage* image, const char* name)
+    {
+        if (image == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_image = static_cast<VulkanImage*>(image);
+        vk_image->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_image->getResource()),
+                                  VK_OBJECT_TYPE_IMAGE,
+                                  vk_image->debugNameCStr());
+    }
+
+    void VulkanRHI::setDebugObjectName(RHIImageView* image_view, const char* name)
+    {
+        if (image_view == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_image_view = static_cast<VulkanImageView*>(image_view);
+        vk_image_view->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_image_view->getResource()),
+                                  VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  vk_image_view->debugNameCStr());
+    }
+
+    void VulkanRHI::setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name)
+    {
+        if (descriptor_set == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_descriptor_set = static_cast<VulkanDescriptorSet*>(descriptor_set);
+        vk_descriptor_set->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_descriptor_set->getResource()),
+                                  VK_OBJECT_TYPE_DESCRIPTOR_SET,
+                                  vk_descriptor_set->debugNameCStr());
+    }
+
+    void VulkanRHI::setDebugObjectName(RHICommandBuffer* command_buffer, const char* name)
+    {
+        if (command_buffer == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_command_buffer = static_cast<VulkanCommandBuffer*>(command_buffer);
+        vk_command_buffer->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_command_buffer->getResource()),
+                                  VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                  vk_command_buffer->debugNameCStr());
+    }
+
+    void VulkanRHI::setDebugObjectName(RHIPipeline* pipeline, const char* name)
+    {
+        if (pipeline == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_pipeline = static_cast<VulkanPipeline*>(pipeline);
+        vk_pipeline->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_pipeline->getResource()),
+                                  VK_OBJECT_TYPE_PIPELINE,
+                                  vk_pipeline->debugNameCStr());
+    }
+
+    void VulkanRHI::setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name)
+    {
+        if (acceleration_structure == nullptr || name == nullptr)
+        {
+            return;
+        }
+
+        auto* vk_as = static_cast<VulkanRHIAccelerationStructure*>(acceleration_structure);
+        vk_as->setDebugName(name);
+        applyDebugUtilsObjectName(reinterpret_cast<uint64_t>(vk_as->handle),
+                                  VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                  vk_as->debugNameCStr());
     }
 
     void VulkanRHI::loadRayTracingFunctions()
@@ -3604,6 +3814,10 @@ namespace Piccolo
             m_vk_command_buffers[i] = vk_command_buffer;
             m_command_buffers[i] = new VulkanCommandBuffer();
             ((VulkanCommandBuffer*)m_command_buffers[i])->setResource(vk_command_buffer);
+
+            char command_buffer_name[64];
+            std::snprintf(command_buffer_name, sizeof(command_buffer_name), "graphics.frame[%u]", i);
+            setDebugObjectName(m_command_buffers[i], command_buffer_name);
         }
     }
 

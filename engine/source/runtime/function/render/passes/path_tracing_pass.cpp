@@ -32,6 +32,24 @@ namespace Piccolo
         {
             return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
         }
+
+        constexpr float k_path_tracing_debug_color[4] = {0.9f, 0.5f, 0.2f, 1.0f};
+
+        void tagPathTracingSceneOutput(RHI* rhi, RHIImage* image, RHIImageView* image_view)
+        {
+            if (rhi == nullptr)
+            {
+                return;
+            }
+            if (image != nullptr)
+            {
+                rhi->setDebugObjectName(image, "PathTracing.scene_output (backup_odd)");
+            }
+            if (image_view != nullptr)
+            {
+                rhi->setDebugObjectName(image_view, "PathTracing.scene_output_view (backup_odd)");
+            }
+        }
     } // namespace
 
     PathTracingPass::~PathTracingPass()
@@ -146,6 +164,7 @@ namespace Piccolo
             setupDescriptorSetLayout();
             setupPipelineLayout();
             setupDescriptorSet();
+            tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
             if (!ensureFrameDataBuffer())
             {
                 logInitializeSkipOnce("failed to create path tracing frame data buffer");
@@ -244,6 +263,12 @@ namespace Piccolo
             return false;
         }
 
+        tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
+
+        const float* debug_color = k_path_tracing_debug_color;
+        m_rhi->pushEvent(command_buffer, "PathTracing.dispatch", debug_color);
+
+        m_rhi->pushEvent(command_buffer, "PathTracing.layoutTransitions", debug_color);
         transitionImage(m_scene_output_image,
                         RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         RHI_IMAGE_LAYOUT_GENERAL,
@@ -268,12 +293,19 @@ namespace Piccolo
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
         m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+        m_rhi->popEvent(command_buffer);
+
+        m_rhi->pushEvent(command_buffer, "PathTracing.updateDescriptorSet", debug_color);
         if (!updateDescriptorSet())
         {
+            m_rhi->popEvent(command_buffer);
+            m_rhi->popEvent(command_buffer);
             logDispatchFailureOnce("failed to update path tracing descriptors");
             return false;
         }
+        m_rhi->popEvent(command_buffer);
 
+        m_rhi->pushEvent(command_buffer, "PathTracing.traceRays", debug_color);
         m_rhi->cmdBindPipelinePFN(command_buffer,
                                   RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                                   m_ray_tracing_pipeline);
@@ -294,7 +326,9 @@ namespace Piccolo
         dispatch_desc.height               = m_rhi->getSwapchainInfo().extent.height;
         dispatch_desc.depth                = 1;
         m_rhi->cmdTraceRays(command_buffer, &dispatch_desc);
+        m_rhi->popEvent(command_buffer);
 
+        m_rhi->pushEvent(command_buffer, "PathTracing.postTraceBarriers", debug_color);
         transitionImage(m_scene_output_image,
                         RHI_IMAGE_LAYOUT_GENERAL,
                         RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -318,6 +352,9 @@ namespace Piccolo
         m_accumulation_image_layout      = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
 
+        m_rhi->popEvent(command_buffer);
+        m_rhi->popEvent(command_buffer);
+
         ++m_sample_index;
         if (render_scene->isPathTracingAccumulationDirty())
         {
@@ -330,6 +367,7 @@ namespace Piccolo
     {
         m_scene_output_image      = scene_output_image;
         m_scene_output_image_view = scene_output_image_view;
+        tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
         destroyAccumulationImage();
         resetAccumulation();
     }
@@ -470,6 +508,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate path tracing descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_set, "PathTracing.descriptor_set");
     }
 
     bool PathTracingPass::setupRayTracingPipeline()
@@ -500,8 +539,14 @@ namespace Piccolo
         create_info.shader_library.miss_export                = kPathTracingMissExport;
         create_info.shader_library.closest_hit_export         = kPathTracingClosestHitExport;
         create_info.shader_library.hit_group_export           = kPathTracingHitGroupExport;
-        return m_rhi->createRayTracingPipeline(&create_info, m_ray_tracing_pipeline) &&
-               m_ray_tracing_pipeline != nullptr;
+        if (!m_rhi->createRayTracingPipeline(&create_info, m_ray_tracing_pipeline) ||
+            m_ray_tracing_pipeline == nullptr)
+        {
+            return false;
+        }
+
+        m_rhi->setDebugObjectName(m_ray_tracing_pipeline, "PathTracing.rt_pipeline");
+        return true;
     }
 
     bool PathTracingPass::setupShaderBindingTable()
@@ -645,6 +690,10 @@ namespace Piccolo
                                m_accumulation_prev_image_view);
         m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_extent = extent;
+        m_rhi->setDebugObjectName(m_accumulation_image, "PathTracing.accumulation.write");
+        m_rhi->setDebugObjectName(m_accumulation_prev_image, "PathTracing.accumulation.prev_read");
+        m_rhi->setDebugObjectName(m_accumulation_image_view, "PathTracing.accumulation.write_view");
+        m_rhi->setDebugObjectName(m_accumulation_prev_image_view, "PathTracing.accumulation.prev_read_view");
         resetAccumulation();
         return m_accumulation_image != nullptr && m_accumulation_image_view != nullptr;
     }
@@ -1207,6 +1256,7 @@ namespace Piccolo
         destroyTopLevelAS();
         m_top_level_as          = new_top_level_as;
         m_tlas_instance_count   = instance_count;
+        m_rhi->setDebugObjectName(m_top_level_as, "PathTracing.tlas");
         scene.clearPathTracingTLASDirty();
         if (static_data_changed)
         {
