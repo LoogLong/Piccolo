@@ -62,7 +62,6 @@ _deps
 *.so
 *.dylib
 *.dll
-!engine/3rdparty/dxc_*/bin/**/*.dll
 
 # Fortran module files
 *.mod
@@ -73,11 +72,9 @@ _deps
 *.la
 *.a
 *.lib
-!engine/3rdparty/dxc_*/lib/**/*.lib
 
 # Executables
 *.exe
-!engine/3rdparty/dxc_*/bin/**/*.exe
 *.out
 *.app
 # finish C++.gitignore
@@ -105,19 +102,13 @@ mono_crash.*
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
-x64/
-!engine/3rdparty/dxc_*/bin/x64/
-!engine/3rdparty/dxc_*/lib/x64/
-x86/
-!engine/3rdparty/dxc_*/bin/x86/
-!engine/3rdparty/dxc_*/lib/x86/
+/x64/
+/x86/
 [Ww][Ii][Nn]32/
-[Aa][Rr][Mm]/
-!engine/3rdparty/dxc_*/bin/arm64/
-!engine/3rdparty/dxc_*/lib/arm64/
-[Aa][Rr][Mm]64/
+/[Aa][Rr][Mm]/
+/[Aa][Rr][Mm]64/
 bld/
-[Bb]in/
+/[Bb]in/
 [Oo]bj/
 [Oo]ut/
 

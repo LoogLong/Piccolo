@@ -1,4 +1,2 @@
 generated/
-bin/
-!3rdparty/dxc_*/bin/
-!3rdparty/dxc_*/bin/**
+/bin/

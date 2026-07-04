@@ -1,0 +1,6 @@
+# Vendored DirectX Shader Compiler — track the entire directory tree.
+# Overrides repository-wide binary and build-output ignore rules here only.
+*
+!/
+!**
+!**/**
