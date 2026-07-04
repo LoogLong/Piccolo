@@ -1,3 +1,4 @@
+#include "runtime/function/render/render_backend.h"
 #include "runtime/function/render/render_pipeline.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/render_backend.h"

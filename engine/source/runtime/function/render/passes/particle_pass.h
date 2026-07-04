@@ -74,6 +74,8 @@ namespace Piccolo
 
         void updateAfterFramebufferRecreate();
 
+        void waitAllPendingGpuWork();
+
         void teardown() override;
 
         void setEmitterCount(int count);
@@ -119,6 +121,9 @@ namespace Piccolo
         RHIBuffer* m_scene_uniform_buffer = nullptr;
         RHIBuffer* m_compute_uniform_buffer = nullptr;
         RHIBuffer* m_particle_billboard_uniform_buffer = nullptr;
+        RHIDeviceMemory* m_scene_uniform_memory = nullptr;
+        RHIDeviceMemory* m_compute_uniform_memory = nullptr;
+        RHIDeviceMemory* m_particle_billboard_uniform_memory = nullptr;
 
         RHIViewport m_viewport_params;
 
@@ -211,12 +216,15 @@ namespace Piccolo
 
         DefaultRNG m_random_engine;
 
-        int m_emitter_count;
+        int m_emitter_count {0};
 
         static constexpr bool s_verbose_particle_alive_info {false};
 
         std::vector<ParticleEmitterID> m_emitter_tick_indices;
 
         std::vector<ParticleEmitterTransformDesc> m_emitter_transform_indices;
+
+        std::vector<RHISampler*> m_owned_samplers;
+        void                     destroyOwnedSamplers();
     };
 } // namespace Piccolo

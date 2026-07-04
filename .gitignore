@@ -4,6 +4,9 @@ build_dual_backend/
 build_vulkan_only/
 .worktrees/
 
+# local plans / agent notes (not version controlled)
+.local/
+
 # user-specific ImGui layout, must not be committed
 imgui.ini
 # large generated / runtime animation binaries, host via LFS or a download step

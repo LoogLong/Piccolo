@@ -74,6 +74,8 @@ namespace Piccolo
             return;
         }
 
+        flushPendingDestroys();
+
         if (m_shader_binding_table != nullptr)
         {
             m_rhi->destroyShaderBindingTable(m_shader_binding_table);
@@ -86,9 +88,9 @@ namespace Piccolo
         }
 
         destroyTopLevelAS();
+        flushPendingDestroys();
         destroyAccumulationImage();
         destroySkinnedVertexFallbackBuffer();
-        flushPendingDestroys();
 
         if (m_frame_data_buffer != nullptr)
         {
@@ -229,9 +231,9 @@ namespace Piccolo
             resetAccumulation();
             return false;
         }
-        if (!updateFrameData(m_tlas_instance_count) || !updateDescriptorSet())
+        if (!updateFrameData(m_tlas_instance_count))
         {
-            logDispatchFailureOnce("failed to update path tracing frame data or descriptors");
+            logDispatchFailureOnce("failed to update path tracing frame data");
             return false;
         }
 
@@ -265,6 +267,12 @@ namespace Piccolo
                         RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
         m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        if (!updateDescriptorSet())
+        {
+            logDispatchFailureOnce("failed to update path tracing descriptors");
+            return false;
+        }
 
         m_rhi->cmdBindPipelinePFN(command_buffer,
                                   RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -301,14 +309,14 @@ namespace Piccolo
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_SHADER_WRITE_BIT,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
-        // Keep prev accumulation image in GENERAL layout for next frame's read
-        // (it will be transitioned to SHADER_READ_ONLY_OPTIMAL in the next dispatch)
 
-        // Swap accumulation ping-pong
         std::swap(m_accumulation_image, m_accumulation_prev_image);
         std::swap(m_accumulation_image_view, m_accumulation_prev_image_view);
         std::swap(m_accumulation_memory, m_accumulation_prev_memory);
-        std::swap(m_accumulation_image_layout, m_accumulation_prev_image_layout);
+        // After swap: former read buffer is next frame's accumulation write target;
+        // former write buffer is next frame's prev-read target.
+        m_accumulation_image_layout      = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        m_accumulation_prev_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
 
         ++m_sample_index;
         if (render_scene->isPathTracingAccumulationDirty())
@@ -735,28 +743,39 @@ namespace Piccolo
             m_linear_sampler          = m_render_resource_impl->m_global_render_resource._ibl_resource._irradiance_texture_sampler;
         }
 
+        RHIImageView* default_material_texture_view =
+            m_render_resource_impl->getPathTracingDefaultMaterialTextureView();
+        if (default_material_texture_view == nullptr)
+        {
+            return false;
+        }
+
         if (!m_static_descriptors_written)
         {
             const RHIDescriptorImageInfo fallback_info {
-                nullptr, m_specular_texture_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                nullptr, default_material_texture_view, RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             m_texture_array_views.assign(kPathTracingMaterialTextureCount, fallback_info);
 
             const auto fallback_texture_view = [&](RHIImageView* view) {
-                return view != nullptr ? view : m_specular_texture_view;
+                return view != nullptr ? view : default_material_texture_view;
             };
             const auto& material_records = m_render_resource_impl->getPathTracingMaterialTextureViews();
             for (uint32_t material_index = 0; material_index < material_records.size(); ++material_index)
             {
                 const RenderPBRMaterialGPUResource* material = material_records[material_index].material;
-                if (material == nullptr)
-                {
-                    continue;
-                }
-
                 const uint32_t texture_base = material_index * 4u;
                 if (texture_base + 3u >= kPathTracingMaterialTextureCount)
                 {
                     break;
+                }
+
+                if (material == nullptr)
+                {
+                    for (uint32_t slot = 0; slot < 4u; ++slot)
+                    {
+                        m_texture_array_views[texture_base + slot] = fallback_info;
+                    }
+                    continue;
                 }
 
                 m_texture_array_views[texture_base + 0] = {

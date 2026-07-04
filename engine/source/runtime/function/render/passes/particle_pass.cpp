@@ -12,23 +12,6 @@ namespace Piccolo
 {
     void ParticleEmitterBufferBatch::freeUpBatch(std::shared_ptr<RHI> rhi)
     {
-        rhi->freeMemory(m_counter_host_memory);
-        rhi->freeMemory(m_counter_readback_memory);
-        for (RHIDeviceMemory*& memory : m_counter_readback_memories)
-        {
-            rhi->freeMemory(memory);
-        }
-        m_counter_readback_memories.clear();
-        rhi->freeMemory(m_position_host_memory);
-        rhi->freeMemory(m_position_device_memory);
-        rhi->freeMemory(m_counter_device_memory);
-        rhi->freeMemory(m_indirect_dispatch_argument_memory);
-        rhi->freeMemory(m_alive_list_memory);
-        rhi->freeMemory(m_alive_list_next_memory);
-        rhi->freeMemory(m_dead_list_memory);
-        rhi->freeMemory(m_particle_component_res_memory);
-        rhi->freeMemory(m_position_render_memory);
-
         rhi->destroyBuffer(m_position_render_buffer);
         rhi->destroyBuffer(m_position_device_buffer);
         rhi->destroyBuffer(m_position_host_buffer);
@@ -45,6 +28,23 @@ namespace Piccolo
         rhi->destroyBuffer(m_alive_list_next_buffer);
         rhi->destroyBuffer(m_dead_list_buffer);
         rhi->destroyBuffer(m_particle_component_res_buffer);
+
+        rhi->freeMemory(m_counter_host_memory);
+        rhi->freeMemory(m_counter_readback_memory);
+        for (RHIDeviceMemory*& memory : m_counter_readback_memories)
+        {
+            rhi->freeMemory(memory);
+        }
+        m_counter_readback_memories.clear();
+        rhi->freeMemory(m_position_host_memory);
+        rhi->freeMemory(m_position_device_memory);
+        rhi->freeMemory(m_counter_device_memory);
+        rhi->freeMemory(m_indirect_dispatch_argument_memory);
+        rhi->freeMemory(m_alive_list_memory);
+        rhi->freeMemory(m_alive_list_next_memory);
+        rhi->freeMemory(m_dead_list_memory);
+        rhi->freeMemory(m_particle_component_res_memory);
+        rhi->freeMemory(m_position_render_memory);
     }
 
     void ParticlePass::copyNormalAndDepthImage()
@@ -293,6 +293,34 @@ namespace Piccolo
 
     ParticlePass::~ParticlePass() {}
 
+    void ParticlePass::waitAllPendingGpuWork()
+    {
+        if (m_rhi == nullptr || !m_rhi->usesDedicatedComputeSubmission())
+        {
+            // Vulkan path: particle compute is submitted and waited inline in simulate().
+            return;
+        }
+
+        for (uint32_t frame_index = 0; frame_index < m_compute_fences.size(); ++frame_index)
+        {
+            if (frame_index >= m_compute_readback_pending.size() || !m_compute_readback_pending[frame_index])
+            {
+                continue;
+            }
+
+            RHIFence* compute_fence = m_compute_fences[frame_index];
+            if (compute_fence != nullptr)
+            {
+                m_rhi->waitForFencesPFN(1, &compute_fence, RHI_TRUE, UINT64_MAX);
+            }
+            m_compute_readback_pending[frame_index] = false;
+            if (frame_index < m_compute_readback_emitters.size())
+            {
+                m_compute_readback_emitters[frame_index].clear();
+            }
+        }
+    }
+
     void ParticlePass::teardown()
     {
         if (m_rhi == nullptr)
@@ -314,10 +342,19 @@ namespace Piccolo
 
         m_rhi->destroyBuffer(m_scene_uniform_buffer);
         m_scene_uniform_buffer = nullptr;
+        m_rhi->freeMemory(m_scene_uniform_memory);
+        m_scene_uniform_memory = nullptr;
+
         m_rhi->destroyBuffer(m_compute_uniform_buffer);
         m_compute_uniform_buffer = nullptr;
+        m_rhi->freeMemory(m_compute_uniform_memory);
+        m_compute_uniform_memory = nullptr;
+
         m_rhi->destroyBuffer(m_particle_billboard_uniform_buffer);
         m_particle_billboard_uniform_buffer = nullptr;
+        m_rhi->freeMemory(m_particle_billboard_uniform_memory);
+        m_particle_billboard_uniform_memory = nullptr;
+
         m_scene_uniform_buffer_mapped = nullptr;
         m_particle_compute_buffer_mapped = nullptr;
         m_particle_billboard_uniform_buffer_mapped = nullptr;
@@ -367,8 +404,27 @@ namespace Piccolo
             m_fence = nullptr;
         }
 
+        destroyOwnedSamplers();
+
         teardownCommonResources(false);
         m_render_pass = nullptr;
+    }
+
+    void ParticlePass::destroyOwnedSamplers()
+    {
+        if (m_rhi == nullptr)
+        {
+            return;
+        }
+
+        for (RHISampler* sampler : m_owned_samplers)
+        {
+            if (sampler != nullptr)
+            {
+                m_rhi->destroySampler(sampler);
+            }
+        }
+        m_owned_samplers.clear();
     }
 
     void ParticlePass::teardownAttachments()
@@ -632,6 +688,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create sampler error");
             }
+            m_owned_samplers.push_back(sampler);
 
             RHIDescriptorImageInfo particle_texture_image_info = {};
             particle_texture_image_info.sampler                = sampler;
@@ -1224,9 +1281,10 @@ namespace Piccolo
         shaderStage.pSpecializationInfo              = RHI_NULL_HANDLE;
 
         {
-            shaderStage.module =
+            RHIShader* kickoff_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLE_KICKOFF_COMP));
-            assert(shaderStage.module != RHI_NULL_HANDLE);
+            assert(kickoff_shader_module != RHI_NULL_HANDLE);
+            shaderStage.module = kickoff_shader_module;
 
             computePipelineCreateInfo.pStages = &shaderStage;
             if (RHI_SUCCESS !=
@@ -1234,12 +1292,14 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle kickoff pipe");
             }
+            m_rhi->destroyShaderModule(kickoff_shader_module);
         }
 
         {
-            shaderStage.module =
+            RHIShader* emit_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLE_EMIT_COMP));
-            assert(shaderStage.module != RHI_NULL_HANDLE);
+            assert(emit_shader_module != RHI_NULL_HANDLE);
+            shaderStage.module = emit_shader_module;
 
             computePipelineCreateInfo.pStages = &shaderStage;
             if (RHI_SUCCESS !=
@@ -1247,12 +1307,14 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle emit pipe");
             }
+            m_rhi->destroyShaderModule(emit_shader_module);
         }
 
         {
-            shaderStage.module =
+            RHIShader* simulate_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PARTICLE_SIMULATE_COMP));
-            assert(shaderStage.module != RHI_NULL_HANDLE);
+            assert(simulate_shader_module != RHI_NULL_HANDLE);
+            shaderStage.module = simulate_shader_module;
 
             computePipelineCreateInfo.pStages = &shaderStage;
 
@@ -1261,6 +1323,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle simulate pipe");
             }
+            m_rhi->destroyShaderModule(simulate_shader_module);
         }
 
         // particle billboard
@@ -1401,6 +1464,11 @@ namespace Piccolo
 
     void ParticlePass::allocateDescriptorSet()
     {
+        if (m_emitter_count <= 0)
+        {
+            return;
+        }
+
         RHIDescriptorSetAllocateInfo particle_descriptor_set_alloc_info;
         particle_descriptor_set_alloc_info.sType          = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         particle_descriptor_set_alloc_info.descriptorPool = m_rhi->getDescriptorPoor();
@@ -1574,6 +1642,7 @@ namespace Piccolo
                 {
                     throw std::runtime_error("create sampler error");
                 }
+                m_owned_samplers.push_back(sampler);
 
                 RHIDescriptorImageInfo piccolo_texture_image_info = {};
                 piccolo_texture_image_info.sampler                = sampler;
@@ -1640,6 +1709,7 @@ namespace Piccolo
                 {
                     throw std::runtime_error("create sampler error");
                 }
+                m_owned_samplers.push_back(sampler);
 
                 RHIDescriptorImageInfo depth_descriptor_image_info = {};
                 depth_descriptor_image_info.sampler                = sampler;
@@ -1887,8 +1957,8 @@ namespace Piccolo
             bufferBarrier.dstQueueFamilyIndex = RHI_QUEUE_FAMILY_IGNORED;
 
             m_rhi->cmdPipelineBarrier(command_buffer,
-                                      RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                      RHI_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                      RHI_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                                      RHI_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
                                       0,
                                       0,
                                       nullptr,
@@ -2085,26 +2155,25 @@ namespace Piccolo
 
     void ParticlePass::prepareUniformBuffer()
     {
-        RHIDeviceMemory* d_mem;
         m_rhi->createBuffer(sizeof(m_particle_collision_perframe_storage_buffer_object),
                             RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                             RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                             m_scene_uniform_buffer,
-                            d_mem);
+                            m_scene_uniform_memory);
 
-        if (RHI_SUCCESS != m_rhi->mapMemory(d_mem, 0, RHI_WHOLE_SIZE, 0, &m_scene_uniform_buffer_mapped))
+        if (RHI_SUCCESS != m_rhi->mapMemory(m_scene_uniform_memory, 0, RHI_WHOLE_SIZE, 0, &m_scene_uniform_buffer_mapped))
         {
             throw std::runtime_error("map billboard uniform buffer");
         }
-        RHIDeviceMemory* d_uniformdmemory;
 
         m_rhi->createBufferAndInitialize(RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                          RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                          m_compute_uniform_buffer,
-                                         d_uniformdmemory,
+                                         m_compute_uniform_memory,
                                          sizeof(m_ubo));
 
-        if (RHI_SUCCESS != m_rhi->mapMemory(d_uniformdmemory, 0, RHI_WHOLE_SIZE, 0, &m_particle_compute_buffer_mapped))
+        if (RHI_SUCCESS !=
+            m_rhi->mapMemory(m_compute_uniform_memory, 0, RHI_WHOLE_SIZE, 0, &m_particle_compute_buffer_mapped))
         {
             throw std::runtime_error("map buffer");
         }
@@ -2135,15 +2204,17 @@ namespace Piccolo
         memcpy(m_particle_compute_buffer_mapped, &m_ubo, sizeof(m_ubo));
 
         {
-            RHIDeviceMemory* d_mem;
             m_rhi->createBuffer(sizeof(m_particlebillboard_perframe_storage_buffer_object),
                                 RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                 RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                 m_particle_billboard_uniform_buffer,
-                                d_mem);
+                                m_particle_billboard_uniform_memory);
 
-            if (RHI_SUCCESS !=
-                m_rhi->mapMemory(d_mem, 0, RHI_WHOLE_SIZE, 0, &m_particle_billboard_uniform_buffer_mapped))
+            if (RHI_SUCCESS != m_rhi->mapMemory(m_particle_billboard_uniform_memory,
+                                                0,
+                                                RHI_WHOLE_SIZE,
+                                                0,
+                                                &m_particle_billboard_uniform_buffer_mapped))
             {
                 throw std::runtime_error("map billboard uniform buffer");
             }

@@ -1,5 +1,6 @@
 #include "runtime/function/render/render_pipeline_base.h"
 #include "runtime/function/render/debugdraw/debug_draw_manager.h"
+#include "runtime/function/render/passes/particle_pass.h"
 #include "runtime/core/base/macro.h"
 #include "runtime/function/global/global_context.h"
 
@@ -39,6 +40,14 @@ namespace Piccolo
         if (m_ui_pass)
         {
             m_ui_pass->shutdownUIRenderBackend();
+        }
+    }
+
+    void RenderPipelineBase::waitAllPendingGpuWork()
+    {
+        if (m_particle_pass)
+        {
+            static_cast<ParticlePass*>(m_particle_pass.get())->waitAllPendingGpuWork();
         }
     }
 } // namespace Piccolo

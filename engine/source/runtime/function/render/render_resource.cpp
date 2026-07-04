@@ -227,6 +227,12 @@ namespace Piccolo
                           color_grading._color_grading_LUT_texture_image_view,
                           color_grading._color_grading_LUT_texture_image_allocation);
 
+        DefaultMaterialTextureResource& default_material_texture =
+            m_global_render_resource._default_material_texture;
+        release_vma_image(default_material_texture._image,
+                          default_material_texture._image_view,
+                          default_material_texture._allocation);
+
         StorageBuffer& storage = m_global_render_resource._storage_buffer;
         if (storage._global_upload_ringbuffer_memory != nullptr)
         {
@@ -320,6 +326,8 @@ namespace Piccolo
             color_grading_map->m_height,
             color_grading_map->m_pixels,
             color_grading_map->m_format);
+
+        createDefaultMaterialTexture(rhi);
     }
 
     void RenderResource::uploadGameObjectRenderResource(std::shared_ptr<RHI> rhi,
@@ -448,7 +456,18 @@ namespace Piccolo
 
         if (!mesh.path_tracing_vertex_blas_input_ready || !mesh.path_tracing_index_blas_input_ready)
         {
-            LOG_WARN("Path tracing BLAS build skipped because mesh buffers lack RT build-input usage");
+            if (!mesh.path_tracing_vertex_blas_input_ready && !mesh.path_tracing_index_blas_input_ready)
+            {
+                LOG_WARN("Path tracing BLAS build skipped because vertex and index buffers lack RT build-input usage");
+            }
+            else if (!mesh.path_tracing_vertex_blas_input_ready)
+            {
+                LOG_WARN("Path tracing BLAS build skipped because vertex buffer lacks RT build-input usage");
+            }
+            else
+            {
+                LOG_WARN("Path tracing BLAS build skipped because index buffer lacks RT build-input usage");
+            }
             mesh.path_tracing_blas_dirty = true;
             return;
         }
@@ -1439,17 +1458,21 @@ namespace Piccolo
             // allocate asset vertex buffers in device local memory
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 
-            const RHIBufferUsageFlags vertex_buffer_usage = withPathTracingBuildInputUsage(
+            const RHIBufferUsageFlags position_buffer_usage = withPathTracingBuildInputUsage(
                 RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
                 rhi,
-                !enable_vertex_blending);
-            bufferInfo.usage = vertex_buffer_usage;
-            now_mesh.path_tracing_vertex_blas_input_ready = supportsPathTracingMeshInputs(rhi, !enable_vertex_blending);
+                true);
+            const RHIBufferUsageFlags varying_buffer_usage =
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+            now_mesh.path_tracing_vertex_blas_input_ready = rhi != nullptr && rhi->supportsRayTracing();
+
+            bufferInfo.usage = position_buffer_usage;
             bufferInfo.size = vertex_position_buffer_size;
             rhi->createBufferWithAllocation(&bufferInfo,
                                             RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                             now_mesh.mesh_vertex_position_buffer,
                                             now_mesh.mesh_vertex_position_buffer_allocation);
+            bufferInfo.usage = varying_buffer_usage;
             bufferInfo.size = vertex_varying_enable_blending_buffer_size;
             rhi->createBufferWithAllocation(&bufferInfo,
                                             RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1923,5 +1946,24 @@ namespace Piccolo
                        &_storage_buffer._axis_inefficient_storage_buffer_memory_pointer);
 
         static_assert(64 >= sizeof(MeshVertex::VertexJointBinding), "");
+    }
+
+    void RenderResource::createDefaultMaterialTexture(std::shared_ptr<RHI> rhi)
+    {
+        DefaultMaterialTextureResource& resource = m_global_render_resource._default_material_texture;
+        if (resource._image_view != nullptr)
+        {
+            return;
+        }
+
+        static const uint8_t default_pixel[] = {128, 128, 128, 128};
+        rhi->createGlobalImage(resource._image,
+                               resource._image_view,
+                               resource._allocation,
+                               1,
+                               1,
+                               const_cast<uint8_t*>(default_pixel),
+                               RHIFormat::RHI_FORMAT_R8G8B8A8_UNORM,
+                               1);
     }
 } // namespace Piccolo

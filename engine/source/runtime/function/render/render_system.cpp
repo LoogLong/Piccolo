@@ -256,14 +256,19 @@ namespace Piccolo
 
     void RenderSystem::clear()
     {
+        if (m_rhi)
+        {
+            if (m_render_pipeline)
+            {
+                m_render_pipeline->waitAllPendingGpuWork();
+            }
+            m_rhi->waitAllFramesInFlight();
+            m_rhi->waitDeviceIdle();
+        }
+
         if (m_render_pipeline)
         {
             m_render_pipeline->shutdownUIRenderBackend();
-        }
-
-        if (m_rhi)
-        {
-            m_rhi->waitForFences();
         }
 
         if (m_render_scene)

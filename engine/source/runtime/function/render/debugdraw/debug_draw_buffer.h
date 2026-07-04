@@ -95,6 +95,7 @@ namespace Piccolo
         void prepareDescriptorSet();
         void updateDescriptorSet();
         void flushPendingDelete();
+        void flushAllDeferredDeletes();
         void unloadMeshBuffer();
         void loadSphereMeshBuffer();
         void loadCylinderMeshBuffer();

@@ -1,6 +1,7 @@
 #include "runtime/function/global/global_context.h"
 
 #include "core/log/log_system.h"
+#include "runtime/core/base/macro.h"
 
 #include "runtime/engine.h"
 

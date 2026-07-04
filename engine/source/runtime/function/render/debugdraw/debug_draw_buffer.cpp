@@ -1,5 +1,6 @@
 #include "debug_draw_buffer.h"
 #include <stdexcept>
+#include "runtime/core/base/macro.h"
 #include "runtime/function/global/global_context.h"
 #include "runtime/function/render/render_system.h"
 
@@ -15,6 +16,13 @@ namespace Piccolo
     {
         clear();
         unloadMeshBuffer();
+        flushAllDeferredDeletes();
+
+        if (m_descriptor.layout != nullptr)
+        {
+            m_rhi->destroyDescriptorSetLayout(m_descriptor.layout);
+            m_descriptor.layout = nullptr;
+        }
     }
 
     void DebugDrawAllocator::tick()
@@ -153,9 +161,30 @@ namespace Piccolo
         {
             Resource resource_to_delete = m_deffer_delete_queue[current_frame_to_delete].front();
             m_deffer_delete_queue[current_frame_to_delete].pop();
-            if (resource_to_delete.buffer == nullptr)continue;
-            m_rhi->freeMemory(resource_to_delete.memory);
+            if (resource_to_delete.buffer == nullptr)
+            {
+                continue;
+            }
             m_rhi->destroyBuffer(resource_to_delete.buffer);
+            m_rhi->freeMemory(resource_to_delete.memory);
+        }
+    }
+
+    void DebugDrawAllocator::flushAllDeferredDeletes()
+    {
+        for (uint32_t queue_index = 0; queue_index < k_deferred_delete_resource_frame_count; ++queue_index)
+        {
+            while (!m_deffer_delete_queue[queue_index].empty())
+            {
+                Resource resource_to_delete = m_deffer_delete_queue[queue_index].front();
+                m_deffer_delete_queue[queue_index].pop();
+                if (resource_to_delete.buffer == nullptr)
+                {
+                    continue;
+                }
+                m_rhi->destroyBuffer(resource_to_delete.buffer);
+                m_rhi->freeMemory(resource_to_delete.memory);
+            }
         }
     }
 

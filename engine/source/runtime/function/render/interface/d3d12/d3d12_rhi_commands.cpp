@@ -2005,6 +2005,37 @@ void D3D12RHI::waitForFences()
 #endif
     return;
 }
+
+void D3D12RHI::waitAllFramesInFlight()
+{
+#ifdef _WIN32
+    if (!m_frame_fences.empty())
+    {
+        if (!waitForFencesPFN(static_cast<uint32_t>(m_frame_fences.size()),
+                              m_frame_fences.data(),
+                              RHI_TRUE,
+                              UINT64_MAX))
+        {
+            LOG_ERROR("D3D12 waitAllFramesInFlight failed");
+        }
+    }
+#endif
+}
+
+void D3D12RHI::waitDeviceIdle()
+{
+#ifdef _WIN32
+    waitAllFramesInFlight();
+    if (m_graphics_queue != nullptr)
+    {
+        queueWaitIdle(m_graphics_queue);
+    }
+    if (m_compute_queue != nullptr)
+    {
+        queueWaitIdle(m_compute_queue);
+    }
+#endif
+}
 RHICommandBuffer* D3D12RHI::getCurrentCommandBuffer() const
 {
     return m_current_command_buffer;

@@ -42,6 +42,7 @@ namespace Piccolo
 
         void             initializeUIRenderBackend(WindowUI* window_ui);
         void             shutdownUIRenderBackend();
+        void             waitAllPendingGpuWork();
         virtual uint32_t getGuidOfPickedMesh(const Vector2& picked_uv) = 0;
         RenderSceneRenderMode getRequestedSceneRenderMode() const { return m_requested_scene_render_mode; }
         RenderSceneRenderMode getEffectiveSceneRenderMode() const { return m_effective_scene_render_mode; }

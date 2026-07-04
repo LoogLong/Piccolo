@@ -356,6 +356,7 @@ namespace Piccolo
         }
 
         m_rhi->destroyShaderModule(vert_shader_module);
+        m_rhi->destroyShaderModule(frag_shader_module);
     }
     void DirectionalLightShadowPass::setupDescriptorSet()
     {

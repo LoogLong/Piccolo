@@ -176,6 +176,8 @@ namespace Piccolo
 
         virtual void resetCommandPool() = 0;
         virtual void waitForFences() = 0;
+        virtual void waitAllFramesInFlight() = 0;
+        virtual void waitDeviceIdle() = 0;
 
         // query
         virtual void getPhysicalDeviceProperties(RHIPhysicalDeviceProperties* pProperties) = 0;

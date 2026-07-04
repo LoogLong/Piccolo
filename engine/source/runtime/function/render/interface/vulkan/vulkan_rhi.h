@@ -132,6 +132,8 @@ namespace Piccolo
         bool           usesVulkanClipSpace() const override { return true; }
         void resetCommandPool() override;
         void waitForFences() override;
+        void waitAllFramesInFlight() override;
+        void waitDeviceIdle() override;
         bool waitForFences(uint32_t fenceCount, const RHIFence* const* pFences, RHIBool32 waitAll, uint64_t timeout);
 
         // query

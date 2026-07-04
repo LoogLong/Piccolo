@@ -359,6 +359,35 @@ namespace Piccolo
         }
     }
 
+    void VulkanRHI::waitAllFramesInFlight()
+    {
+        if (m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        VkResult res_wait_for_fences =
+            _vkWaitForFences(m_device, k_max_frames_in_flight, m_is_frame_in_flight_fences, VK_TRUE, UINT64_MAX);
+        if (VK_SUCCESS != res_wait_for_fences)
+        {
+            LOG_ERROR("waitAllFramesInFlight failed");
+        }
+    }
+
+    void VulkanRHI::waitDeviceIdle()
+    {
+        if (m_device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+
+        VkResult result = vkDeviceWaitIdle(m_device);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR("vkDeviceWaitIdle failed");
+        }
+    }
+
     bool VulkanRHI::waitForFences(uint32_t fenceCount, const RHIFence* const* pFences, RHIBool32 waitAll, uint64_t timeout)
     {
         //fence
@@ -3206,7 +3235,6 @@ namespace Piccolo
             LOG_ERROR("failed to create ray tracing shader module");
             return false;
         }
-
         auto narrow = [](const wchar_t* w) {
             std::string s;
             if (w != nullptr)
@@ -3262,7 +3290,7 @@ namespace Piccolo
         pipeline_info.layout = static_cast<VulkanPipelineLayout*>(create_info->layout)->getResource();
 
         VkPipeline vk_pipeline = VK_NULL_HANDLE;
-        const VkResult result  = _vkCreateRayTracingPipelines(
+        const         VkResult result  = _vkCreateRayTracingPipelines(
             m_device, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &vk_pipeline);
         vkDestroyShaderModule(m_device, shader_module, nullptr);
         if (result != VK_SUCCESS)
@@ -4166,7 +4194,8 @@ namespace Piccolo
             return;
         }
 
-        vkDestroyShaderModule(m_device, static_cast<VulkanShader*>(shaderModule)->getResource(), nullptr);
+        VkShaderModule vk_shader_module = static_cast<VulkanShader*>(shaderModule)->getResource();
+        vkDestroyShaderModule(m_device, vk_shader_module, nullptr);
         delete shaderModule;
     }
 
@@ -4244,7 +4273,9 @@ namespace Piccolo
             return;
         }
 
-        vkDestroySampler(m_device, static_cast<VulkanSampler*>(sampler)->getResource(), nullptr);
+        VkSampler vk_sampler = static_cast<VulkanSampler*>(sampler)->getResource();
+        vkDestroySampler(m_device, vk_sampler, nullptr);
+        delete sampler;
     }
 
     void VulkanRHI::destroyInstance(RHIInstance* instance)
@@ -4319,9 +4350,11 @@ namespace Piccolo
             return;
         }
 
+        VkBuffer vk_buffer = static_cast<VulkanBuffer*>(buffer)->getResource();
+
         if (m_device != VK_NULL_HANDLE)
         {
-            vkDestroyBuffer(m_device, static_cast<VulkanBuffer*>(buffer)->getResource(), nullptr);
+            vkDestroyBuffer(m_device, vk_buffer, nullptr);
         }
         RHI_DELETE_PTR(buffer);
     }
@@ -4424,9 +4457,11 @@ namespace Piccolo
             return;
         }
 
+        VkDeviceMemory vk_memory = static_cast<VulkanDeviceMemory*>(memory)->getResource();
+
         if (m_device != VK_NULL_HANDLE)
         {
-            vkFreeMemory(m_device, static_cast<VulkanDeviceMemory*>(memory)->getResource(), nullptr);
+            vkFreeMemory(m_device, vk_memory, nullptr);
         }
         RHI_DELETE_PTR(memory);
     }

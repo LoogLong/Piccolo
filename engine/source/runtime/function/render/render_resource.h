@@ -121,6 +121,14 @@ namespace Piccolo
         RHIAllocation* _color_grading_LUT_texture_image_allocation;
     };
 
+    // 1x1 RGBA8 placeholder for path-tracing material texture arrays (binding 11, Texture2D).
+    struct DefaultMaterialTextureResource
+    {
+        RHIImage*      _image {nullptr};
+        RHIImageView*  _image_view {nullptr};
+        RHIAllocation* _allocation {nullptr};
+    };
+
     struct ColorGradingResourceData
     {
         void* _color_grading_LUT_texture_image_pixels;
@@ -155,9 +163,10 @@ namespace Piccolo
 
     struct GlobalRenderResource
     {
-        IBLResource          _ibl_resource;
-        ColorGradingResource _color_grading_resource;
-        StorageBuffer        _storage_buffer;
+        IBLResource                    _ibl_resource;
+        ColorGradingResource           _color_grading_resource;
+        StorageBuffer                    _storage_buffer;
+        DefaultMaterialTextureResource _default_material_texture;
     };
 
     class RenderResource : public RenderResourceBase
@@ -223,6 +232,11 @@ namespace Piccolo
             return m_path_tracing_material_texture_views;
         }
 
+        RHIImageView* getPathTracingDefaultMaterialTextureView() const
+        {
+            return m_global_render_resource._default_material_texture._image_view;
+        }
+
         std::shared_ptr<RenderScene> getCurrentRenderScene() const;
 
         void resetRingBufferOffset(uint8_t current_frame_index);
@@ -282,6 +296,7 @@ namespace Piccolo
         RHI* m_path_tracing_rhi {nullptr};
 
         void createAndMapStorageBuffer(std::shared_ptr<RHI> rhi);
+        void createDefaultMaterialTexture(std::shared_ptr<RHI> rhi);
         void releaseGlobalGPUResources(RHI* rhi);
         void createIBLSamplers(std::shared_ptr<RHI> rhi);
         void createIBLTextures(std::shared_ptr<RHI>                        rhi,

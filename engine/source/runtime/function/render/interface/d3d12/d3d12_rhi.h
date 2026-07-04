@@ -117,6 +117,8 @@ namespace Piccolo
     bool queueWaitIdle(RHIQueue* queue) override;
     void resetCommandPool() override;
     void waitForFences() override;
+    void waitAllFramesInFlight() override;
+    void waitDeviceIdle() override;
     void getPhysicalDeviceProperties(RHIPhysicalDeviceProperties* pProperties) override;
     RHICommandBuffer* getCurrentCommandBuffer() const override;
     RHICommandBuffer* const* getCommandBufferList() const override;
