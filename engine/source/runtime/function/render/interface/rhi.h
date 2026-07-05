@@ -164,8 +164,7 @@ namespace Piccolo
         // the Vulkan execution model; backends override where their submission model differs.
 
         // Whether the normal/depth copy for the particle pass must be recorded inline in the current
-        // command buffer before submitRendering (true), or can run afterwards on a dedicated copy
-        // command buffer using the previous frame's resources (false, Vulkan).
+        // command buffer before submitRendering (legacy); both backends use deferred copy (false).
         virtual bool requiresDepthNormalCopyBeforeSubmit() const { return false; }
         // Whether particle GPU compute uses dedicated per-frame compute command buffers and fences
         // (true), rather than being recorded into the shared graphics command buffer (false, Vulkan).
@@ -186,6 +185,10 @@ namespace Piccolo
         virtual RHICommandPool* getCommandPoor() const = 0;
         virtual RHIDescriptorPool* getDescriptorPoor() const = 0;
         virtual RHIFence* const* getFenceList() const = 0;
+        virtual RHIFence* const* getCopyFenceList() const = 0;
+        virtual RHISemaphore*& getCopyReadySemaphore(uint32_t index) = 0;
+        virtual RHISemaphore*& getCopyDoneSemaphore(uint32_t index) = 0;
+        virtual void setCommandBufferComputeQueue(RHICommandBuffer* command_buffer, bool use_compute_queue) {}
         virtual QueueFamilyIndices getQueueFamilyIndices() const = 0;
         virtual RHIQueue* getGraphicsQueue() const = 0;
         virtual RHIQueue* getComputeQueue() const = 0;
@@ -197,6 +200,12 @@ namespace Piccolo
         virtual uint8_t getCurrentFrameIndex() const = 0;
         virtual uint32_t getCurrentSwapchainImageIndex() const = 0;
         virtual void setCurrentFrameIndex(uint8_t index) = 0;
+
+        uint8_t getLastSubmittedFrameIndex() const
+        {
+            const uint8_t frames_in_flight = getMaxFramesInFlight();
+            return static_cast<uint8_t>((getCurrentFrameIndex() + frames_in_flight - 1U) % frames_in_flight);
+        }
 
         // command write
         virtual RHICommandBuffer* beginSingleTimeCommands() = 0;
@@ -249,9 +258,6 @@ namespace Piccolo
         virtual void unmapMemory(RHIDeviceMemory* memory) = 0;
         virtual void invalidateMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) = 0;
         virtual void flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) = 0;
-
-        //semaphores
-        virtual RHISemaphore* &getTextureCopySemaphore(uint32_t index) = 0;
 
     private:
     };

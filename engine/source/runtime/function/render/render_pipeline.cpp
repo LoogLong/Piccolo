@@ -243,16 +243,8 @@ namespace Piccolo
         
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        if (render_rhi->requiresDepthNormalCopyBeforeSubmit())
-        {
-            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
-        }
-
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        if (!render_rhi->requiresDepthNormalCopyBeforeSubmit())
-        {
-            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
-        }
+        static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
         static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
     }
 
@@ -303,16 +295,8 @@ namespace Piccolo
                    
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        if (render_rhi->requiresDepthNormalCopyBeforeSubmit())
-        {
-            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
-        }
-
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-        if (!render_rhi->requiresDepthNormalCopyBeforeSubmit())
-        {
-            static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
-        }
+        static_cast<ParticlePass*>(m_particle_pass.get())->copyNormalAndDepthImage();
         static_cast<ParticlePass*>(m_particle_pass.get())->simulate();
     }
 
@@ -424,20 +408,9 @@ namespace Piccolo
 
         g_runtime_global_context.m_debugdraw_manager->draw(current_swapchain_image_index);
 
-        ParticlePass* particle_pass_ptr = static_cast<ParticlePass*>(m_particle_pass.get());
-        if (render_rhi->requiresDepthNormalCopyBeforeSubmit())
-        {
-            particle_pass_ptr->copyNormalAndDepthImage();
-        }
-
         render_rhi->submitRendering(std::bind(&RenderPipeline::passUpdateAfterRecreateSwapchain, this));
-
-        if (!render_rhi->requiresDepthNormalCopyBeforeSubmit())
-        {
-            particle_pass_ptr->copyNormalAndDepthImage();
-        }
-
-        particle_pass_ptr->simulate();
+        particle_pass.copyNormalAndDepthImage();
+        particle_pass.simulate();
 
         if (!m_path_tracing_frame_logged)
         {

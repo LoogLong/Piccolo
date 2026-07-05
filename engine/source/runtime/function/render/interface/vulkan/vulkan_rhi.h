@@ -203,9 +203,10 @@ namespace Piccolo
         void unmapMemory(RHIDeviceMemory* memory) override;
         void invalidateMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) override;
         void flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) override;
-        
-        //semaphores
-        RHISemaphore* &getTextureCopySemaphore(uint32_t index) override;
+
+        RHISemaphore*& getCopyReadySemaphore(uint32_t index) override;
+        RHISemaphore*& getCopyDoneSemaphore(uint32_t index) override;
+        RHIFence* const* getCopyFenceList() const override;
     public:
         static uint8_t const k_max_frames_in_flight {3};
 
@@ -223,6 +224,7 @@ namespace Piccolo
         RHIImageView* m_depth_image_view = new VulkanImageView();
 
         RHIFence* m_rhi_is_frame_in_flight_fences[k_max_frames_in_flight];
+        RHIFence* m_rhi_copy_fences[k_max_frames_in_flight];
 
         RHIDescriptorPool* m_descriptor_pool = new VulkanDescriptorPool();
 
@@ -281,8 +283,10 @@ namespace Piccolo
         VkCommandBuffer      m_vk_command_buffers[k_max_frames_in_flight];
         VkSemaphore          m_image_available_for_render_semaphores[k_max_frames_in_flight];
         VkSemaphore          m_image_finished_for_presentation_semaphores[k_max_frames_in_flight];
-        RHISemaphore*        m_image_available_for_texturescopy_semaphores[k_max_frames_in_flight];
+        RHISemaphore*        m_copy_ready_semaphores[k_max_frames_in_flight];
+        RHISemaphore*        m_copy_done_semaphores[k_max_frames_in_flight];
         VkFence              m_is_frame_in_flight_fences[k_max_frames_in_flight];
+        VkFence              m_copy_fences[k_max_frames_in_flight];
 
         // TODO: set
         VkCommandBuffer   m_vk_current_command_buffer;

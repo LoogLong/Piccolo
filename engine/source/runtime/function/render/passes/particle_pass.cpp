@@ -50,27 +50,29 @@ namespace Piccolo
     void ParticlePass::copyNormalAndDepthImage()
     {
         const bool use_inline_copy = m_rhi->requiresDepthNormalCopyBeforeSubmit();
-        uint8_t index = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
+        uint8_t    index           = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
         if (!use_inline_copy)
         {
-            index =
-                (m_rhi->getCurrentFrameIndex() + m_rhi->getMaxFramesInFlight() - 1) % m_rhi->getMaxFramesInFlight();
+            index = m_rhi->getLastSubmittedFrameIndex();
         }
+
         RHICommandBuffer* copy_command_buffer =
             use_inline_copy ? m_rhi->getCurrentCommandBuffer() : m_copy_command_buffers[index];
-        assert(copy_command_buffer != nullptr);
+        if (copy_command_buffer == nullptr)
+        {
+            LOG_ERROR("ParticlePass::copyNormalAndDepthImage: copy command buffer is unavailable");
+            return;
+        }
 
         if (!use_inline_copy)
         {
-            m_rhi->waitForFencesPFN(1, &(m_rhi->getFenceList()[index]), RHI_TRUE, UINT64_MAX);
-
             RHICommandBufferBeginInfo command_buffer_begin_info {};
-            command_buffer_begin_info.sType            = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            command_buffer_begin_info.flags            = 0;
-            command_buffer_begin_info.pInheritanceInfo = nullptr;
+            command_buffer_begin_info.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
-            bool res_begin_command_buffer = m_rhi->beginCommandBufferPFN(copy_command_buffer, &command_buffer_begin_info);
-            assert(RHI_SUCCESS == res_begin_command_buffer);
+            if (RHI_SUCCESS != m_rhi->beginCommandBufferPFN(copy_command_buffer, &command_buffer_begin_info))
+            {
+                throw std::runtime_error("begin particle copy command buffer");
+            }
         }
 
         float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -268,27 +270,35 @@ namespace Piccolo
             return;
         }
 
-        bool res_end_command_buffer = m_rhi->endCommandBufferPFN(copy_command_buffer);
-        assert(RHI_SUCCESS == res_end_command_buffer);
+        if (RHI_SUCCESS != m_rhi->endCommandBufferPFN(copy_command_buffer))
+        {
+            throw std::runtime_error("end particle copy command buffer");
+        }
 
-        bool res_reset_fences = m_rhi->resetFencesPFN(1, &m_rhi->getFenceList()[index]);
-        assert(RHI_SUCCESS == res_reset_fences);
+        RHIFence* copy_fence = const_cast<RHIFence*>(m_rhi->getCopyFenceList()[index]);
+        if (RHI_SUCCESS != m_rhi->resetFencesPFN(1, &copy_fence))
+        {
+            throw std::runtime_error("reset particle copy fence");
+        }
 
-        RHIPipelineStageFlags wait_stages[] = {RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        RHISubmitInfo         submit_info   = {};
+        RHISemaphore*                 copy_ready_semaphore = m_rhi->getCopyReadySemaphore(index);
+        RHISemaphore*                 copy_done_semaphore  = m_rhi->getCopyDoneSemaphore(index);
+        const RHISemaphore*           signal_semaphores[]  = {copy_done_semaphore};
+        RHIPipelineStageFlags         wait_stages[]        = {RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        RHISubmitInfo                 submit_info {};
         submit_info.sType                   = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.waitSemaphoreCount      = 1;
-        submit_info.pWaitSemaphores         = &(m_rhi->getTextureCopySemaphore(index));
+        submit_info.pWaitSemaphores         = &copy_ready_semaphore;
         submit_info.pWaitDstStageMask       = wait_stages;
         submit_info.commandBufferCount      = 1;
         submit_info.pCommandBuffers         = &copy_command_buffer;
-        submit_info.signalSemaphoreCount    = 0;
-        submit_info.pSignalSemaphores       = nullptr;
-        bool res_queue_submit =
-            m_rhi->queueSubmit(m_rhi->getGraphicsQueue(), 1, &submit_info, m_rhi->getFenceList()[index]);
-        assert(RHI_SUCCESS == res_queue_submit);
+        submit_info.signalSemaphoreCount    = 1;
+        submit_info.pSignalSemaphores       = signal_semaphores;
 
-        m_rhi->queueWaitIdle(m_rhi->getGraphicsQueue());
+        if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getGraphicsQueue(), 1, &submit_info, copy_fence))
+        {
+            throw std::runtime_error("particle copy queue submit");
+        }
     }
 
     ParticlePass::~ParticlePass() {}
@@ -1044,6 +1054,7 @@ namespace Piccolo
             {
                 if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, compute_command_buffer))
                     throw std::runtime_error("alloc D3D12 compute command buffer");
+                m_rhi->setCommandBufferComputeQueue(compute_command_buffer, true);
             }
 
             m_compute_fences.resize(m_rhi->getMaxFramesInFlight(), nullptr);
@@ -2091,7 +2102,11 @@ namespace Piccolo
 
                 RHISubmitInfo computeSubmitInfo {};
                 const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                RHISemaphore*               copy_done_semaphore =
+                    m_rhi->getCopyDoneSemaphore(m_rhi->getLastSubmittedFrameIndex());
                 computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
+                computeSubmitInfo.waitSemaphoreCount       = 1;
+                computeSubmitInfo.pWaitSemaphores          = &copy_done_semaphore;
                 computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
                 computeSubmitInfo.commandBufferCount     = 1;
                 computeSubmitInfo.pCommandBuffers        = &command_buffer;
@@ -2132,7 +2147,11 @@ namespace Piccolo
             m_rhi->resetFencesPFN(1, &m_fence);
             RHISubmitInfo computeSubmitInfo {};
             const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            RHISemaphore*               copy_done_semaphore =
+                m_rhi->getCopyDoneSemaphore(m_rhi->getLastSubmittedFrameIndex());
             computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
+            computeSubmitInfo.waitSemaphoreCount       = 1;
+            computeSubmitInfo.pWaitSemaphores          = &copy_done_semaphore;
             computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
             computeSubmitInfo.commandBufferCount     = 1;
             computeSubmitInfo.pCommandBuffers        = &m_compute_command_buffer;

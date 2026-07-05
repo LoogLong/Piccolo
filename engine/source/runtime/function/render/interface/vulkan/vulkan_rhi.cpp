@@ -296,21 +296,36 @@ namespace Piccolo
                     vkDestroySemaphore(m_device, m_image_finished_for_presentation_semaphores[i], nullptr);
                     m_image_finished_for_presentation_semaphores[i] = VK_NULL_HANDLE;
                 }
-                if (m_image_available_for_texturescopy_semaphores[i] != nullptr)
+                if (m_copy_ready_semaphores[i] != nullptr)
                 {
                     vkDestroySemaphore(m_device,
-                                       ((VulkanSemaphore*)m_image_available_for_texturescopy_semaphores[i])->getResource(),
+                                       ((VulkanSemaphore*)m_copy_ready_semaphores[i])->getResource(),
                                        nullptr);
-                    delete m_image_available_for_texturescopy_semaphores[i];
-                    m_image_available_for_texturescopy_semaphores[i] = nullptr;
+                    delete m_copy_ready_semaphores[i];
+                    m_copy_ready_semaphores[i] = nullptr;
+                }
+                if (m_copy_done_semaphores[i] != nullptr)
+                {
+                    vkDestroySemaphore(m_device,
+                                       ((VulkanSemaphore*)m_copy_done_semaphores[i])->getResource(),
+                                       nullptr);
+                    delete m_copy_done_semaphores[i];
+                    m_copy_done_semaphores[i] = nullptr;
                 }
                 if (m_is_frame_in_flight_fences[i] != VK_NULL_HANDLE)
                 {
                     vkDestroyFence(m_device, m_is_frame_in_flight_fences[i], nullptr);
                     m_is_frame_in_flight_fences[i] = VK_NULL_HANDLE;
                 }
+                if (m_copy_fences[i] != VK_NULL_HANDLE)
+                {
+                    vkDestroyFence(m_device, m_copy_fences[i], nullptr);
+                    m_copy_fences[i] = VK_NULL_HANDLE;
+                }
                 delete m_rhi_is_frame_in_flight_fences[i];
                 m_rhi_is_frame_in_flight_fences[i] = nullptr;
+                delete m_rhi_copy_fences[i];
+                m_rhi_copy_fences[i] = nullptr;
                 delete m_command_buffers[i];
                 m_command_buffers[i] = nullptr;
                 if (m_command_pools[i] != VK_NULL_HANDLE)
@@ -688,10 +703,9 @@ namespace Piccolo
             return;
         }
 
-        VkSemaphore semaphores[2] = { ((VulkanSemaphore*)m_image_available_for_texturescopy_semaphores[m_current_frame_index])->getResource(),
-                                     m_image_finished_for_presentation_semaphores[m_current_frame_index] };
+        VkSemaphore semaphores[2] = {((VulkanSemaphore*)m_copy_ready_semaphores[m_current_frame_index])->getResource(),
+                                     m_image_finished_for_presentation_semaphores[m_current_frame_index]};
 
-        // submit command buffer
         VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         VkSubmitInfo         submit_info   = {};
         submit_info.sType                  = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -700,8 +714,8 @@ namespace Piccolo
         submit_info.pWaitDstStageMask      = wait_stages;
         submit_info.commandBufferCount     = 1;
         submit_info.pCommandBuffers        = &m_vk_command_buffers[m_current_frame_index];
-        submit_info.signalSemaphoreCount = 2;
-        submit_info.pSignalSemaphores = semaphores;
+        submit_info.signalSemaphoreCount   = 2;
+        submit_info.pSignalSemaphores      = semaphores;
 
         VkResult res_reset_fences = _vkResetFences(m_device, 1, &m_is_frame_in_flight_fences[m_current_frame_index]);
 
@@ -4008,25 +4022,42 @@ namespace Piccolo
         fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT; // the fence is initialized as signaled
 
+        VkFenceCreateInfo copy_fence_create_info {};
+        copy_fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        copy_fence_create_info.flags = 0;
+
         for (uint32_t i = 0; i < k_max_frames_in_flight; i++)
         {
-            m_image_available_for_texturescopy_semaphores[i] = new VulkanSemaphore();
+            m_copy_ready_semaphores[i] = new VulkanSemaphore();
+            m_copy_done_semaphores[i]  = new VulkanSemaphore();
             if (vkCreateSemaphore(
                     m_device, &semaphore_create_info, nullptr, &m_image_available_for_render_semaphores[i]) !=
                     VK_SUCCESS ||
                 vkCreateSemaphore(
                     m_device, &semaphore_create_info, nullptr, &m_image_finished_for_presentation_semaphores[i]) !=
                     VK_SUCCESS ||
-                vkCreateSemaphore(
-                    m_device, &semaphore_create_info, nullptr, &(((VulkanSemaphore*)m_image_available_for_texturescopy_semaphores[i])->getResource())) !=
-                    VK_SUCCESS ||
+                vkCreateSemaphore(m_device,
+                                  &semaphore_create_info,
+                                  nullptr,
+                                  &(((VulkanSemaphore*)m_copy_ready_semaphores[i])->getResource())) != VK_SUCCESS ||
+                vkCreateSemaphore(m_device,
+                                  &semaphore_create_info,
+                                  nullptr,
+                                  &(((VulkanSemaphore*)m_copy_done_semaphores[i])->getResource())) != VK_SUCCESS ||
                 vkCreateFence(m_device, &fence_create_info, nullptr, &m_is_frame_in_flight_fences[i]) != VK_SUCCESS)
             {
                 LOG_ERROR("vk create semaphore & fence");
             }
 
+            if (vkCreateFence(m_device, &copy_fence_create_info, nullptr, &m_copy_fences[i]) != VK_SUCCESS)
+            {
+                LOG_ERROR("vk create particle copy fence");
+            }
+
             m_rhi_is_frame_in_flight_fences[i] = new VulkanFence();
             ((VulkanFence*)m_rhi_is_frame_in_flight_fences[i])->setResource(m_is_frame_in_flight_fences[i]);
+            m_rhi_copy_fences[i] = new VulkanFence();
+            ((VulkanFence*)m_rhi_copy_fences[i])->setResource(m_copy_fences[i]);
         }
     }
 
@@ -4839,11 +4870,6 @@ namespace Piccolo
         vkFlushMappedMemoryRanges(m_device, 1, &mappedRange);
     }
 
-    RHISemaphore* &VulkanRHI::getTextureCopySemaphore(uint32_t index)
-    {
-        return m_image_available_for_texturescopy_semaphores[index];
-    }
-
     void VulkanRHI::recreateSwapchain()
     {
         int width  = 0;
@@ -5142,6 +5168,18 @@ namespace Piccolo
     RHIFence* const* VulkanRHI::getFenceList() const
     {
         return m_rhi_is_frame_in_flight_fences;
+    }
+    RHIFence* const* VulkanRHI::getCopyFenceList() const
+    {
+        return m_rhi_copy_fences;
+    }
+    RHISemaphore*& VulkanRHI::getCopyReadySemaphore(uint32_t index)
+    {
+        return m_copy_ready_semaphores[index % k_max_frames_in_flight];
+    }
+    RHISemaphore*& VulkanRHI::getCopyDoneSemaphore(uint32_t index)
+    {
+        return m_copy_done_semaphores[index % k_max_frames_in_flight];
     }
     QueueFamilyIndices VulkanRHI::getQueueFamilyIndices() const
     {
