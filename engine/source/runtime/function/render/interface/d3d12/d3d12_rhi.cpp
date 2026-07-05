@@ -126,12 +126,9 @@ using namespace d3d12_detail;
         auto* d3d_compute_queue  = static_cast<D3D12RHIQueue*>(m_compute_queue);
         d3d_graphics_queue->command_queue     = m_d3d12_command_queue.Get();
         d3d_graphics_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        // D3D12 command buffers are currently backed by DIRECT command lists. Keep compute submissions on
-        // the direct queue until command pools can allocate queue-typed command lists and resource ownership
-        // transitions are modeled explicitly.
-        d3d_compute_queue->command_queue     = m_d3d12_command_queue.Get();
-        d3d_compute_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        LOG_INFO("D3D12 compute queue uses the graphics/direct command queue");
+        d3d_compute_queue->command_queue     = m_d3d12_compute_command_queue.Get();
+        d3d_compute_queue->command_list_type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        LOG_INFO("D3D12 compute queue uses dedicated COMPUTE command queue");
 #endif
 
         for (auto& command_buffer : m_frame_command_buffers)
@@ -155,6 +152,18 @@ using namespace d3d12_detail;
             }
         }
 
+        RHIFenceCreateInfo copy_fence_info {};
+        copy_fence_info.flags = 0;
+        for (auto& fence : m_copy_fences)
+        {
+            if (!createFence(&copy_fence_info, fence))
+            {
+                throw std::runtime_error("Failed to create D3D12 particle copy fence");
+            }
+        }
+
+        createParticleCopySync();
+
         m_swapchain_viewport.x        = 0.0f;
         m_swapchain_viewport.y        = 0.0f;
         m_swapchain_viewport.width    = static_cast<float>(m_window_width);
@@ -173,12 +182,6 @@ using namespace d3d12_detail;
         m_swapchain_desc.scissor      = &m_scissor;
         createSwapchainImageViews();
         createFramebufferImageAndView();
-
-        RHISemaphoreCreateInfo texture_copy_semaphore_info {};
-        if (!createSemaphore(&texture_copy_semaphore_info, m_texture_copy_semaphore))
-        {
-            throw std::runtime_error("Failed to create D3D12 texture copy semaphore");
-        }
 
         m_current_command_buffer          = m_frame_command_buffers[0];
         m_current_frame_index             = 0;
@@ -238,6 +241,21 @@ using namespace d3d12_detail;
             delete static_cast<D3D12RHIFence*>(fence);
             fence = nullptr;
         }
+        for (auto& fence : m_copy_fences)
+        {
+            delete static_cast<D3D12RHIFence*>(fence);
+            fence = nullptr;
+        }
+        for (auto& semaphore : m_copy_ready_semaphores)
+        {
+            destroySemaphore(semaphore);
+            semaphore = nullptr;
+        }
+        for (auto& semaphore : m_copy_done_semaphores)
+        {
+            destroySemaphore(semaphore);
+            semaphore = nullptr;
+        }
 
         for (auto*& image_view : m_owned_swapchain_image_views)
         {
@@ -256,9 +274,6 @@ using namespace d3d12_detail;
         m_depth_desc.depth_image = nullptr;
         delete m_depth_desc.depth_image_view;
         m_depth_desc.depth_image_view = nullptr;
-
-        delete static_cast<D3D12RHISemaphore*>(m_texture_copy_semaphore);
-        m_texture_copy_semaphore = nullptr;
 
         m_swapchain_desc.imageViews.clear();
         m_swapchain_desc.viewport = nullptr;

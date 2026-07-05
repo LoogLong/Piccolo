@@ -475,8 +475,8 @@ namespace Piccolo
         RHIAttachmentDescription& depth = attachments[_main_camera_pass_depth];
         depth.format         = m_rhi->getDepthImageInfo().depth_image_format;
         depth.samples        = RHI_SAMPLE_COUNT_1_BIT;
-        depth.loadOp         = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
-        depth.storeOp        = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth.loadOp         = RHI_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.storeOp        = RHI_ATTACHMENT_STORE_OP_STORE;
         depth.stencilLoadOp  = RHI_ATTACHMENT_LOAD_OP_DONT_CARE;
         depth.stencilStoreOp = RHI_ATTACHMENT_STORE_OP_DONT_CARE;
         depth.initialLayout  = RHI_IMAGE_LAYOUT_UNDEFINED;

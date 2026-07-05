@@ -2056,6 +2056,31 @@ RHIFence* const* D3D12RHI::getFenceList() const
 {
     return m_frame_fences.data();
 }
+RHIFence* const* D3D12RHI::getCopyFenceList() const
+{
+    return m_copy_fences.data();
+}
+RHISemaphore*& D3D12RHI::getCopyReadySemaphore(uint32_t index)
+{
+    return m_copy_ready_semaphores[index % m_copy_ready_semaphores.size()];
+}
+RHISemaphore*& D3D12RHI::getCopyDoneSemaphore(uint32_t index)
+{
+    return m_copy_done_semaphores[index % m_copy_done_semaphores.size()];
+}
+void D3D12RHI::setCommandBufferComputeQueue(RHICommandBuffer* command_buffer, bool use_compute_queue)
+{
+#ifdef _WIN32
+    auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(command_buffer);
+    if (d3d_command_buffer == nullptr)
+    {
+        return;
+    }
+
+    d3d_command_buffer->command_list_type =
+        use_compute_queue ? D3D12_COMMAND_LIST_TYPE_COMPUTE : D3D12_COMMAND_LIST_TYPE_DIRECT;
+#endif
+}
 QueueFamilyIndices D3D12RHI::getQueueFamilyIndices() const
 {
     QueueFamilyIndices indices;
@@ -2244,10 +2269,15 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
     }
 
     RHICommandBuffer* submit_command_buffer = m_current_command_buffer;
+    RHISemaphore*     copy_ready_semaphore =
+        m_copy_ready_semaphores[m_current_frame_index % m_copy_ready_semaphores.size()];
+    const RHISemaphore* signal_semaphores[] = {copy_ready_semaphore};
     RHISubmitInfo     submit_info {};
     submit_info.sType              = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers    = &submit_command_buffer;
+    submit_info.signalSemaphoreCount = 1;
+    submit_info.pSignalSemaphores    = signal_semaphores;
     if (!queueSubmit(m_graphics_queue, 1, &submit_info, current_frame_fence))
     {
         const HRESULT removed_reason =

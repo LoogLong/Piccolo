@@ -26,7 +26,6 @@ namespace Piccolo
         void prepareContext() override;
         void clear() override;
         RHIBackendType getBackendType() const override;
-        bool           requiresDepthNormalCopyBeforeSubmit() const override { return true; }
         bool           usesDedicatedComputeSubmission() const override { return true; }
         void           destroyRayTracingPipeline(RHIPipeline*& pipeline) override;
         void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) override;
@@ -125,6 +124,10 @@ namespace Piccolo
     RHICommandPool* getCommandPoor() const override;
     RHIDescriptorPool* getDescriptorPoor() const override;
     RHIFence* const* getFenceList() const override;
+    RHIFence* const* getCopyFenceList() const override;
+    RHISemaphore*& getCopyReadySemaphore(uint32_t index) override;
+    RHISemaphore*& getCopyDoneSemaphore(uint32_t index) override;
+    void setCommandBufferComputeQueue(RHICommandBuffer* command_buffer, bool use_compute_queue) override;
     QueueFamilyIndices getQueueFamilyIndices() const override;
     RHIQueue* getGraphicsQueue() const override;
     RHIQueue* getComputeQueue() const override;
@@ -175,7 +178,6 @@ namespace Piccolo
     void unmapMemory(RHIDeviceMemory* memory) override;
     void invalidateMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) override;
     void flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) override;
-    RHISemaphore*& getTextureCopySemaphore(uint32_t index) override;
 
 
     private:
@@ -188,6 +190,7 @@ namespace Piccolo
         void createSwapchain(HWND hWnd);
         void createRenderTargetViews();
         void createFence();
+        void createParticleCopySync();
         bool ensureCommandBufferObjects(RHICommandBuffer* commandBuffer);
         ID3D12GraphicsCommandList* d3d12CommandListFor(RHICommandBuffer* commandBuffer) const;
         bool executeImmediateCommands(const std::function<void(ID3D12GraphicsCommandList*)>& record_commands);
@@ -211,6 +214,7 @@ namespace Piccolo
         ComPtr<IDXGIFactory4> m_dxgi_factory;
         ComPtr<ID3D12Device> m_d3d12_device;
         ComPtr<ID3D12CommandQueue> m_d3d12_command_queue;
+        ComPtr<ID3D12CommandQueue> m_d3d12_compute_command_queue;
         ComPtr<ID3D12CommandAllocator> m_d3d12_command_allocator;
         ComPtr<ID3D12GraphicsCommandList> m_d3d12_command_list;
         ComPtr<IDXGISwapChain3> m_d3d12_swapchain;
@@ -262,6 +266,9 @@ namespace Piccolo
         RHIQueue*                        m_graphics_queue {nullptr};
         RHIQueue*                        m_compute_queue {nullptr};
         std::array<RHIFence*, 3>         m_frame_fences {{nullptr, nullptr, nullptr}};
+        std::array<RHIFence*, 3>         m_copy_fences {{nullptr, nullptr, nullptr}};
+        std::array<RHISemaphore*, 3>     m_copy_ready_semaphores {{nullptr, nullptr, nullptr}};
+        std::array<RHISemaphore*, 3>     m_copy_done_semaphores {{nullptr, nullptr, nullptr}};
         RHISwapChainDesc  m_swapchain_desc {};
         RHIViewport       m_swapchain_viewport {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
         RHIRect2D         m_swapchain_scissor {};
@@ -277,6 +284,5 @@ namespace Piccolo
         RHIRenderPass*    m_active_render_pass {nullptr};
         RHIFramebuffer*   m_active_framebuffer {nullptr};
         uint32_t          m_active_subpass_index {0};
-        RHISemaphore*     m_texture_copy_semaphore {nullptr};
     };
 } // namespace Piccolo

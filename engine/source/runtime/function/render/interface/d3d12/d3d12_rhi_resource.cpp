@@ -2449,18 +2449,22 @@ void D3D12RHI::flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHI
 #endif
     return;
 }
-RHISemaphore*& D3D12RHI::getTextureCopySemaphore(uint32_t index)
+void D3D12RHI::createParticleCopySync()
 {
-    (void)index;
-    if (m_texture_copy_semaphore == nullptr)
+#ifdef _WIN32
+    RHISemaphoreCreateInfo semaphore_info {};
+    for (uint32_t frame_index = 0; frame_index < m_swapchain_buffer_count; ++frame_index)
     {
-        RHISemaphoreCreateInfo create_info {};
-        if (!createSemaphore(&create_info, m_texture_copy_semaphore))
+        if (!createSemaphore(&semaphore_info, m_copy_ready_semaphores[frame_index]))
         {
-            m_texture_copy_semaphore = nullptr;
+            throw std::runtime_error("Failed to create D3D12 particle copy-ready semaphore");
+        }
+        if (!createSemaphore(&semaphore_info, m_copy_done_semaphores[frame_index]))
+        {
+            throw std::runtime_error("Failed to create D3D12 particle copy-done semaphore");
         }
     }
-    return m_texture_copy_semaphore;
+#endif
 }
     void D3D12RHI::createFence()
     {

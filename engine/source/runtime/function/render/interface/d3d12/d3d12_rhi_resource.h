@@ -205,6 +205,7 @@ struct D3D12RHICommandBuffer final : RHICommandBuffer
 
     ComPtr<ID3D12CommandAllocator>    command_allocator;
     ComPtr<ID3D12GraphicsCommandList> command_list;
+    D3D12_COMMAND_LIST_TYPE           command_list_type {D3D12_COMMAND_LIST_TYPE_DIRECT};
     bool                              is_open {false};
     bool                              has_recorded_commands {false};
     bool                              in_render_pass {false};

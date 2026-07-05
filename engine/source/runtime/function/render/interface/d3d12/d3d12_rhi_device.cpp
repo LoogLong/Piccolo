@@ -503,6 +503,15 @@ void D3D12RHI::destroyDevice()
         {
             throw std::runtime_error("Failed to create D3D12 command queue");
         }
+
+        D3D12_COMMAND_QUEUE_DESC compute_queue_desc {};
+        compute_queue_desc.Type  = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        compute_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+
+        if (FAILED(m_d3d12_device->CreateCommandQueue(&compute_queue_desc, IID_PPV_ARGS(&m_d3d12_compute_command_queue))))
+        {
+            throw std::runtime_error("Failed to create D3D12 compute command queue");
+        }
     }
     void D3D12RHI::createCommandObjects()
     {
@@ -639,7 +648,7 @@ void D3D12RHI::destroyDevice()
         if (d3d_command_buffer->command_allocator == nullptr)
         {
             const HRESULT allocator_result =
-                m_d3d12_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                m_d3d12_device->CreateCommandAllocator(d3d_command_buffer->command_list_type,
                                                        IID_PPV_ARGS(&d3d_command_buffer->command_allocator));
             if (FAILED(allocator_result))
             {
@@ -654,7 +663,7 @@ void D3D12RHI::destroyDevice()
         {
             const HRESULT list_result =
                 m_d3d12_device->CreateCommandList(0,
-                                                  D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                  d3d_command_buffer->command_list_type,
                                                   d3d_command_buffer->command_allocator.Get(),
                                                   nullptr,
                                                   IID_PPV_ARGS(&d3d_command_buffer->command_list));
