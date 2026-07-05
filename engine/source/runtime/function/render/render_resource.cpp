@@ -1500,11 +1500,13 @@ namespace Piccolo
             RHIBufferCreateInfo bufferInfo = { RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
 
             const RHIBufferUsageFlags position_buffer_usage = withPathTracingBuildInputUsage(
-                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    RHI_BUFFER_USAGE_TRANSFER_DST_BIT,
                 rhi,
                 true);
             const RHIBufferUsageFlags varying_buffer_usage =
-                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
+                RHI_BUFFER_USAGE_VERTEX_BUFFER_BIT | RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                RHI_BUFFER_USAGE_TRANSFER_DST_BIT;
             now_mesh.path_tracing_vertex_blas_input_ready = rhi != nullptr && rhi->supportsRayTracing();
 
             bufferInfo.usage = position_buffer_usage;
