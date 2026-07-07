@@ -11,6 +11,8 @@
 
 namespace Piccolo
 {
+    static constexpr uint8_t k_rhi_max_frames_in_flight = 3;
+
     class WindowSystem;
 
     enum class RHIBackendType
@@ -71,6 +73,11 @@ namespace Piccolo
         virtual bool createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateInfo, RHIDescriptorPool* &pDescriptorPool) = 0;
         virtual bool createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo* pCreateInfo, RHIDescriptorSetLayout* &pSetLayout) = 0;
         virtual bool createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence* &pFence) = 0;
+        bool createFence(RHIFence*& pFence, RHIFenceCreateFlags flags = 0)
+        {
+            RHIFenceCreateInfo create_info = makeRHIFenceCreateInfo(flags);
+            return createFence(&create_info, pFence);
+        }
         virtual bool createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RHIFramebuffer* &pFramebuffer) = 0;
         virtual bool createGraphicsPipelines(RHIPipelineCache* pipelineCache, uint32_t createInfoCount, const RHIGraphicsPipelineCreateInfo* pCreateInfos, RHIPipeline* &pPipelines) = 0;
         virtual bool createComputePipelines(RHIPipelineCache* pipelineCache, uint32_t createInfoCount, const RHIComputePipelineCreateInfo* pCreateInfos, RHIPipeline* &pPipelines) = 0;
@@ -167,14 +174,14 @@ namespace Piccolo
         // command buffer before submitRendering (legacy); both backends use deferred copy (false).
         virtual bool requiresDepthNormalCopyBeforeSubmit() const { return false; }
         // Whether particle GPU compute uses dedicated per-frame compute command buffers and fences
-        // (true), rather than being recorded into the shared graphics command buffer (false, Vulkan).
+        // (true for Vulkan and D3D12).
         virtual bool usesDedicatedComputeSubmission() const { return false; }
         // Whether the backend uses the Vulkan clip-space convention (Y-down NDC, [0,1] depth) for
         // projection matrices. D3D12 uses [0,1] depth with Y-up, so it returns false (the default).
         virtual bool usesVulkanClipSpace() const { return false; }
 
         virtual void resetCommandPool() = 0;
-        virtual void waitForFences() = 0;
+        virtual bool waitForFences() = 0;
         virtual void waitAllFramesInFlight() = 0;
         virtual void waitDeviceIdle() = 0;
 
@@ -259,7 +266,12 @@ namespace Piccolo
         virtual void invalidateMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) = 0;
         virtual void flushMappedMemoryRanges(void* pNext, RHIDeviceMemory* memory, RHIDeviceSize offset, RHIDeviceSize size) = 0;
 
-    private:
+        bool isDeviceLost() const { return m_device_lost; }
+
+    protected:
+        void markDeviceLost() { m_device_lost = true; }
+
+        bool m_device_lost {false};
     };
 
     inline RHI::~RHI() = default;

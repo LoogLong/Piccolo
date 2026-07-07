@@ -528,8 +528,7 @@ namespace Piccolo
         uint32_t vertex_stride,
         RHIBuffer* index_buffer,
         uint32_t index_count,
-        RHIIndexType index_type,
-        RHIAccelerationStructure* source_blas)
+        RHIIndexType index_type)
     {
         if (skinned_position_buffer == nullptr || vertex_count == 0) return nullptr;
 
@@ -544,35 +543,24 @@ namespace Piccolo
         geometry.index_type             = index_type;
         geometry.opaque                 = true;
 
-        const bool is_update = (source_blas != nullptr);
-
         RHIAccelerationStructureBuildDesc build_desc;
         build_desc.type              = RHIAccelerationStructureType::BottomLevel;
         build_desc.geometries        = &geometry;
         build_desc.geometry_count    = 1;
         build_desc.prefer_fast_trace = true;
-        build_desc.allow_update      = !is_update;  // first create: allow update; update: reuse existing
-        build_desc.perform_update    = is_update;   // subsequent frames: update in-place
-        build_desc.source            = is_update ? source_blas : nullptr;
+        build_desc.allow_update      = false;
+        build_desc.perform_update    = false;
+        build_desc.source            = nullptr;
 
         RHIAccelerationStructure* blas = nullptr;
-        if (is_update)
+        if (!rhi->createAccelerationStructure(&build_desc, blas) || blas == nullptr)
         {
-            // Update in-place: use existing BLAS, no createAccelerationStructure needed
-            blas = source_blas;
-        }
-        else
-        {
-            if (!rhi->createAccelerationStructure(&build_desc, blas) || blas == nullptr)
-            {
-                return nullptr;
-            }
+            return nullptr;
         }
 
         if (!rhi->buildAccelerationStructure(command_buffer, &build_desc, blas))
         {
-            if (!is_update)
-                rhi->destroyAccelerationStructure(blas);
+            rhi->destroyAccelerationStructure(blas);
             return nullptr;
         }
 
@@ -705,13 +693,14 @@ namespace Piccolo
                     geometry_indices[source_instance.mesh] = geometry_index;
 
                     RenderPathTracingGeometryGPUData geometry_data{};
-                    geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
-                    geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
-                    geometry_data.index_count = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+                    geometry_data.index_count =
+                        static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
 
-                    // Static mesh: copy rest-pose vertex data
                     if (full_rebuild)
                     {
+                        geometry_data.vertex_offset = static_cast<uint32_t>(m_path_tracing_vertex_data.size());
+                        source_instance.mesh->path_tracing_gpu_vertex_offset = geometry_data.vertex_offset;
+
                         for (size_t v = 0; v < source_instance.mesh->path_tracing_positions.size(); ++v)
                         {
                             RenderPathTracingVertexGPUData vertex{};
@@ -724,12 +713,16 @@ namespace Piccolo
                             m_path_tracing_vertex_data.push_back(vertex);
                         }
                     }
-
-                    // Append indices
-                    if (full_rebuild)
+                    else
                     {
-                        for (uint32_t idx : source_instance.mesh->path_tracing_indices)
-                            m_path_tracing_index_data.push_back(idx);
+                        geometry_data.vertex_offset = source_instance.mesh->path_tracing_gpu_vertex_offset;
+                    }
+
+                    geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                    source_instance.mesh->path_tracing_gpu_index_offset = geometry_data.index_offset;
+                    for (uint32_t idx : source_instance.mesh->path_tracing_indices)
+                    {
+                        m_path_tracing_index_data.push_back(idx);
                     }
                     m_path_tracing_geometry_data.push_back(geometry_data);
                 }
@@ -751,19 +744,18 @@ namespace Piccolo
                     skinned_vertex_offset = it->second.skinned_vertex_offset;
                 }
 
-                RenderPathTracingGeometryGPUData geometry_data{};
-                geometry_data.vertex_offset = skinned_vertex_offset;  // offset into g_skinned_vertices (Bug B2 fix)
-                geometry_data.index_offset  = static_cast<uint32_t>(m_path_tracing_index_data.size());
-                geometry_data.index_count   = static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
+                RenderPathTracingGeometryGPUData geometry_data {};
+                geometry_data.vertex_offset = skinned_vertex_offset;
+                geometry_data.index_count =
+                    static_cast<uint32_t>(source_instance.mesh->path_tracing_indices.size());
 
-                // NO placeholder push to m_path_tracing_vertex_data
-
-                // Append indices
-                if (full_rebuild)
+                geometry_data.index_offset = static_cast<uint32_t>(m_path_tracing_index_data.size());
+                source_instance.mesh->path_tracing_gpu_index_offset = geometry_data.index_offset;
+                for (uint32_t idx : source_instance.mesh->path_tracing_indices)
                 {
-                    for (uint32_t idx : source_instance.mesh->path_tracing_indices)
-                        m_path_tracing_index_data.push_back(idx);
+                    m_path_tracing_index_data.push_back(idx);
                 }
+
                 m_path_tracing_geometry_data.push_back(geometry_data);
             }
 
@@ -867,7 +859,7 @@ namespace Piccolo
             return true;
         };
 
-        // Update buffers — skip vertex/index/material when only transforms changed
+        // Update buffers — vertex/material only on full rebuild; index/geometry/instance every frame.
         if (full_rebuild)
         {
             if (!update_buffer(m_path_tracing_vertex_buffer,
@@ -876,16 +868,6 @@ namespace Piccolo
                               m_path_tracing_vertex_data.data(),
                               m_path_tracing_vertex_data.size() * sizeof(RenderPathTracingVertexGPUData),
                               "PathTracing.vertex_buffer"))
-            {
-                return false;
-            }
-
-            if (!update_buffer(m_path_tracing_index_buffer,
-                              m_path_tracing_index_buffer_memory,
-                              m_path_tracing_index_buffer_capacity,
-                              m_path_tracing_index_data.data(),
-                              m_path_tracing_index_data.size() * sizeof(uint32_t),
-                              "PathTracing.index_buffer"))
             {
                 return false;
             }
@@ -899,6 +881,16 @@ namespace Piccolo
             {
                 return false;
             }
+        }
+
+        if (!update_buffer(m_path_tracing_index_buffer,
+                          m_path_tracing_index_buffer_memory,
+                          m_path_tracing_index_buffer_capacity,
+                          m_path_tracing_index_data.data(),
+                          m_path_tracing_index_data.size() * sizeof(uint32_t),
+                          "PathTracing.index_buffer"))
+        {
+            return false;
         }
 
         if (!update_buffer(m_path_tracing_geometry_buffer,
@@ -1605,6 +1597,75 @@ namespace Piccolo
                                       descriptor_writes,
                                       0,
                                       NULL);
+
+            if (m_gpu_skinning_mesh_descriptor_set_layout != nullptr &&
+                *m_gpu_skinning_mesh_descriptor_set_layout != nullptr)
+            {
+                RHIDescriptorSetAllocateInfo gpu_skinning_mesh_descriptor_set_alloc_info {};
+                gpu_skinning_mesh_descriptor_set_alloc_info.sType =
+                    RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                gpu_skinning_mesh_descriptor_set_alloc_info.descriptorPool = rhi->getDescriptorPoor();
+                gpu_skinning_mesh_descriptor_set_alloc_info.descriptorSetCount = 1;
+                gpu_skinning_mesh_descriptor_set_alloc_info.pSetLayouts =
+                    m_gpu_skinning_mesh_descriptor_set_layout;
+
+                if (RHI_SUCCESS != rhi->allocateDescriptorSets(&gpu_skinning_mesh_descriptor_set_alloc_info,
+                                                                 now_mesh.gpu_skinning_mesh_descriptor_set))
+                {
+                    throw std::runtime_error("allocate gpu skinning mesh descriptor set");
+                }
+
+                RHIDescriptorBufferInfo rest_positions_info {};
+                rest_positions_info.buffer = now_mesh.mesh_vertex_position_buffer;
+                rest_positions_info.offset = 0;
+                rest_positions_info.range  = vertex_position_buffer_size;
+
+                RHIDescriptorBufferInfo joint_bindings_info {};
+                joint_bindings_info.buffer = now_mesh.mesh_vertex_joint_binding_buffer;
+                joint_bindings_info.offset = 0;
+                joint_bindings_info.range  = vertex_joint_binding_buffer_size;
+
+                RHIDescriptorBufferInfo normal_tangent_info {};
+                normal_tangent_info.buffer = now_mesh.mesh_vertex_varying_enable_blending_buffer;
+                normal_tangent_info.offset = 0;
+                normal_tangent_info.range  = vertex_varying_enable_blending_buffer_size;
+
+                RHIDescriptorBufferInfo texcoords_info {};
+                texcoords_info.buffer = now_mesh.mesh_vertex_varying_buffer;
+                texcoords_info.offset = 0;
+                texcoords_info.range  = vertex_varying_buffer_size;
+
+                RHIWriteDescriptorSet gpu_skinning_writes[4] {};
+                gpu_skinning_writes[0].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gpu_skinning_writes[0].dstSet          = now_mesh.gpu_skinning_mesh_descriptor_set;
+                gpu_skinning_writes[0].dstBinding      = 0;
+                gpu_skinning_writes[0].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                gpu_skinning_writes[0].descriptorCount = 1;
+                gpu_skinning_writes[0].pBufferInfo     = &rest_positions_info;
+
+                gpu_skinning_writes[1].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gpu_skinning_writes[1].dstSet          = now_mesh.gpu_skinning_mesh_descriptor_set;
+                gpu_skinning_writes[1].dstBinding      = 1;
+                gpu_skinning_writes[1].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                gpu_skinning_writes[1].descriptorCount = 1;
+                gpu_skinning_writes[1].pBufferInfo     = &joint_bindings_info;
+
+                gpu_skinning_writes[2].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gpu_skinning_writes[2].dstSet          = now_mesh.gpu_skinning_mesh_descriptor_set;
+                gpu_skinning_writes[2].dstBinding      = 2;
+                gpu_skinning_writes[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                gpu_skinning_writes[2].descriptorCount = 1;
+                gpu_skinning_writes[2].pBufferInfo     = &normal_tangent_info;
+
+                gpu_skinning_writes[3].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gpu_skinning_writes[3].dstSet          = now_mesh.gpu_skinning_mesh_descriptor_set;
+                gpu_skinning_writes[3].dstBinding      = 3;
+                gpu_skinning_writes[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                gpu_skinning_writes[3].descriptorCount = 1;
+                gpu_skinning_writes[3].pBufferInfo     = &texcoords_info;
+
+                rhi->updateDescriptorSets(4, gpu_skinning_writes, 0, nullptr);
+            }
         }
         else
         {

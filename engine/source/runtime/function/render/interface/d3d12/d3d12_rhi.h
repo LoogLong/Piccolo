@@ -115,7 +115,7 @@ namespace Piccolo
     bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) override;
     bool queueWaitIdle(RHIQueue* queue) override;
     void resetCommandPool() override;
-    void waitForFences() override;
+    bool waitForFences() override;
     void waitAllFramesInFlight() override;
     void waitDeviceIdle() override;
     void getPhysicalDeviceProperties(RHIPhysicalDeviceProperties* pProperties) override;

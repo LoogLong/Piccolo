@@ -33,6 +33,7 @@ namespace Piccolo
         void logRasterPathOnce(const char* pipeline_name);
 
         bool                  m_path_tracing_frame_logged {false};
+        bool                  m_path_tracing_device_lost_logged {false};
         bool                  m_raster_path_logged {false};
     };
 } // namespace Piccolo

@@ -11,6 +11,22 @@
 
 namespace Piccolo
 {
+    namespace
+    {
+        RHIDescriptorSetLayoutBinding makeStorageBinding(uint32_t binding,
+                                                         RHIShaderStageFlags stage_flags =
+                                                             RHI_SHADER_STAGE_COMPUTE_BIT |
+                                                             RHI_SHADER_STAGE_VERTEX_BIT)
+        {
+            RHIDescriptorSetLayoutBinding layout_binding {};
+            layout_binding.binding         = binding;
+            layout_binding.descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            layout_binding.descriptorCount = 1;
+            layout_binding.stageFlags      = stage_flags;
+            return layout_binding;
+        }
+    }
+
     void GpuSkinningPass::initialize(const RenderPassInitInfo* init_info)
     {
         RenderPass::initialize(nullptr);
@@ -25,7 +41,6 @@ namespace Piccolo
     {
         if (m_skin_compute_pipeline != nullptr) return true;
         if (m_rhi == nullptr) return false;
-        // GPU skinning currently feeds path-traced BLAS builds, so gate it on ray-tracing support.
         if (!m_rhi->supportsRayTracing())
         {
             return false;
@@ -45,71 +60,74 @@ namespace Piccolo
             return false;
         }
 
-        // Descriptor set layout: 8 bindings (t0-t4 SRV, b5 UBO, u6-u7 UAV)
-        // NOTE: Read-only SRV bindings (t0-t4) must include a graphics stage flag
-        // to prevent toDescriptorRangeType() from mapping them to UAV.
-        // See d3d12_rhi.cpp: hasComputeStage && !hasGraphicsStage → UAV heuristic.
+        // Set 0 — mesh static (t0-t3)
         {
-            RHIDescriptorSetLayoutBinding bindings[8] {};
-            // t0-t4: read-only StructuredBuffer → SRV (add graphics stage to force SRV mapping)
-            bindings[0].binding         = 0;
-            bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[0].descriptorCount = 1;
-            bindings[0].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
-
-            bindings[1].binding         = 1;
-            bindings[1].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[1].descriptorCount = 1;
-            bindings[1].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
-
-            bindings[2].binding         = 2;
-            bindings[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[2].descriptorCount = 1;
-            bindings[2].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
-
-            bindings[3].binding         = 3;
-            bindings[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[3].descriptorCount = 1;
-            bindings[3].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
-
-            bindings[4].binding         = 4;
-            bindings[4].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[4].descriptorCount = 1;
-            bindings[4].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT | RHI_SHADER_STAGE_VERTEX_BIT;
-
-            // b5: ConstantBuffer → CBV (unchanged)
-            bindings[5].binding         = 5;
-            bindings[5].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            bindings[5].descriptorCount = 1;
-            bindings[5].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
-
-            // u6-u7: read-write RWStructuredBuffer → UAV (compute-only, unchanged)
-            bindings[6].binding         = 6;
-            bindings[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[6].descriptorCount = 1;
-            bindings[6].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
-
-            bindings[7].binding         = 7;
-            bindings[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[7].descriptorCount = 1;
-            bindings[7].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            RHIDescriptorSetLayoutBinding bindings[4] {};
+            bindings[0] = makeStorageBinding(0);
+            bindings[1] = makeStorageBinding(1);
+            bindings[2] = makeStorageBinding(2);
+            bindings[3] = makeStorageBinding(3);
 
             RHIDescriptorSetLayoutCreateInfo layout_info {};
             layout_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            layout_info.bindingCount = 8;
+            layout_info.bindingCount = 4;
             layout_info.pBindings    = bindings;
-            if (RHI_SUCCESS != m_rhi->createDescriptorSetLayout(&layout_info, m_skin_compute_descriptor_set_layout))
+            if (RHI_SUCCESS != m_rhi->createDescriptorSetLayout(&layout_info, m_skin_mesh_descriptor_set_layout))
             {
                 return false;
             }
         }
 
-        // Pipeline layout
+        // Set 1 — frame shared (t4 joint matrices, b5 constants, u7 flat output)
         {
-            RHIDescriptorSetLayout* set_layouts[1] = {m_skin_compute_descriptor_set_layout};
+            RHIDescriptorSetLayoutBinding bindings[3] {};
+            bindings[0] = makeStorageBinding(0);
+            bindings[1].binding         = 1;
+            bindings[1].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[1].descriptorCount = 1;
+            bindings[1].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[2].binding         = 2;
+            bindings[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[2].descriptorCount = 1;
+            bindings[2].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+
+            RHIDescriptorSetLayoutCreateInfo layout_info {};
+            layout_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layout_info.bindingCount = 3;
+            layout_info.pBindings    = bindings;
+            if (RHI_SUCCESS != m_rhi->createDescriptorSetLayout(&layout_info, m_skin_frame_descriptor_set_layout))
+            {
+                return false;
+            }
+        }
+
+        // Set 2 — instance dynamic (u6 skinned positions)
+        {
+            RHIDescriptorSetLayoutBinding bindings[1] {};
+            bindings[0].binding         = 0;
+            bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[0].descriptorCount = 1;
+            bindings[0].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+
+            RHIDescriptorSetLayoutCreateInfo layout_info {};
+            layout_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layout_info.bindingCount = 1;
+            layout_info.pBindings    = bindings;
+            if (RHI_SUCCESS != m_rhi->createDescriptorSetLayout(&layout_info, m_skin_instance_descriptor_set_layout))
+            {
+                return false;
+            }
+        }
+
+        // Pipeline layout with 3 descriptor sets
+        {
+            RHIDescriptorSetLayout* set_layouts[3] = {
+                m_skin_mesh_descriptor_set_layout,
+                m_skin_frame_descriptor_set_layout,
+                m_skin_instance_descriptor_set_layout};
             RHIPipelineLayoutCreateInfo layout_info {};
             layout_info.sType          = RHI_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            layout_info.setLayoutCount = 1;
+            layout_info.setLayoutCount = 3;
             layout_info.pSetLayouts    = set_layouts;
             if (RHI_SUCCESS != m_rhi->createPipelineLayout(&layout_info, m_skin_compute_pipeline_layout))
             {
@@ -117,16 +135,28 @@ namespace Piccolo
             }
         }
 
-        // Allocate descriptor set
+        // Per-frame shared descriptor sets
         {
-            RHIDescriptorSetAllocateInfo allocate_info {};
-            allocate_info.sType              = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocate_info.descriptorPool     = m_rhi->getDescriptorPoor();
-            allocate_info.descriptorSetCount = 1;
-            allocate_info.pSetLayouts        = &m_skin_compute_descriptor_set_layout;
-            if (RHI_SUCCESS != m_rhi->allocateDescriptorSets(&allocate_info, m_skin_compute_descriptor_set))
+            const uint32_t frame_count = m_rhi->getMaxFramesInFlight();
+            for (uint32_t frame_index = 0; frame_index < frame_count; ++frame_index)
             {
-                return false;
+                RHIDescriptorSetAllocateInfo allocate_info {};
+                allocate_info.sType              = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                allocate_info.descriptorPool     = m_rhi->getDescriptorPoor();
+                allocate_info.descriptorSetCount = 1;
+                allocate_info.pSetLayouts        = &m_skin_frame_descriptor_set_layout;
+                if (RHI_SUCCESS !=
+                    m_rhi->allocateDescriptorSets(&allocate_info, m_frame_shared_descriptor_sets[frame_index]))
+                {
+                    return false;
+                }
+
+                char debug_name[64];
+                std::snprintf(debug_name,
+                              sizeof(debug_name),
+                              "GpuSkinning.frame_descriptor_set[%u]",
+                              frame_index);
+                m_rhi->setDebugObjectName(m_frame_shared_descriptor_sets[frame_index], debug_name);
             }
         }
 
@@ -156,7 +186,6 @@ namespace Piccolo
             m_rhi->destroyShaderModule(module);
         }
 
-        // Allocate persistent constants buffer (16 bytes, mapped per dispatch)
         if (m_skin_constants_buffer == nullptr)
         {
             m_rhi->createBuffer(
@@ -166,6 +195,166 @@ namespace Piccolo
         }
 
         return true;
+    }
+
+    void GpuSkinningPass::flushPendingBufferDestroys(bool force_all)
+    {
+        if (m_rhi == nullptr)
+        {
+            m_pending_destroy_buffers.clear();
+            return;
+        }
+
+        const uint64_t max_frames_in_flight = m_rhi->getMaxFramesInFlight();
+        auto it = m_pending_destroy_buffers.begin();
+        while (it != m_pending_destroy_buffers.end())
+        {
+            if (force_all ||
+                it->queued_at_dispatch_index + max_frames_in_flight + 1U <= m_dispatch_index)
+            {
+                if (it->buffer != nullptr)
+                {
+                    m_rhi->destroyBuffer(it->buffer);
+                }
+                if (it->memory != nullptr)
+                {
+                    m_rhi->freeMemory(it->memory);
+                }
+                it = m_pending_destroy_buffers.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
+    void GpuSkinningPass::queueBufferDestroy(RHIBuffer* buffer, RHIDeviceMemory* memory)
+    {
+        if (buffer == nullptr && memory == nullptr)
+        {
+            return;
+        }
+        m_pending_destroy_buffers.push_back({buffer, memory, m_dispatch_index});
+    }
+
+    void GpuSkinningPass::updateFrameSharedDescriptorSet(RHIDescriptorSet* frame_set)
+    {
+        if (frame_set == nullptr || m_skin_constants_buffer == nullptr)
+        {
+            return;
+        }
+
+        if (m_joint_matrix_buffer == nullptr || m_skinned_vertex_output_buffer == nullptr)
+        {
+            return;
+        }
+
+        RHIDescriptorBufferInfo joint_matrices_info {};
+        joint_matrices_info.buffer = m_joint_matrix_buffer;
+        joint_matrices_info.offset = 0;
+        joint_matrices_info.range  = RHI_WHOLE_SIZE;
+
+        RHIDescriptorBufferInfo constants_info {};
+        constants_info.buffer = m_skin_constants_buffer;
+        constants_info.offset = 0;
+        constants_info.range  = 16;
+
+        RHIDescriptorBufferInfo skinned_vertices_info {};
+        skinned_vertices_info.buffer = m_skinned_vertex_output_buffer;
+        skinned_vertices_info.offset = 0;
+        skinned_vertices_info.range  = RHI_WHOLE_SIZE;
+
+        RHIWriteDescriptorSet writes[3] {};
+        writes[0].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = frame_set;
+        writes[0].dstBinding      = 0;
+        writes[0].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo     = &joint_matrices_info;
+
+        writes[1].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = frame_set;
+        writes[1].dstBinding      = 1;
+        writes[1].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo     = &constants_info;
+
+        writes[2].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet          = frame_set;
+        writes[2].dstBinding      = 2;
+        writes[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo     = &skinned_vertices_info;
+
+        m_rhi->updateDescriptorSets(3, writes, 0, nullptr);
+    }
+
+    void GpuSkinningPass::updateAllFrameSharedDescriptorSets()
+    {
+        const uint32_t frame_count = m_rhi->getMaxFramesInFlight();
+        for (uint32_t frame_index = 0; frame_index < frame_count; ++frame_index)
+        {
+            updateFrameSharedDescriptorSet(m_frame_shared_descriptor_sets[frame_index]);
+        }
+    }
+
+    void GpuSkinningPass::ensureInstanceDescriptorSet(RenderMeshGPUResource* mesh,
+                                                      RenderMeshGPUResource::SkinnedMeshOutput& output,
+                                                      uint8_t frame_index)
+    {
+        if (output.gpu_skinning_instance_sets_allocated &&
+            output.gpu_skinning_instance_sets[frame_index] != nullptr)
+        {
+            return;
+        }
+
+        RHIDescriptorSetAllocateInfo allocate_info {};
+        allocate_info.sType              = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocate_info.descriptorPool     = m_rhi->getDescriptorPoor();
+        allocate_info.descriptorSetCount = 1;
+        allocate_info.pSetLayouts        = &m_skin_instance_descriptor_set_layout;
+        if (RHI_SUCCESS !=
+            m_rhi->allocateDescriptorSets(&allocate_info, output.gpu_skinning_instance_sets[frame_index]))
+        {
+            throw std::runtime_error("allocate gpu skinning instance descriptor set");
+        }
+
+        output.gpu_skinning_instance_sets_allocated = true;
+
+        char debug_name[96];
+        std::snprintf(debug_name,
+                      sizeof(debug_name),
+                      "GpuSkinning.instance_descriptor_set[frame%u]",
+                      frame_index);
+        m_rhi->setDebugObjectName(output.gpu_skinning_instance_sets[frame_index], debug_name);
+        (void)mesh;
+    }
+
+    void GpuSkinningPass::updateInstanceDescriptorSet(RenderMeshGPUResource::SkinnedMeshOutput& output,
+                                                      uint8_t frame_index,
+                                                      RHIBuffer* position_buffer)
+    {
+        RHIDescriptorSet* instance_set = output.gpu_skinning_instance_sets[frame_index];
+        if (instance_set == nullptr || position_buffer == nullptr)
+        {
+            return;
+        }
+
+        RHIDescriptorBufferInfo skinned_positions_info {};
+        skinned_positions_info.buffer = position_buffer;
+        skinned_positions_info.offset = 0;
+        skinned_positions_info.range  = RHI_WHOLE_SIZE;
+
+        RHIWriteDescriptorSet write {};
+        write.sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet          = instance_set;
+        write.dstBinding      = 0;
+        write.descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.descriptorCount = 1;
+        write.pBufferInfo     = &skinned_positions_info;
+
+        m_rhi->updateDescriptorSets(1, &write, 0, nullptr);
     }
 
     bool GpuSkinningPass::uploadJointMatrices(const std::vector<CollectedSkinnedMesh>& instances)
@@ -185,12 +374,8 @@ namespace Piccolo
         {
             if (m_joint_matrix_buffer != nullptr)
             {
-                m_rhi->destroyBuffer(m_joint_matrix_buffer);
+                queueBufferDestroy(m_joint_matrix_buffer, m_joint_matrix_memory);
                 m_joint_matrix_buffer = nullptr;
-            }
-            if (m_joint_matrix_memory != nullptr)
-            {
-                m_rhi->freeMemory(m_joint_matrix_memory);
                 m_joint_matrix_memory = nullptr;
             }
 
@@ -203,6 +388,7 @@ namespace Piccolo
                 m_joint_matrix_buffer,
                 m_joint_matrix_memory);
             m_rhi->setDebugObjectName(m_joint_matrix_buffer, "GpuSkinning.joint_matrix_buffer");
+            updateAllFrameSharedDescriptorSets();
         }
 
         void* mapped = nullptr;
@@ -230,6 +416,10 @@ namespace Piccolo
     {
         if (m_skin_compute_pipeline == nullptr || command_buffer == nullptr) return;
 
+        const uint8_t frame_index = m_rhi->getCurrentFrameIndex();
+        RHIDescriptorSet* frame_set = m_frame_shared_descriptor_sets[frame_index];
+        updateFrameSharedDescriptorSet(frame_set);
+
         uint32_t joint_matrix_offset = 0;
         uint32_t skinned_vertex_acc_offset = 0;
 
@@ -242,23 +432,24 @@ namespace Piccolo
             uint32_t vertex_count = mesh->mesh_vertex_count;
             if (vertex_count == 0) continue;
 
-            // Per-instance skinning output (position buffer + vertex offset)
             uint32_t inst_id = csm.instance_id;
             auto& output = mesh->skinned_mesh_outputs[inst_id];
-
-            // Store vertex offset for consumers (e.g., PathTracingPass)
             output.skinned_vertex_offset = skinned_vertex_acc_offset;
 
-            // Create per-instance position buffer if needed
-            if (output.skinned_position_buffer == nullptr || output.vertex_count != vertex_count)
+            const size_t required_position_buffer_size =
+                static_cast<size_t>(vertex_count) * kGpuSkinnedPositionStorageStrideBytes;
+            if (output.skinned_position_buffer == nullptr || output.vertex_count != vertex_count ||
+                output.skinned_position_buffer_size != required_position_buffer_size)
             {
                 if (output.skinned_position_buffer != nullptr)
-                    m_rhi->destroyBuffer(output.skinned_position_buffer);
-                if (output.skinned_position_memory != nullptr)
-                    m_rhi->freeMemory(output.skinned_position_memory);
+                {
+                    queueBufferDestroy(output.skinned_position_buffer, output.skinned_position_memory);
+                    output.skinned_position_buffer = nullptr;
+                    output.skinned_position_memory = nullptr;
+                }
 
                 m_rhi->createBuffer(
-                    vertex_count * sizeof(float) * 3,
+                    required_position_buffer_size,
                     RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         RHI_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                         RHI_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -267,127 +458,52 @@ namespace Piccolo
                     output.skinned_position_memory);
                 char skinned_position_debug_name[64];
                 std::snprintf(skinned_position_debug_name,
-                                sizeof(skinned_position_debug_name),
-                                "GpuSkinning.skinned_position[inst%u]",
-                                inst_id);
+                              sizeof(skinned_position_debug_name),
+                              "GpuSkinning.skinned_position[inst%u]",
+                              inst_id);
                 m_rhi->setDebugObjectName(output.skinned_position_buffer, skinned_position_debug_name);
-                output.vertex_count = vertex_count;
-                output.index_count  = mesh->mesh_index_count;
+                output.vertex_count                 = vertex_count;
+                output.index_count                  = mesh->mesh_index_count;
+                output.skinned_position_buffer_size = required_position_buffer_size;
             }
 
-            RHIWriteDescriptorSet writes[8] {};
+            ensureInstanceDescriptorSet(mesh, output, frame_index);
+            updateInstanceDescriptorSet(output, frame_index, output.skinned_position_buffer);
 
-            // Write 0: rest-pose positions (t0)
-            RHIDescriptorBufferInfo rest_positions_info {};
-            rest_positions_info.buffer = mesh->mesh_vertex_position_buffer;
-            rest_positions_info.offset = 0;
-            rest_positions_info.range  = RHI_WHOLE_SIZE;
-            writes[0].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[0].dstSet          = m_skin_compute_descriptor_set;
-            writes[0].dstBinding      = 0;
-            writes[0].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[0].descriptorCount = 1;
-            writes[0].pBufferInfo     = &rest_positions_info;
-
-            // Write 1: joint bindings (t1)
-            RHIDescriptorBufferInfo joint_bindings_info {};
-            joint_bindings_info.buffer = mesh->mesh_vertex_joint_binding_buffer;
-            joint_bindings_info.offset = 0;
-            joint_bindings_info.range  = RHI_WHOLE_SIZE;
-            writes[1].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet          = m_skin_compute_descriptor_set;
-            writes[1].dstBinding      = 1;
-            writes[1].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[1].descriptorCount = 1;
-            writes[1].pBufferInfo     = &joint_bindings_info;
-
-            // Write 2: rest-pose normal+tangent interleaved (t2)
-            RHIDescriptorBufferInfo normal_tangent_info {};
-            normal_tangent_info.buffer = mesh->mesh_vertex_varying_enable_blending_buffer;
-            normal_tangent_info.offset = 0;
-            normal_tangent_info.range  = RHI_WHOLE_SIZE;
-            writes[2].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[2].dstSet          = m_skin_compute_descriptor_set;
-            writes[2].dstBinding      = 2;
-            writes[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[2].descriptorCount = 1;
-            writes[2].pBufferInfo     = &normal_tangent_info;
-
-            // Write 3: rest-pose texcoords (t3)
-            RHIDescriptorBufferInfo texcoords_info {};
-            texcoords_info.buffer = mesh->mesh_vertex_varying_buffer;
-            texcoords_info.offset = 0;
-            texcoords_info.range  = RHI_WHOLE_SIZE;
-            writes[3].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[3].dstSet          = m_skin_compute_descriptor_set;
-            writes[3].dstBinding      = 3;
-            writes[3].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[3].descriptorCount = 1;
-            writes[3].pBufferInfo     = &texcoords_info;
-
-            // Write 4: joint matrices (t4)
-            RHIDescriptorBufferInfo joint_matrices_info {};
-            joint_matrices_info.buffer = m_joint_matrix_buffer;
-            joint_matrices_info.offset = joint_matrix_offset * sizeof(Matrix4x4);
-            joint_matrices_info.range  = RHI_WHOLE_SIZE;
-            writes[4].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[4].dstSet          = m_skin_compute_descriptor_set;
-            writes[4].dstBinding      = 4;
-            writes[4].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[4].descriptorCount = 1;
-            writes[4].pBufferInfo     = &joint_matrices_info;
-
-            // Write 5: SkinComputeConstants (b5) — persistent buffer, mapped per dispatch
+            struct SkinComputeConstants
             {
-                struct { uint32_t vc; uint32_t jmo; uint32_t ovo; uint32_t pad; }
-                    constants = { vertex_count, joint_matrix_offset, skinned_vertex_acc_offset, 0 };
-                void* mapped_cb = nullptr;
-                m_rhi->mapMemory(m_skin_constants_memory, 0, 16, 0, &mapped_cb);
-                std::memcpy(mapped_cb, &constants, sizeof(constants));
-                m_rhi->unmapMemory(m_skin_constants_memory);
+                uint32_t vertex_count;
+                uint32_t joint_matrix_offset;
+                uint32_t output_vertex_offset;
+                uint32_t padding;
+            } constants = {vertex_count, joint_matrix_offset, skinned_vertex_acc_offset, 0};
+
+            void* mapped_cb = nullptr;
+            m_rhi->mapMemory(m_skin_constants_memory, 0, sizeof(constants), 0, &mapped_cb);
+            std::memcpy(mapped_cb, &constants, sizeof(constants));
+            m_rhi->unmapMemory(m_skin_constants_memory);
+
+            if (mesh->gpu_skinning_mesh_descriptor_set == nullptr)
+            {
+                joint_matrix_offset += s_mesh_vertex_blending_max_joint_count;
+                skinned_vertex_acc_offset += vertex_count;
+                continue;
             }
 
-            RHIDescriptorBufferInfo constants_info {};
-            constants_info.buffer = m_skin_constants_buffer;
-            constants_info.offset = 0;
-            constants_info.range  = 16;
-            writes[5].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[5].dstSet          = m_skin_compute_descriptor_set;
-            writes[5].dstBinding      = 5;
-            writes[5].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writes[5].descriptorCount = 1;
-            writes[5].pBufferInfo     = &constants_info;
-
-            // Write 6: skinned positions → PER-INSTANCE buffer (BLAS geometry source), offset 0
-            RHIDescriptorBufferInfo skinned_positions_info {};
-            skinned_positions_info.buffer = output.skinned_position_buffer;
-            skinned_positions_info.offset = 0;
-            skinned_positions_info.range  = RHI_WHOLE_SIZE;
-            writes[6].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[6].dstSet          = m_skin_compute_descriptor_set;
-            writes[6].dstBinding      = 6;
-            writes[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[6].descriptorCount = 1;
-            writes[6].pBufferInfo     = &skinned_positions_info;
-
-            // Write 7: skinned vertex data → FLAT buffer at cumulative offset
-            RHIDescriptorBufferInfo skinned_vertices_info {};
-            skinned_vertices_info.buffer = m_skinned_vertex_output_buffer;
-            skinned_vertices_info.offset = skinned_vertex_acc_offset * sizeof(GpuSkinnedVertexGPUData);
-            skinned_vertices_info.range  = RHI_WHOLE_SIZE;
-            writes[7].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[7].dstSet          = m_skin_compute_descriptor_set;
-            writes[7].dstBinding      = 7;
-            writes[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            writes[7].descriptorCount = 1;
-            writes[7].pBufferInfo     = &skinned_vertices_info;
-
-            m_rhi->updateDescriptorSets(8, writes, 0, nullptr);
+            RHIDescriptorSet* sets[3] = {
+                mesh->gpu_skinning_mesh_descriptor_set,
+                frame_set,
+                output.gpu_skinning_instance_sets[frame_index]};
 
             m_rhi->cmdBindPipelinePFN(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_skin_compute_pipeline);
-            m_rhi->cmdBindDescriptorSetsPFN(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE,
-                                             m_skin_compute_pipeline_layout, 0, 1,
-                                             &m_skin_compute_descriptor_set, 0, nullptr);
+            m_rhi->cmdBindDescriptorSetsPFN(command_buffer,
+                                             RHI_PIPELINE_BIND_POINT_COMPUTE,
+                                             m_skin_compute_pipeline_layout,
+                                             0,
+                                             3,
+                                             sets,
+                                             0,
+                                             nullptr);
 
             uint32_t group_count = (vertex_count + 63) / 64;
             m_rhi->cmdDispatch(command_buffer, group_count, 1, 1);
@@ -396,14 +512,14 @@ namespace Piccolo
             skinned_vertex_acc_offset += vertex_count;
         }
 
-        // UAV barrier: compute writes → acceleration structure build reads
         RHIMemoryBarrier memory_barrier {};
         memory_barrier.sType         = RHI_STRUCTURE_TYPE_MEMORY_BARRIER;
         memory_barrier.srcAccessMask = RHI_ACCESS_SHADER_WRITE_BIT;
-        memory_barrier.dstAccessMask = RHI_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        memory_barrier.dstAccessMask = RHI_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | RHI_ACCESS_SHADER_READ_BIT;
         m_rhi->cmdPipelineBarrier(command_buffer,
                                    RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                   RHI_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   RHI_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                                    0,
                                    1, &memory_barrier,
                                    0, nullptr,
@@ -419,16 +535,16 @@ namespace Piccolo
             if (m_skin_compute_pipeline == nullptr) return false;
         }
 
+        flushPendingBufferDestroys();
+
         auto render_scene = m_render_resource_impl->getCurrentRenderScene();
         if (render_scene == nullptr) return false;
 
-        // Collect skinned meshes directly from render entities.
-        // No dependency on collectPathTracingInstances() or path-tracing-specific types.
         std::vector<CollectedSkinnedMesh> skinned_meshes;
         for (RenderEntity& entity : render_scene->m_render_entities)
         {
             if (!entity.m_enable_vertex_blending) continue;
-            if (entity.m_blend || entity.m_base_color_factor.w < 1.0f) continue; // skip transparent
+            if (entity.m_blend || entity.m_base_color_factor.w < 1.0f) continue;
 
             RenderMeshGPUResource* mesh = nullptr;
             try
@@ -461,7 +577,6 @@ namespace Piccolo
         RHICommandBuffer* command_buffer = m_rhi->getCurrentCommandBuffer();
         if (command_buffer == nullptr) return false;
 
-        // Ensure flat skinned vertex output buffer is allocated
         uint32_t total_skinned_vertices = 0;
         for (const auto& csm : skinned_meshes)
         {
@@ -472,9 +587,11 @@ namespace Piccolo
         if (required_size > m_skinned_vertex_output_capacity)
         {
             if (m_skinned_vertex_output_buffer != nullptr)
-                m_rhi->destroyBuffer(m_skinned_vertex_output_buffer);
-            if (m_skinned_vertex_output_memory != nullptr)
-                m_rhi->freeMemory(m_skinned_vertex_output_memory);
+            {
+                queueBufferDestroy(m_skinned_vertex_output_buffer, m_skinned_vertex_output_memory);
+                m_skinned_vertex_output_buffer = nullptr;
+                m_skinned_vertex_output_memory = nullptr;
+            }
 
             m_skinned_vertex_output_capacity = required_size * 2;
             m_rhi->createBuffer(
@@ -484,17 +601,20 @@ namespace Piccolo
                 m_skinned_vertex_output_buffer,
                 m_skinned_vertex_output_memory);
             m_rhi->setDebugObjectName(m_skinned_vertex_output_buffer, "GpuSkinning.skinned_vertex_output_buffer");
+            updateAllFrameSharedDescriptorSets();
         }
 
-        // Expose the flat vertex buffer to consumers via RenderResource
         m_render_resource_impl->setSkinnedVertexBuffer(m_skinned_vertex_output_buffer);
 
         dispatchSkinCompute(command_buffer, skinned_meshes);
+        ++m_dispatch_index;
         return true;
     }
 
     void GpuSkinningPass::teardown()
     {
+        flushPendingBufferDestroys(true);
+
         if (m_rhi == nullptr)
         {
             return;
@@ -502,11 +622,15 @@ namespace Piccolo
 
         m_rhi->destroyPipeline(m_skin_compute_pipeline);
         m_rhi->destroyPipelineLayout(m_skin_compute_pipeline_layout);
-        m_rhi->destroyDescriptorSetLayout(m_skin_compute_descriptor_set_layout);
+        m_rhi->destroyDescriptorSetLayout(m_skin_mesh_descriptor_set_layout);
+        m_rhi->destroyDescriptorSetLayout(m_skin_frame_descriptor_set_layout);
+        m_rhi->destroyDescriptorSetLayout(m_skin_instance_descriptor_set_layout);
         m_skin_compute_pipeline = nullptr;
         m_skin_compute_pipeline_layout = nullptr;
-        m_skin_compute_descriptor_set_layout = nullptr;
-        m_skin_compute_descriptor_set = nullptr;
+        m_skin_mesh_descriptor_set_layout = nullptr;
+        m_skin_frame_descriptor_set_layout = nullptr;
+        m_skin_instance_descriptor_set_layout = nullptr;
+        m_frame_shared_descriptor_sets.fill(nullptr);
 
         if (m_joint_matrix_buffer != nullptr)
         {
@@ -516,6 +640,8 @@ namespace Piccolo
         {
             m_rhi->freeMemory(m_joint_matrix_memory);
         }
+        m_joint_matrix_buffer = nullptr;
+        m_joint_matrix_memory = nullptr;
         m_joint_matrix_buffer_capacity = 0;
 
         if (m_skin_constants_buffer != nullptr)
@@ -526,6 +652,8 @@ namespace Piccolo
         {
             m_rhi->freeMemory(m_skin_constants_memory);
         }
+        m_skin_constants_buffer = nullptr;
+        m_skin_constants_memory = nullptr;
 
         if (m_skinned_vertex_output_buffer != nullptr)
         {
@@ -535,6 +663,8 @@ namespace Piccolo
         {
             m_rhi->freeMemory(m_skinned_vertex_output_memory);
         }
+        m_skinned_vertex_output_buffer = nullptr;
+        m_skinned_vertex_output_memory = nullptr;
         m_skinned_vertex_output_capacity = 0;
 
         if (m_render_resource_impl != nullptr)

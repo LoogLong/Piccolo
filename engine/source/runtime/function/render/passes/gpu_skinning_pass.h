@@ -2,6 +2,7 @@
 
 #include "runtime/function/render/render_pass.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -20,6 +21,9 @@ namespace Piccolo
         Vector4 texcoord {0.0f, 0.0f, 0.0f, 0.0f};
     };
     static_assert(sizeof(GpuSkinnedVertexGPUData) == 64, "Must match SkinnedVertexData layout in HLSL");
+
+    // Stride of RWStructuredBuffer<float3> g_skinned_positions (HLSL 16-byte element alignment).
+    constexpr uint32_t kGpuSkinnedPositionStorageStrideBytes = 16u;
 
     // Minimal input data for skinning one mesh instance.
     // No path-tracing-specific fields.
@@ -42,34 +46,53 @@ namespace Piccolo
 
         void teardown() override;
 
+        RHIDescriptorSetLayout** getMeshDescriptorSetLayoutAddress() { return &m_skin_mesh_descriptor_set_layout; }
+
     private:
+        struct PendingBufferDestroy
+        {
+            RHIBuffer*       buffer {nullptr};
+            RHIDeviceMemory* memory {nullptr};
+            uint64_t         queued_at_dispatch_index {0};
+        };
+
         bool setupSkinComputePipeline();
         bool uploadJointMatrices(const std::vector<CollectedSkinnedMesh>& instances);
         void dispatchSkinCompute(RHICommandBuffer* command_buffer,
                                  const std::vector<CollectedSkinnedMesh>& instances);
 
+        void flushPendingBufferDestroys(bool force_all = false);
+        void queueBufferDestroy(RHIBuffer* buffer, RHIDeviceMemory* memory);
+        void updateAllFrameSharedDescriptorSets();
+        void updateFrameSharedDescriptorSet(RHIDescriptorSet* frame_set);
+        void ensureInstanceDescriptorSet(RenderMeshGPUResource* mesh,
+                                         RenderMeshGPUResource::SkinnedMeshOutput& output,
+                                         uint8_t frame_index);
+        void updateInstanceDescriptorSet(RenderMeshGPUResource::SkinnedMeshOutput& output,
+                                           uint8_t frame_index,
+                                           RHIBuffer* position_buffer);
+
         std::shared_ptr<RenderResource> m_render_resource_impl;
 
-        // Compute pipeline resources
-        RHIDescriptorSetLayout* m_skin_compute_descriptor_set_layout {nullptr};
+        RHIDescriptorSetLayout* m_skin_mesh_descriptor_set_layout {nullptr};
+        RHIDescriptorSetLayout* m_skin_frame_descriptor_set_layout {nullptr};
+        RHIDescriptorSetLayout* m_skin_instance_descriptor_set_layout {nullptr};
         RHIPipelineLayout*      m_skin_compute_pipeline_layout {nullptr};
         RHIPipeline*            m_skin_compute_pipeline {nullptr};
-        RHIDescriptorSet*       m_skin_compute_descriptor_set {nullptr};
+        std::array<RHIDescriptorSet*, k_rhi_max_frames_in_flight> m_frame_shared_descriptor_sets {};
 
-        // Joint matrix upload buffer (host-visible, mapped per frame)
         RHIBuffer*       m_joint_matrix_buffer {nullptr};
         RHIDeviceMemory* m_joint_matrix_memory {nullptr};
         size_t           m_joint_matrix_buffer_capacity {0};
 
-        // Persistent staging buffer for SkinComputeConstants (allocated once, mapped per dispatch)
         RHIBuffer*       m_skin_constants_buffer {nullptr};
         RHIDeviceMemory* m_skin_constants_memory {nullptr};
 
-        // Flat output buffer for skinned vertex data (GpuSkinnedVertexGPUData layout).
-        // Compute shader writes per-instance data at computed offsets. The buffer handle
-        // is exposed to consumers via RenderResource::getSkinnedVertexBuffer().
         RHIBuffer*       m_skinned_vertex_output_buffer {nullptr};
         RHIDeviceMemory* m_skinned_vertex_output_memory {nullptr};
         size_t           m_skinned_vertex_output_capacity {0};
+
+        uint64_t m_dispatch_index {0};
+        std::vector<PendingBufferDestroy> m_pending_destroy_buffers;
     };
 } // namespace Piccolo

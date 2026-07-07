@@ -210,8 +210,7 @@ namespace Piccolo
             uint32_t vertex_stride,
             RHIBuffer* index_buffer,
             uint32_t index_count,
-            RHIIndexType index_type,
-            RHIAccelerationStructure* source_blas = nullptr);  // if set, perform update in-place
+            RHIIndexType index_type);
 
         std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
 
@@ -264,6 +263,7 @@ namespace Piccolo
         // descriptor set layout in main camera pass will be used when uploading resource
         RHIDescriptorSetLayout* const* m_mesh_descriptor_set_layout {nullptr};
         RHIDescriptorSetLayout* const* m_material_descriptor_set_layout {nullptr};
+        RHIDescriptorSetLayout* const* m_gpu_skinning_mesh_descriptor_set_layout {nullptr};
 
     private:
         struct PendingPathTracingBufferDestroy

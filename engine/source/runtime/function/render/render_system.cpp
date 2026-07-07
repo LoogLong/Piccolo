@@ -19,6 +19,7 @@
 #include "runtime/function/render/debugdraw/debug_draw_manager.h"
 
 #include "runtime/function/render/passes/main_camera_pass.h"
+#include "runtime/function/render/passes/gpu_skinning_pass.h"
 #include "runtime/function/render/passes/particle_pass.h"
 
 #if PICCOLO_ENABLE_VULKAN_BACKEND
@@ -212,6 +213,13 @@ namespace Piccolo
                  ->m_descriptor_infos[MainCameraPass::LayoutType::_mesh_per_material]
                  .layout;
 
+        if (m_render_pipeline->m_gpu_skinning_pass != nullptr)
+        {
+            std::static_pointer_cast<RenderResource>(m_render_resource)->m_gpu_skinning_mesh_descriptor_set_layout =
+                std::static_pointer_cast<GpuSkinningPass>(m_render_pipeline->m_gpu_skinning_pass)
+                    ->getMeshDescriptorSetLayoutAddress();
+        }
+
         logPathTracingReadinessReport(*m_rhi, *m_render_pipeline);
     }
 
@@ -236,11 +244,28 @@ namespace Piccolo
 
         g_runtime_global_context.m_debugdraw_manager->tick(delta_time);
 
+        if (m_rhi->isDeviceLost())
+        {
+            if (!m_device_lost_logged)
+            {
+                LOG_ERROR("Render tick skipped: GPU device lost");
+                m_device_lost_logged = true;
+            }
+            return;
+        }
+
         // render one frame
         if (m_render_pipeline->pathTracingRender(m_rhi, m_render_resource))
         {
+            return;
         }
-        else if (m_render_pipeline_type == RENDER_PIPELINE_TYPE::FORWARD_PIPELINE)
+
+        if (m_render_pipeline->isPathTracingSceneModeActive())
+        {
+            return;
+        }
+
+        if (m_render_pipeline_type == RENDER_PIPELINE_TYPE::FORWARD_PIPELINE)
         {
             m_render_pipeline->forwardRender(m_rhi, m_render_resource);
         }

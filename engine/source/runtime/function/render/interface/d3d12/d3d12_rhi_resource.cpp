@@ -1012,6 +1012,19 @@ bool D3D12RHI::createDescriptorSetLayout(const RHIDescriptorSetLayoutCreateInfo*
 }
 bool D3D12RHI::createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence* &pFence)
 {
+    RHIFenceCreateInfo normalized {};
+    if (pCreateInfo != nullptr)
+    {
+        normalized = *pCreateInfo;
+    }
+    if (normalized.sType == 0)
+    {
+        normalized.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+#if !defined(NDEBUG)
+        LOG_WARN("RHIFenceCreateInfo.sType was unset; defaulting to FENCE_CREATE_INFO");
+#endif
+    }
+
     auto* fence = new D3D12RHIFence();
 #ifdef _WIN32
     if (m_d3d12_device == nullptr)
@@ -1022,7 +1035,7 @@ bool D3D12RHI::createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence* &pFe
     }
 
     const bool initially_signaled =
-        pCreateInfo != nullptr && (pCreateInfo->flags & RHI_FENCE_CREATE_SIGNALED_BIT) != 0;
+        (normalized.flags & RHI_FENCE_CREATE_SIGNALED_BIT) != 0;
     const uint64_t initial_value = initially_signaled ? 1ULL : 0ULL;
     if (FAILED(m_d3d12_device->CreateFence(initial_value,
                                            D3D12_FENCE_FLAG_NONE,

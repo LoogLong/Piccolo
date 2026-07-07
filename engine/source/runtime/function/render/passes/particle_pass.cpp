@@ -6,7 +6,6 @@
 #include "runtime/function/render/render_system.h"
 
 #include "core/base/macro.h"
-#include <fstream>
 
 namespace Piccolo
 {
@@ -66,6 +65,14 @@ namespace Piccolo
 
         if (!use_inline_copy)
         {
+            RHIFence* copy_fence = const_cast<RHIFence*>(m_rhi->getCopyFenceList()[index]);
+            if (RHI_SUCCESS != m_rhi->waitForFencesPFN(1, &copy_fence, RHI_TRUE, UINT64_MAX))
+            {
+                LOG_ERROR("ParticlePass::copyNormalAndDepthImage: wait for copy fence failed (index={})",
+                          static_cast<uint32_t>(index));
+                throw std::runtime_error("wait for particle copy fence");
+            }
+
             RHICommandBufferBeginInfo command_buffer_begin_info {};
             command_buffer_begin_info.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -307,25 +314,44 @@ namespace Piccolo
     {
         if (m_rhi == nullptr || !m_rhi->usesDedicatedComputeSubmission())
         {
-            // Vulkan path: particle compute is submitted and waited inline in simulate().
             return;
         }
 
         for (uint32_t frame_index = 0; frame_index < m_compute_fences.size(); ++frame_index)
         {
-            if (frame_index >= m_compute_readback_pending.size() || !m_compute_readback_pending[frame_index])
-            {
-                continue;
-            }
-
             RHIFence* compute_fence = m_compute_fences[frame_index];
             if (compute_fence != nullptr)
             {
                 m_rhi->waitForFencesPFN(1, &compute_fence, RHI_TRUE, UINT64_MAX);
             }
-            m_compute_readback_pending[frame_index] = false;
-            if (frame_index < m_compute_readback_emitters.size())
+
+            if (frame_index < m_compute_readback_pending.size() && m_compute_readback_pending[frame_index])
             {
+                for (ParticleEmitterID emitter_index : m_compute_readback_emitters[frame_index])
+                {
+                    if (emitter_index < m_emitter_buffer_batches.size() &&
+                        frame_index < m_emitter_buffer_batches[emitter_index].m_counter_readback_memories.size())
+                    {
+                        ParticleCounter counterNext {};
+                        void*             mapped = nullptr;
+                        m_rhi->mapMemory(m_emitter_buffer_batches[emitter_index]
+                                             .m_counter_readback_memories[frame_index],
+                                         0,
+                                         RHI_WHOLE_SIZE,
+                                         0,
+                                         &mapped);
+                        m_rhi->invalidateMappedMemoryRanges(
+                            nullptr,
+                            m_emitter_buffer_batches[emitter_index].m_counter_readback_memories[frame_index],
+                            0,
+                            RHI_WHOLE_SIZE);
+                        memcpy(&counterNext, mapped, sizeof(ParticleCounter));
+                        m_rhi->unmapMemory(
+                            m_emitter_buffer_batches[emitter_index].m_counter_readback_memories[frame_index]);
+                        m_emitter_buffer_batches[emitter_index].m_num_particle = counterNext.alive_count_after_sim;
+                    }
+                }
+                m_compute_readback_pending[frame_index] = false;
                 m_compute_readback_emitters[frame_index].clear();
             }
         }
@@ -875,10 +901,7 @@ namespace Piccolo
             submitInfo.sType              = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers    = &copyCmd;
-            RHIFenceCreateInfo fenceInfo {};
-            fenceInfo.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            fenceInfo.flags = 0;
-            if (RHI_SUCCESS != m_rhi->createFence(&fenceInfo, fence))
+            if (RHI_SUCCESS != m_rhi->createFence(fence))
             {
                 throw std::runtime_error("create fence");
             }
@@ -988,10 +1011,7 @@ namespace Piccolo
             submitInfo.sType              = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers    = &copyCmd;
-            RHIFenceCreateInfo fenceInfo {};
-            fenceInfo.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            fenceInfo.flags = 0;
-            if (RHI_SUCCESS != m_rhi->createFence(&fenceInfo, fence))
+            if (RHI_SUCCESS != m_rhi->createFence(fence))
             {
                 throw std::runtime_error("create fence");
             }
@@ -1041,10 +1061,7 @@ namespace Piccolo
                 throw std::runtime_error("alloc copy command buffer");
         }
 
-        RHIFenceCreateInfo fenceCreateInfo {};
-        fenceCreateInfo.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fenceCreateInfo.flags = 0;
-        if (RHI_SUCCESS != m_rhi->createFence(&fenceCreateInfo, m_fence))
+        if (RHI_SUCCESS != m_rhi->createFence(m_fence))
             throw std::runtime_error("create fence");
 
         if (m_rhi->usesDedicatedComputeSubmission())
@@ -1053,15 +1070,18 @@ namespace Piccolo
             for (RHICommandBuffer*& compute_command_buffer : m_compute_command_buffers)
             {
                 if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, compute_command_buffer))
-                    throw std::runtime_error("alloc D3D12 compute command buffer");
-                m_rhi->setCommandBufferComputeQueue(compute_command_buffer, true);
+                    throw std::runtime_error("alloc particle compute command buffer");
+                if (m_rhi->getBackendType() == RHIBackendType::D3D12)
+                {
+                    m_rhi->setCommandBufferComputeQueue(compute_command_buffer, true);
+                }
             }
 
             m_compute_fences.resize(m_rhi->getMaxFramesInFlight(), nullptr);
             for (RHIFence*& compute_fence : m_compute_fences)
             {
-                if (RHI_SUCCESS != m_rhi->createFence(&fenceCreateInfo, compute_fence))
-                    throw std::runtime_error("create D3D12 compute fence");
+                if (RHI_SUCCESS != m_rhi->createFence(compute_fence, RHI_FENCE_CREATE_SIGNALED_BIT))
+                    throw std::runtime_error("create particle compute fence");
             }
 
             m_compute_readback_pending.assign(m_rhi->getMaxFramesInFlight(), false);
@@ -2043,15 +2063,17 @@ namespace Piccolo
 
         if (m_rhi->usesDedicatedComputeSubmission())
         {
-            const uint8_t frame_index = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
+            const uint8_t frame_index   = m_rhi->getCurrentFrameIndex() % m_rhi->getMaxFramesInFlight();
             RHIFence*     compute_fence = m_compute_fences[frame_index];
+
+            if (compute_fence != nullptr &&
+                RHI_SUCCESS != m_rhi->waitForFencesPFN(1, &compute_fence, RHI_TRUE, UINT64_MAX))
+            {
+                throw std::runtime_error("wait for particle compute fence");
+            }
+
             if (m_compute_readback_pending[frame_index])
             {
-                if (RHI_SUCCESS != m_rhi->waitForFencesPFN(1, &compute_fence, RHI_TRUE, UINT64_MAX))
-                {
-                    throw std::runtime_error("wait for D3D12 particle compute fence");
-                }
-
                 for (ParticleEmitterID emitter_index : m_compute_readback_emitters[frame_index])
                 {
                     if (emitter_index < m_emitter_buffer_batches.size() &&
@@ -2066,57 +2088,57 @@ namespace Piccolo
                 m_compute_readback_emitters[frame_index].clear();
             }
 
+            RHICommandBuffer*         command_buffer = m_compute_command_buffers[frame_index];
+            RHICommandBufferBeginInfo cmdBufInfo {};
+            cmdBufInfo.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            if (RHI_SUCCESS != m_rhi->beginCommandBuffer(command_buffer, &cmdBufInfo))
+            {
+                throw std::runtime_error("begin particle compute command buffer");
+            }
+
+            for (ParticleEmitterID emitter_index : m_emitter_tick_indices)
+            {
+                if (emitter_index >= m_emitter_buffer_batches.size() ||
+                    frame_index >= m_emitter_buffer_batches[emitter_index].m_counter_readback_buffers.size())
+                {
+                    continue;
+                }
+
+                record_emitter_compute(emitter_index,
+                                       command_buffer,
+                                       m_emitter_buffer_batches[emitter_index]
+                                           .m_counter_readback_buffers[frame_index]);
+            }
+
+            if (RHI_SUCCESS != m_rhi->endCommandBuffer(command_buffer))
+            {
+                throw std::runtime_error("end particle compute command buffer");
+            }
+
+            if (RHI_SUCCESS != m_rhi->resetFencesPFN(1, &compute_fence))
+            {
+                throw std::runtime_error("reset particle compute fence");
+            }
+
+            RHISubmitInfo computeSubmitInfo {};
+            const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            RHISemaphore*               copy_done_semaphore =
+                m_rhi->getCopyDoneSemaphore(m_rhi->getLastSubmittedFrameIndex());
+            computeSubmitInfo.sType                = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
+            computeSubmitInfo.waitSemaphoreCount   = 1;
+            computeSubmitInfo.pWaitSemaphores        = &copy_done_semaphore;
+            computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
+            computeSubmitInfo.commandBufferCount     = 1;
+            computeSubmitInfo.pCommandBuffers        = &command_buffer;
+
+            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &computeSubmitInfo, compute_fence))
+            {
+                throw std::runtime_error("particle compute queue submit");
+            }
+
             if (!m_emitter_tick_indices.empty())
             {
-                RHICommandBuffer* command_buffer = m_compute_command_buffers[frame_index];
-                RHICommandBufferBeginInfo cmdBufInfo {};
-                cmdBufInfo.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                if (RHI_SUCCESS != m_rhi->beginCommandBuffer(command_buffer, &cmdBufInfo))
-                {
-                    throw std::runtime_error("begin D3D12 particle compute command buffer");
-                }
-
-                for (ParticleEmitterID emitter_index : m_emitter_tick_indices)
-                {
-                    if (emitter_index >= m_emitter_buffer_batches.size() ||
-                        frame_index >= m_emitter_buffer_batches[emitter_index].m_counter_readback_buffers.size())
-                    {
-                        continue;
-                    }
-
-                    record_emitter_compute(emitter_index,
-                                           command_buffer,
-                                           m_emitter_buffer_batches[emitter_index]
-                                               .m_counter_readback_buffers[frame_index]);
-                }
-
-                if (RHI_SUCCESS != m_rhi->endCommandBuffer(command_buffer))
-                {
-                    throw std::runtime_error("end D3D12 particle compute command buffer");
-                }
-
-                if (RHI_SUCCESS != m_rhi->resetFencesPFN(1, &compute_fence))
-                {
-                    throw std::runtime_error("reset D3D12 particle compute fence");
-                }
-
-                RHISubmitInfo computeSubmitInfo {};
-                const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-                RHISemaphore*               copy_done_semaphore =
-                    m_rhi->getCopyDoneSemaphore(m_rhi->getLastSubmittedFrameIndex());
-                computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
-                computeSubmitInfo.waitSemaphoreCount       = 1;
-                computeSubmitInfo.pWaitSemaphores          = &copy_done_semaphore;
-                computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
-                computeSubmitInfo.commandBufferCount     = 1;
-                computeSubmitInfo.pCommandBuffers        = &command_buffer;
-
-                if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &computeSubmitInfo, compute_fence))
-                {
-                    throw std::runtime_error("D3D12 particle compute queue submit");
-                }
-
-                m_compute_readback_pending[frame_index] = true;
+                m_compute_readback_pending[frame_index]  = true;
                 m_compute_readback_emitters[frame_index] = m_emitter_tick_indices;
             }
 
@@ -2125,49 +2147,6 @@ namespace Piccolo
             return;
         }
 
-        for (auto i : m_emitter_tick_indices)
-        {
-            RHICommandBufferBeginInfo cmdBufInfo {};
-            cmdBufInfo.sType = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-            // particle compute pass
-            if (RHI_SUCCESS != m_rhi->beginCommandBuffer(m_compute_command_buffer, &cmdBufInfo))
-            {
-                throw std::runtime_error("begin command buffer");
-            }
-
-            record_emitter_compute(i, m_compute_command_buffer, m_emitter_buffer_batches[i].m_counter_readback_buffer);
-
-            if (RHI_SUCCESS != m_rhi->endCommandBuffer(m_compute_command_buffer))
-            {
-                throw std::runtime_error("end command buffer");
-            }
-
-            // Submit compute work
-            m_rhi->resetFencesPFN(1, &m_fence);
-            RHISubmitInfo computeSubmitInfo {};
-            const RHIPipelineStageFlags waitStageMask = RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-            RHISemaphore*               copy_done_semaphore =
-                m_rhi->getCopyDoneSemaphore(m_rhi->getLastSubmittedFrameIndex());
-            computeSubmitInfo.sType                  = RHI_STRUCTURE_TYPE_SUBMIT_INFO;
-            computeSubmitInfo.waitSemaphoreCount       = 1;
-            computeSubmitInfo.pWaitSemaphores          = &copy_done_semaphore;
-            computeSubmitInfo.pWaitDstStageMask      = &waitStageMask;
-            computeSubmitInfo.commandBufferCount     = 1;
-            computeSubmitInfo.pCommandBuffers        = &m_compute_command_buffer;
-
-            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &computeSubmitInfo, m_fence))
-            {
-                throw std::runtime_error("compute queue submit");
-            }
-
-            if (RHI_SUCCESS != m_rhi->waitForFencesPFN(1, &m_fence, RHI_TRUE, UINT64_MAX))
-            {
-                throw std::runtime_error("wait for fence");
-            }
-
-            read_counter(i, m_emitter_buffer_batches[i].m_counter_readback_memory);
-        }
         m_emitter_tick_indices.clear();
         m_emitter_transform_indices.clear();
     }

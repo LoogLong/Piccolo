@@ -1994,16 +1994,19 @@ void D3D12RHI::resetCommandPool()
 #endif
     return;
 }
-void D3D12RHI::waitForFences()
+bool D3D12RHI::waitForFences()
 {
 #ifdef _WIN32
     RHIFence* current_frame_fence = m_frame_fences[m_current_frame_index % m_frame_fences.size()];
-    if (current_frame_fence != nullptr && !waitForFencesPFN(1, &current_frame_fence, RHI_TRUE, UINT64_MAX))
+    RHIFence* current_copy_fence  = m_copy_fences[m_current_frame_index % m_copy_fences.size()];
+    RHIFence* fences[]            = {current_frame_fence, current_copy_fence};
+    if (!waitForFencesPFN(2, fences, RHI_TRUE, UINT64_MAX))
     {
         LOG_ERROR("D3D12 waitForFences failed for frame {}", static_cast<uint32_t>(m_current_frame_index));
+        return false;
     }
 #endif
-    return;
+    return true;
 }
 
 void D3D12RHI::waitAllFramesInFlight()
@@ -2016,7 +2019,17 @@ void D3D12RHI::waitAllFramesInFlight()
                               RHI_TRUE,
                               UINT64_MAX))
         {
-            LOG_ERROR("D3D12 waitAllFramesInFlight failed");
+            LOG_ERROR("D3D12 waitAllFramesInFlight failed for frame fences");
+        }
+    }
+    if (!m_copy_fences.empty())
+    {
+        if (!waitForFencesPFN(static_cast<uint32_t>(m_copy_fences.size()),
+                              m_copy_fences.data(),
+                              RHI_TRUE,
+                              UINT64_MAX))
+        {
+            LOG_ERROR("D3D12 waitAllFramesInFlight failed for copy fences");
         }
     }
 #endif

@@ -5,6 +5,8 @@
 #include "runtime/function/render/render_shader_bytecode.h"
 #include "runtime/function/render/render_helper.h"
 
+#include "core/base/macro.h"
+
 #include <map>
 #include <stdexcept>
 
@@ -479,7 +481,11 @@ namespace Piccolo
         m_global_render_resource->_storage_buffer._global_upload_ringbuffers_end[m_rhi->getCurrentFrameIndex()] =
             m_global_render_resource->_storage_buffer._global_upload_ringbuffers_begin[m_rhi->getCurrentFrameIndex()];
 
-        m_rhi->waitForFences();
+        if (!m_rhi->waitForFences())
+        {
+            LOG_ERROR("Pick pass aborted: waitForFences failed");
+            return 0;
+        }
 
         m_rhi->resetCommandPool();
 

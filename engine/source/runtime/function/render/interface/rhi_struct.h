@@ -396,6 +396,15 @@ namespace Piccolo
         RHIFenceCreateFlags flags;
     };
 
+    inline RHIFenceCreateInfo makeRHIFenceCreateInfo(RHIFenceCreateFlags flags = 0)
+    {
+        RHIFenceCreateInfo info {};
+        info.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        info.pNext = nullptr;
+        info.flags = flags;
+        return info;
+    }
+
     struct RHIFormatProperties
     {
         RHIFormatFeatureFlags linearTilingFeatures;

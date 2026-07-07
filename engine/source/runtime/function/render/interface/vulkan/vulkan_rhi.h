@@ -129,9 +129,10 @@ namespace Piccolo
         bool queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence) override;
         bool queueWaitIdle(RHIQueue* queue) override;
         RHIBackendType getBackendType() const override;
+        bool           usesDedicatedComputeSubmission() const override { return true; }
         bool           usesVulkanClipSpace() const override { return true; }
         void resetCommandPool() override;
-        void waitForFences() override;
+        bool waitForFences() override;
         void waitAllFramesInFlight() override;
         void waitDeviceIdle() override;
         bool waitForFences(uint32_t fenceCount, const RHIFence* const* pFences, RHIBool32 waitAll, uint64_t timeout);

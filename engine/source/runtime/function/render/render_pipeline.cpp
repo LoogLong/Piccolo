@@ -203,7 +203,11 @@ namespace Piccolo
         render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
         logRasterPathOnce("Forward");
 
-        render_rhi->waitForFences();
+        if (!render_rhi->waitForFences())
+        {
+            LOG_ERROR("Forward render aborted: waitForFences failed");
+            return;
+        }
 
         render_rhi->resetCommandPool();
 
@@ -256,7 +260,11 @@ namespace Piccolo
         render_resource_impl->resetRingBufferOffset(render_rhi->getCurrentFrameIndex());
         logRasterPathOnce("Deferred");
 
-        render_rhi->waitForFences();
+        if (!render_rhi->waitForFences())
+        {
+            LOG_ERROR("Deferred render aborted: waitForFences failed");
+            return;
+        }
 
         render_rhi->resetCommandPool();
 
@@ -362,7 +370,22 @@ namespace Piccolo
             return false;
         }
 
-        render_rhi->waitForFences();
+        if (!render_rhi->waitForFences())
+        {
+            if (render_rhi->isDeviceLost())
+            {
+                if (!m_path_tracing_device_lost_logged)
+                {
+                    LOG_ERROR("Path tracing render aborted: GPU device lost");
+                    m_path_tracing_device_lost_logged = true;
+                }
+            }
+            else
+            {
+                LOG_ERROR("Path tracing render aborted: waitForFences failed");
+            }
+            return false;
+        }
         render_rhi->resetCommandPool();
 
         bool recreate_swapchain =

@@ -142,21 +142,17 @@ using namespace d3d12_detail;
             }
         }
 
-        RHIFenceCreateInfo signaled_fence_info {};
-        signaled_fence_info.flags = RHI_FENCE_CREATE_SIGNALED_BIT;
         for (auto& fence : m_frame_fences)
         {
-            if (!createFence(&signaled_fence_info, fence))
+            if (!RHI::createFence(fence, RHI_FENCE_CREATE_SIGNALED_BIT))
             {
                 throw std::runtime_error("Failed to create D3D12 frame fence");
             }
         }
 
-        RHIFenceCreateInfo copy_fence_info {};
-        copy_fence_info.flags = 0;
         for (auto& fence : m_copy_fences)
         {
-            if (!createFence(&copy_fence_info, fence))
+            if (!RHI::createFence(fence, RHI_FENCE_CREATE_SIGNALED_BIT))
             {
                 throw std::runtime_error("Failed to create D3D12 particle copy fence");
             }

@@ -76,6 +76,8 @@ namespace Piccolo
         std::shared_ptr<RenderResourceBase> m_render_resource;
         std::shared_ptr<RenderPipelineBase> m_render_pipeline;
 
+        bool m_device_lost_logged {false};
+
         void processSwapData();
     };
 } // namespace Piccolo

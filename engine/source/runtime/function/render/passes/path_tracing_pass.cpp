@@ -1,6 +1,7 @@
 #include "runtime/function/render/passes/path_tracing_pass.h"
 
 #include "runtime/core/base/macro.h"
+#include "runtime/function/render/passes/gpu_skinning_pass.h"
 #include "runtime/function/render/render_resource.h"
 #include "runtime/function/render/render_scene.h"
 #include "runtime/function/render/render_shader_bytecode.h"
@@ -1160,20 +1161,35 @@ namespace Piccolo
             {
                 continue;
             }
+            if (mesh->gpu_skinning_mesh_descriptor_set == nullptr)
+            {
+                continue; // GpuSkinning compute was skipped — positions are not valid
+            }
 
-            // Per-instance BLAS: create with allow_update on first frame, update in-place thereafter
+            // Per-instance BLAS: full rebuild each frame; defer destruction of the previous BLAS
+            // until it is no longer referenced by in-flight command buffers.
             auto& pt_resources = mesh->path_tracing_skinned_resources[inst_id];
+            RHIAccelerationStructure* previous_blas = pt_resources.blas;
 
             pt_resources.blas = m_render_resource_impl->buildPathTracingBLASFromSkinned(
                 m_rhi,
                 command_buffer,
                 skinned_output.skinned_position_buffer,
                 skinned_output.vertex_count,
-                sizeof(float) * 3,
+                kGpuSkinnedPositionStorageStrideBytes,
                 mesh->mesh_index_buffer,
                 skinned_output.index_count,
-                mesh->mesh_index_type,
-                pt_resources.blas);  // pass existing BLAS for update; nullptr on first frame
+                mesh->mesh_index_type);
+
+            if (pt_resources.blas == nullptr)
+            {
+                pt_resources.blas = previous_blas;
+            }
+            else if (previous_blas != nullptr && previous_blas != pt_resources.blas)
+            {
+                m_pending_destroy_acceleration_structures.push_back(
+                    PendingTLASDestroy {previous_blas, m_dispatch_index});
+            }
 
             instance.bottom_level_as = pt_resources.blas;
         }
@@ -1189,7 +1205,10 @@ namespace Piccolo
                 if (active_skinned_instance_ids.count(it->first) == 0)
                 {
                     if (it->second.blas != nullptr)
-                        m_rhi->destroyAccelerationStructure(it->second.blas);
+                    {
+                        m_pending_destroy_acceleration_structures.push_back(
+                            PendingTLASDestroy {it->second.blas, m_dispatch_index});
+                    }
                     it = map.erase(it);
                 }
                 else

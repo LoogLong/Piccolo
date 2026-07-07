@@ -392,14 +392,23 @@ namespace Piccolo
         m_ray_tracing_capabilities.support_level = RHIRayTracingSupportLevel::Unsupported;
     }
 
-    void VulkanRHI::waitForFences()
+    bool VulkanRHI::waitForFences()
     {
-        VkResult res_wait_for_fences =
-            _vkWaitForFences(m_device, 1, &m_is_frame_in_flight_fences[m_current_frame_index], VK_TRUE, UINT64_MAX);
+        VkFence fences[2] = {m_is_frame_in_flight_fences[m_current_frame_index],
+                           m_copy_fences[m_current_frame_index]};
+        VkResult res_wait_for_fences = _vkWaitForFences(m_device, 2, fences, VK_TRUE, UINT64_MAX);
         if (VK_SUCCESS != res_wait_for_fences)
         {
-            LOG_ERROR("failed to synchronize!");
+            if (res_wait_for_fences == VK_ERROR_DEVICE_LOST)
+            {
+                markDeviceLost();
+            }
+            LOG_ERROR("waitForFences failed (VkResult={}, frame_index={})",
+                      static_cast<int32_t>(res_wait_for_fences),
+                      static_cast<uint32_t>(m_current_frame_index));
+            return false;
         }
+        return true;
     }
 
     void VulkanRHI::waitAllFramesInFlight()
@@ -413,7 +422,14 @@ namespace Piccolo
             _vkWaitForFences(m_device, k_max_frames_in_flight, m_is_frame_in_flight_fences, VK_TRUE, UINT64_MAX);
         if (VK_SUCCESS != res_wait_for_fences)
         {
-            LOG_ERROR("waitAllFramesInFlight failed");
+            LOG_ERROR("waitAllFramesInFlight failed for frame fences");
+        }
+
+        res_wait_for_fences =
+            _vkWaitForFences(m_device, k_max_frames_in_flight, m_copy_fences, VK_TRUE, UINT64_MAX);
+        if (VK_SUCCESS != res_wait_for_fences)
+        {
+            LOG_ERROR("waitAllFramesInFlight failed for copy fences");
         }
     }
 
@@ -1743,10 +1759,19 @@ namespace Piccolo
 
     bool VulkanRHI::createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence* &pFence)
     {
+        RHIFenceCreateInfo normalized = *pCreateInfo;
+        if (normalized.sType == 0)
+        {
+            normalized.sType = RHI_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+#if !defined(NDEBUG)
+            LOG_WARN("RHIFenceCreateInfo.sType was unset; defaulting to FENCE_CREATE_INFO");
+#endif
+        }
+
         VkFenceCreateInfo create_info{};
-        create_info.sType = (VkStructureType)pCreateInfo->sType;
-        create_info.pNext = (const void*)pCreateInfo->pNext;
-        create_info.flags = (VkFenceCreateFlags)pCreateInfo->flags;
+        create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        create_info.pNext = (const void*)normalized.pNext;
+        create_info.flags = (VkFenceCreateFlags)normalized.flags;
 
         pFence = new VulkanFence();
         VkFence vk_fence;
@@ -2456,7 +2481,13 @@ namespace Piccolo
         }
         else
         {
-            LOG_ERROR("_vkWaitForFences failed!");
+            if (result == VK_ERROR_DEVICE_LOST)
+            {
+                markDeviceLost();
+            }
+            LOG_ERROR("waitForFencesPFN failed (VkResult={}, fenceCount={})",
+                      static_cast<int32_t>(result),
+                      fenceCount);
             return false;
         }
     }
@@ -3178,7 +3209,13 @@ namespace Piccolo
         }
         else
         {
-            LOG_ERROR("vkQueueSubmit failed!");
+            if (result == VK_ERROR_DEVICE_LOST)
+            {
+                markDeviceLost();
+            }
+            LOG_ERROR("vkQueueSubmit failed (VkResult={}, frame_index={})",
+                      static_cast<int32_t>(result),
+                      static_cast<uint32_t>(m_current_frame_index));
             return false;
         }
     }
@@ -3979,6 +4016,18 @@ namespace Piccolo
         uint32_t max_sets =
             1 + 1 + 1 + m_max_material_count + m_max_vertex_blending_mesh_count + 1 + 1; // +skybox + axis descriptor set
 
+        {
+            const uint32_t frames            = k_max_frames_in_flight;
+            const uint32_t max_blending_meshes = m_max_vertex_blending_mesh_count;
+            const uint32_t max_instances     = max_blending_meshes;
+            const uint32_t gpu_skinning_sets = max_blending_meshes + frames + max_instances * frames;
+
+            max_sets += gpu_skinning_sets;
+            pool_sizes[1].descriptorCount +=
+                max_blending_meshes * 4 + frames * 2 + max_instances * frames * 1;
+            pool_sizes[2].descriptorCount += frames * 1;
+        }
+
         // The path tracing descriptor set (allocated from this pool) needs an acceleration structure,
         // storage images, a large sampled-image array, samplers and storage buffers. Reserve capacity
         // for it when ray tracing is available so the set can be allocated.
@@ -4024,7 +4073,7 @@ namespace Piccolo
 
         VkFenceCreateInfo copy_fence_create_info {};
         copy_fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        copy_fence_create_info.flags = 0;
+        copy_fence_create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (uint32_t i = 0; i < k_max_frames_in_flight; i++)
         {
