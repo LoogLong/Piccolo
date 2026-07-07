@@ -13,9 +13,9 @@ fi
 
 
 if test \( \( -n "$1" \) -a \( "$1" = "debug" \) \);then
-    CONFIG=" Debug"
+    CONFIG="Debug"
 elif test \( \( -n "$1" \) -a \( "$1" = "release" \) \);then
-    CONFIG=" Release"
+    CONFIG="Release"
 else
     echo "The config \"$1\" is not supported!"
     echo ""
