@@ -26,6 +26,6 @@ else
     exit 1
 fi
 
-cmake -S . -B build -G "Xcode"
+cmake -S . -B build -G "Xcode" -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
 cmake --build build --config "${CONFIG}"

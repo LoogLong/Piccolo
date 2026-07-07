@@ -13,18 +13,23 @@ jobs:
       matrix:
         configuration: [debug, release]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           submodules: 'true'
 
       - name: Install dependencies
         run: |
-            sudo apt install libxrandr-dev
-            sudo apt install libxinerama-dev
-            sudo apt install libxcursor-dev
-            sudo apt install libxi-dev
-            sudo apt install libglvnd-dev
-            sudo apt install libvulkan-dev
+            sudo apt-get update
+            sudo apt-get install -y \
+              libxrandr-dev \
+              libxrender-dev \
+              libxinerama-dev \
+              libxcursor-dev \
+              libxi-dev \
+              libglvnd-dev \
+              libvulkan-dev \
+              clang \
+              libc++-dev
         
       - name: Build
-        run: ./build_linux.sh ${{matrix.configuration}} 
+        run: ./build_linux.sh ${{matrix.configuration}}
