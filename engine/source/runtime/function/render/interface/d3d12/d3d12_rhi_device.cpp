@@ -646,6 +646,10 @@ void D3D12RHI::destroyDevice()
     {
         return DXGI_FORMAT_R8G8B8A8_UNORM;
     }
+    DXGI_FORMAT D3D12RHI::getD3D12UiRenderTargetFormat() const
+    {
+        return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    }
     bool D3D12RHI::ensureCommandBufferObjects(RHICommandBuffer* commandBuffer)
     {
         auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);

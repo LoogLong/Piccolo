@@ -39,6 +39,8 @@ namespace Piccolo
         D3D12_CPU_DESCRIPTOR_HANDLE getD3D12ImGuiSrvCpuHandle() const;
         D3D12_GPU_DESCRIPTOR_HANDLE getD3D12ImGuiSrvGpuHandle() const;
         DXGI_FORMAT getD3D12SwapchainFormat() const;
+        // MainCamera UI subpass writes to backup_buffer_even (R16G16B16A16_SFLOAT), not the swapchain.
+        DXGI_FORMAT getD3D12UiRenderTargetFormat() const;
 #endif
 
     bool isPointLightShadowEnabled() override;

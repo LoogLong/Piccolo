@@ -164,7 +164,7 @@ namespace Piccolo
 
             if (!ImGui_ImplDX12_Init(m_rhi->getD3D12Device(),
                                      m_rhi->getMaxFramesInFlight(),
-                                     m_rhi->getD3D12SwapchainFormat(),
+                                     m_rhi->getD3D12UiRenderTargetFormat(),
                                      m_rhi->getD3D12ImGuiSrvHeap(),
                                      m_rhi->getD3D12ImGuiSrvCpuHandle(),
                                      m_rhi->getD3D12ImGuiSrvGpuHandle()))
