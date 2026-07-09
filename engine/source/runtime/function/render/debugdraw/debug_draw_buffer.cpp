@@ -16,7 +16,17 @@ namespace Piccolo
     {
         clear();
         unloadMeshBuffer();
-        flushAllDeferredDeletes();
+        m_rhi->flushAllRetiredResources();
+
+        RHIDescriptorPool* descriptor_pool = m_rhi->getDescriptorPoor();
+        for (RHIDescriptorSet*& descriptor_set : m_descriptor.descriptor_set)
+        {
+            if (descriptor_set != nullptr)
+            {
+                m_rhi->freeDescriptorSets(descriptor_pool, 1, &descriptor_set);
+            }
+        }
+        m_descriptor.descriptor_set.clear();
 
         if (m_descriptor.layout != nullptr)
         {
@@ -27,8 +37,6 @@ namespace Piccolo
 
     void DebugDrawAllocator::tick()
     {
-        flushPendingDelete();
-        m_current_frame = (m_current_frame + 1) % k_deferred_delete_resource_frame_count;
     }
 
     RHIBuffer* DebugDrawAllocator::getVertexBuffer(){return m_vertex_resource.buffer;}
@@ -134,57 +142,18 @@ namespace Piccolo
 
     void DebugDrawAllocator::clearBuffer()
     {
+        const uint8_t slot = m_rhi->getCurrentFrameIndex();
         if (m_vertex_resource.buffer)
         {
-            m_deffer_delete_queue[m_current_frame].push(m_vertex_resource);
-            m_vertex_resource.buffer = nullptr;
-            m_vertex_resource.memory = nullptr;
+            m_rhi->retireBuffer(slot, m_vertex_resource.buffer, m_vertex_resource.memory);
         }
         if (m_uniform_resource.buffer)
         {
-            m_deffer_delete_queue[m_current_frame].push(m_uniform_resource);
-            m_uniform_resource.buffer = nullptr;
-            m_uniform_resource.memory = nullptr;
+            m_rhi->retireBuffer(slot, m_uniform_resource.buffer, m_uniform_resource.memory);
         }
         if (m_uniform_dynamic_resource.buffer)
         {
-            m_deffer_delete_queue[m_current_frame].push(m_uniform_dynamic_resource);
-            m_uniform_dynamic_resource.buffer = nullptr;
-            m_uniform_dynamic_resource.memory = nullptr;
-        }
-    }
-
-    void DebugDrawAllocator::flushPendingDelete()
-    {
-        uint32_t current_frame_to_delete = (m_current_frame + 1) % k_deferred_delete_resource_frame_count;
-        while (!m_deffer_delete_queue[current_frame_to_delete].empty())
-        {
-            Resource resource_to_delete = m_deffer_delete_queue[current_frame_to_delete].front();
-            m_deffer_delete_queue[current_frame_to_delete].pop();
-            if (resource_to_delete.buffer == nullptr)
-            {
-                continue;
-            }
-            m_rhi->destroyBuffer(resource_to_delete.buffer);
-            m_rhi->freeMemory(resource_to_delete.memory);
-        }
-    }
-
-    void DebugDrawAllocator::flushAllDeferredDeletes()
-    {
-        for (uint32_t queue_index = 0; queue_index < k_deferred_delete_resource_frame_count; ++queue_index)
-        {
-            while (!m_deffer_delete_queue[queue_index].empty())
-            {
-                Resource resource_to_delete = m_deffer_delete_queue[queue_index].front();
-                m_deffer_delete_queue[queue_index].pop();
-                if (resource_to_delete.buffer == nullptr)
-                {
-                    continue;
-                }
-                m_rhi->destroyBuffer(resource_to_delete.buffer);
-                m_rhi->freeMemory(resource_to_delete.memory);
-            }
+            m_rhi->retireBuffer(slot, m_uniform_dynamic_resource.buffer, m_uniform_dynamic_resource.memory);
         }
     }
 
@@ -304,15 +273,19 @@ namespace Piccolo
 
     void DebugDrawAllocator::unloadMeshBuffer()
     {
-        m_deffer_delete_queue[m_current_frame].push(m_sphere_resource);
-        m_sphere_resource.buffer = nullptr;
-        m_sphere_resource.memory = nullptr;
-        m_deffer_delete_queue[m_current_frame].push(m_cylinder_resource);
-        m_cylinder_resource.buffer = nullptr;
-        m_cylinder_resource.memory = nullptr;
-        m_deffer_delete_queue[m_current_frame].push(m_capsule_resource);
-        m_capsule_resource.buffer = nullptr;
-        m_capsule_resource.memory = nullptr;
+        const uint8_t slot = m_rhi->getCurrentFrameIndex();
+        if (m_sphere_resource.buffer)
+        {
+            m_rhi->retireBuffer(slot, m_sphere_resource.buffer, m_sphere_resource.memory);
+        }
+        if (m_cylinder_resource.buffer)
+        {
+            m_rhi->retireBuffer(slot, m_cylinder_resource.buffer, m_cylinder_resource.memory);
+        }
+        if (m_capsule_resource.buffer)
+        {
+            m_rhi->retireBuffer(slot, m_capsule_resource.buffer, m_capsule_resource.memory);
+        }
     }
     
     void DebugDrawAllocator::loadSphereMeshBuffer()

@@ -2110,6 +2110,7 @@ bool D3D12RHI::waitForFences()
         LOG_ERROR("D3D12 waitForFences failed for frame {}", static_cast<uint32_t>(m_current_frame_index));
         return false;
     }
+    onFrameSlotReady(m_current_frame_index);
 #endif
     return true;
 }

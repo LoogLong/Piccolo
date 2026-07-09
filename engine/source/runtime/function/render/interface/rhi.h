@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "rhi_allocation.h"
+#include "rhi_frame_retire.h"
 #include "rhi_ray_tracing.h"
 #include "rhi_struct.h"
 
@@ -43,6 +44,7 @@ namespace Piccolo
         // allocate and create
         virtual bool allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers) = 0;
         virtual bool allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAllocateInfo, RHIDescriptorSet* &pDescriptorSets) = 0;
+        virtual void freeDescriptorSets(RHIDescriptorPool* pool, uint32_t count, RHIDescriptorSet** sets) = 0;
         virtual void createSwapchain() = 0;
         virtual void recreateSwapchain() = 0;
         virtual void createSwapchainImageViews() = 0;
@@ -232,12 +234,33 @@ namespace Piccolo
         virtual void setDebugObjectName(RHIBuffer* buffer, const char* name) {}
         virtual void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) {}
 
+        // Retire per-frame / resizeable resources. Destroy happens in waitForFences after GPU completes.
+        void retireBuffer(uint8_t slot, RHIBuffer*& buffer, RHIDeviceMemory*& memory)
+        {
+            m_frame_retire_queue.retireBuffer(slot, buffer, memory);
+        }
+
+        void retireImage(uint8_t slot,
+                         RHIImage*& image,
+                         RHIImageView*& image_view,
+                         RHIDeviceMemory*& memory)
+        {
+            m_frame_retire_queue.retireImage(slot, image, image_view, memory);
+        }
+
+        void retireAccelerationStructure(uint8_t slot, RHIAccelerationStructure*& acceleration_structure)
+        {
+            m_frame_retire_queue.retireAccelerationStructure(slot, acceleration_structure);
+        }
+
+        void flushAllRetiredResources() { m_frame_retire_queue.flushAllRetiredResources(this); }
+
         // destory
         virtual void clear() = 0;
         virtual void clearSwapchain() = 0;
         virtual void destroyDefaultSampler(RHIDefaultSamplerType type) = 0;
         virtual void destroyMipmappedSampler() = 0;
-        virtual void destroyShaderModule(RHIShader* shader) = 0;
+        virtual void destroyShaderModule(RHIShader*& shader) = 0;
         virtual void destroyPipeline(RHIPipeline*& pipeline) { pipeline = nullptr; }
         virtual void destroyPipelineLayout(RHIPipelineLayout*& pipeline_layout) { pipeline_layout = nullptr; }
         virtual void destroyRenderPass(RHIRenderPass*& render_pass) { render_pass = nullptr; }
@@ -245,15 +268,15 @@ namespace Piccolo
         {
             descriptor_set_layout = nullptr;
         }
-        virtual void destroySemaphore(RHISemaphore* semaphore) = 0;
-        virtual void destroySampler(RHISampler* sampler) = 0;
-        virtual void destroyInstance(RHIInstance* instance) = 0;
-        virtual void destroyImageView(RHIImageView* imageView) = 0;
-        virtual void destroyImage(RHIImage* image) = 0;
-        virtual void destroyFramebuffer(RHIFramebuffer* framebuffer) = 0;
-        virtual void destroyFence(RHIFence* fence) = 0;
+        virtual void destroySemaphore(RHISemaphore*& semaphore) = 0;
+        virtual void destroySampler(RHISampler*& sampler) = 0;
+        virtual void destroyInstance(RHIInstance*& instance) = 0;
+        virtual void destroyImageView(RHIImageView*& image_view) = 0;
+        virtual void destroyImage(RHIImage*& image) = 0;
+        virtual void destroyFramebuffer(RHIFramebuffer*& framebuffer) = 0;
+        virtual void destroyFence(RHIFence*& fence) = 0;
         virtual void destroyDevice() = 0;
-        virtual void destroyCommandPool(RHICommandPool* commandPool) = 0;
+        virtual void destroyCommandPool(RHICommandPool*& command_pool) = 0;
         virtual void destroyBuffer(RHIBuffer* &buffer) = 0;
         virtual void destroyBufferWithAllocation(RHIBuffer*& buffer, RHIAllocation*& allocation) = 0;
         virtual void destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation) = 0;
@@ -272,7 +295,10 @@ namespace Piccolo
     protected:
         void markDeviceLost() { m_device_lost = true; }
 
+        void onFrameSlotReady(uint8_t slot_index) { m_frame_retire_queue.flushRetiredResources(this, slot_index); }
+
         bool m_device_lost {false};
+        RHIFrameRetireQueue m_frame_retire_queue;
     };
 
     inline RHI::~RHI() = default;

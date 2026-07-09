@@ -100,18 +100,6 @@ namespace Piccolo
 
 
 
-        struct PendingTLASDestroy
-
-        {
-
-            RHIAccelerationStructure* acceleration_structure {nullptr};
-
-            uint64_t                  queued_at_dispatch_index {0};
-
-        };
-
-
-
         void setupDescriptorSetLayout();
 
         void setupPipelineLayout();
@@ -143,8 +131,6 @@ namespace Piccolo
         void destroyAccumulationImage();
 
         void invalidateStaticDescriptors();
-
-        void flushPendingDestroys(bool force_all = false);
 
         void logInitializeSkipOnce(const char* reason);
 
@@ -221,12 +207,6 @@ namespace Piccolo
         uint32_t                  m_tlas_instance_count {0};
 
         uint32_t                  m_top_level_as_generation {0};
-
-        std::vector<PendingTLASDestroy> m_pending_destroy_acceleration_structures;
-
-        uint64_t                  m_dispatch_index {0};
-
-
 
         uint32_t  m_sample_index {0};
 

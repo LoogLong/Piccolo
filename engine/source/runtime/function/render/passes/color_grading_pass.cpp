@@ -1,5 +1,6 @@
 #include "runtime/function/render/passes/color_grading_pass.h"
 
+#include "runtime/function/render/interface/rhi_object.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <stdexcept>
@@ -50,6 +51,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create post process global layout");
         }
+        static_cast<RHIObject*>(m_descriptor_infos[0].layout)->setDebugName("ColorGrading.DescriptorSetLayout");
     }
 
     void ColorGradingPass::setupPipelines()
@@ -66,6 +68,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create post process pipeline layout");
         }
+        static_cast<RHIObject*>(m_render_pipelines[0].layout)->setDebugName("ColorGrading.PipelineLayout");
 
         RHIShader* vert_shader_module =
             m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, POST_PROCESS_VERT));
@@ -182,6 +185,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create post process graphics pipeline");
         }
+        m_rhi->setDebugObjectName(m_render_pipelines[0].pipeline, "ColorGrading.Pipeline");
 
         m_rhi->destroyShaderModule(vert_shader_module);
         m_rhi->destroyShaderModule(frag_shader_module);
@@ -200,6 +204,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate post process global descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[0].descriptor_set, "ColorGrading.DescriptorSet");
     }
 
     void ColorGradingPass::updateAfterFramebufferRecreate(RHIImageView* input_attachment)

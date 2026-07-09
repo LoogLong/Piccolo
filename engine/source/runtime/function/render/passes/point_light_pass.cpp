@@ -68,6 +68,8 @@ namespace Piccolo
                                2 * s_max_point_light_count,
                                1,
                                m_framebuffer.attachments[0].view);
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[0].image, "PointLightShadow.Color");
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[0].view, "PointLightShadow.Color.View");
 
         // depth
         m_framebuffer.attachments[1].format = m_rhi->getDepthImageInfo().depth_image_format;
@@ -89,6 +91,8 @@ namespace Piccolo
                                2 * s_max_point_light_count,
                                1,
                                m_framebuffer.attachments[1].view);
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[1].image, "PointLightShadow.Depth");
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[1].view, "PointLightShadow.Depth.View");
     }
     void PointLightShadowPass::setupRenderPass()
     {
@@ -154,6 +158,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create point light shadow render pass");
         }
+        static_cast<RHIObject*>(m_framebuffer.render_pass)->setDebugName("PointLightShadow.RenderPass");
     }
     void PointLightShadowPass::setupFramebuffer()
     {
@@ -173,6 +178,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create point light shadow framebuffer");
         }
+        static_cast<RHIObject*>(m_framebuffer.framebuffer)->setDebugName("PointLightShadow.Framebuffer");
     }
     void PointLightShadowPass::setupDescriptorSetLayout()
     {
@@ -368,6 +374,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create mesh point light shadow graphics pipeline");
         }
+        m_rhi->setDebugObjectName(m_render_pipelines[0].pipeline, "PointLightShadow.Pipeline");
 
         m_rhi->destroyShaderModule(vert_shader_module);
         m_rhi->destroyShaderModule(geom_shader_module);

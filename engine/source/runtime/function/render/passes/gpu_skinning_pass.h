@@ -49,20 +49,11 @@ namespace Piccolo
         RHIDescriptorSetLayout** getMeshDescriptorSetLayoutAddress() { return &m_skin_mesh_descriptor_set_layout; }
 
     private:
-        struct PendingBufferDestroy
-        {
-            RHIBuffer*       buffer {nullptr};
-            RHIDeviceMemory* memory {nullptr};
-            uint64_t         queued_at_dispatch_index {0};
-        };
-
         bool setupSkinComputePipeline();
         bool uploadJointMatrices(const std::vector<CollectedSkinnedMesh>& instances);
         void dispatchSkinCompute(RHICommandBuffer* command_buffer,
                                  const std::vector<CollectedSkinnedMesh>& instances);
 
-        void flushPendingBufferDestroys(bool force_all = false);
-        void queueBufferDestroy(RHIBuffer* buffer, RHIDeviceMemory* memory);
         void updateAllFrameSharedDescriptorSets();
         void updateFrameSharedDescriptorSet(RHIDescriptorSet* frame_set);
         void ensureInstanceDescriptorSet(RenderMeshGPUResource* mesh,
@@ -91,8 +82,5 @@ namespace Piccolo
         RHIBuffer*       m_skinned_vertex_output_buffer {nullptr};
         RHIDeviceMemory* m_skinned_vertex_output_memory {nullptr};
         size_t           m_skinned_vertex_output_capacity {0};
-
-        uint64_t m_dispatch_index {0};
-        std::vector<PendingBufferDestroy> m_pending_destroy_buffers;
     };
 } // namespace Piccolo

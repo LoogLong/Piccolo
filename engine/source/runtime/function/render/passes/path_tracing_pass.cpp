@@ -110,7 +110,7 @@ namespace Piccolo
             return;
         }
 
-        flushPendingDestroys(true);
+        m_rhi->flushAllRetiredResources();
 
         if (m_shader_binding_table != nullptr)
         {
@@ -124,7 +124,7 @@ namespace Piccolo
         }
 
         destroyTopLevelAS();
-        flushPendingDestroys(true);
+        m_rhi->flushAllRetiredResources();
         destroyAccumulationImage();
         destroySkinnedVertexFallbackBuffer();
         destroyFrameDataBuffers();
@@ -223,10 +223,6 @@ namespace Piccolo
             logDispatchFailureOnce("path tracing is not supported on the active backend");
             return false;
         }
-
-        ++m_dispatch_index;
-        flushPendingDestroys();
-        m_render_resource_impl->flushPendingPathTracingBufferDestroys(m_dispatch_index);
 
         auto render_scene = m_render_resource_impl->getCurrentRenderScene();
         if (render_scene == nullptr)
@@ -1187,8 +1183,7 @@ namespace Piccolo
             }
             else if (previous_blas != nullptr && previous_blas != pt_resources.blas)
             {
-                m_pending_destroy_acceleration_structures.push_back(
-                    PendingTLASDestroy {previous_blas, m_dispatch_index});
+                m_rhi->retireAccelerationStructure(m_rhi->getCurrentFrameIndex(), previous_blas);
             }
 
             instance.bottom_level_as = pt_resources.blas;
@@ -1206,8 +1201,7 @@ namespace Piccolo
                 {
                     if (it->second.blas != nullptr)
                     {
-                        m_pending_destroy_acceleration_structures.push_back(
-                            PendingTLASDestroy {it->second.blas, m_dispatch_index});
+                        m_rhi->retireAccelerationStructure(m_rhi->getCurrentFrameIndex(), it->second.blas);
                     }
                     it = map.erase(it);
                 }
@@ -1243,8 +1237,7 @@ namespace Piccolo
         }
         if (!m_render_resource_impl->updatePathTracingSceneBuffers(m_rhi,
                                                                     collected_instances,
-                                                                    static_data_changed,
-                                                                    m_dispatch_index))
+                                                                    static_data_changed))
         {
             return false;
         }
@@ -1328,31 +1321,6 @@ namespace Piccolo
         m_linear_sampler          = nullptr;
     }
 
-    void PathTracingPass::flushPendingDestroys(bool force_all)
-    {
-        if (m_rhi == nullptr)
-        {
-            m_pending_destroy_acceleration_structures.clear();
-            return;
-        }
-
-        const uint64_t max_frames_in_flight = m_rhi->getMaxFramesInFlight();
-        auto it = m_pending_destroy_acceleration_structures.begin();
-        while (it != m_pending_destroy_acceleration_structures.end())
-        {
-            if (force_all || it->queued_at_dispatch_index + max_frames_in_flight <= m_dispatch_index)
-            {
-                RHIAccelerationStructure* acceleration_structure = it->acceleration_structure;
-                m_rhi->destroyAccelerationStructure(acceleration_structure);
-                it = m_pending_destroy_acceleration_structures.erase(it);
-            }
-            else
-            {
-                ++it;
-            }
-        }
-    }
-
     void PathTracingPass::destroyTopLevelAS()
     {
         if (m_top_level_as != nullptr)
@@ -1366,10 +1334,15 @@ namespace Piccolo
                                                true);
                 m_rhi->setDebugObjectName(m_top_level_as, tlas_debug_name);
             }
-            m_pending_destroy_acceleration_structures.push_back(
-                PendingTLASDestroy {m_top_level_as, m_dispatch_index});
+            if (m_rhi != nullptr)
+            {
+                m_rhi->retireAccelerationStructure(m_rhi->getCurrentFrameIndex(), m_top_level_as);
+            }
+            else
+            {
+                m_top_level_as = nullptr;
+            }
         }
-        m_top_level_as        = nullptr;
         m_tlas_instance_count = 0;
     }
 

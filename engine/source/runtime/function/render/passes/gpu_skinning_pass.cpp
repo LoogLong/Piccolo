@@ -197,47 +197,6 @@ namespace Piccolo
         return true;
     }
 
-    void GpuSkinningPass::flushPendingBufferDestroys(bool force_all)
-    {
-        if (m_rhi == nullptr)
-        {
-            m_pending_destroy_buffers.clear();
-            return;
-        }
-
-        const uint64_t max_frames_in_flight = m_rhi->getMaxFramesInFlight();
-        auto it = m_pending_destroy_buffers.begin();
-        while (it != m_pending_destroy_buffers.end())
-        {
-            if (force_all ||
-                it->queued_at_dispatch_index + max_frames_in_flight + 1U <= m_dispatch_index)
-            {
-                if (it->buffer != nullptr)
-                {
-                    m_rhi->destroyBuffer(it->buffer);
-                }
-                if (it->memory != nullptr)
-                {
-                    m_rhi->freeMemory(it->memory);
-                }
-                it = m_pending_destroy_buffers.erase(it);
-            }
-            else
-            {
-                ++it;
-            }
-        }
-    }
-
-    void GpuSkinningPass::queueBufferDestroy(RHIBuffer* buffer, RHIDeviceMemory* memory)
-    {
-        if (buffer == nullptr && memory == nullptr)
-        {
-            return;
-        }
-        m_pending_destroy_buffers.push_back({buffer, memory, m_dispatch_index});
-    }
-
     void GpuSkinningPass::updateFrameSharedDescriptorSet(RHIDescriptorSet* frame_set)
     {
         if (frame_set == nullptr || m_skin_constants_buffer == nullptr)
@@ -374,9 +333,7 @@ namespace Piccolo
         {
             if (m_joint_matrix_buffer != nullptr)
             {
-                queueBufferDestroy(m_joint_matrix_buffer, m_joint_matrix_memory);
-                m_joint_matrix_buffer = nullptr;
-                m_joint_matrix_memory = nullptr;
+                m_rhi->retireBuffer(m_rhi->getCurrentFrameIndex(), m_joint_matrix_buffer, m_joint_matrix_memory);
             }
 
             m_joint_matrix_buffer_capacity = data_size * 2;
@@ -443,9 +400,9 @@ namespace Piccolo
             {
                 if (output.skinned_position_buffer != nullptr)
                 {
-                    queueBufferDestroy(output.skinned_position_buffer, output.skinned_position_memory);
-                    output.skinned_position_buffer = nullptr;
-                    output.skinned_position_memory = nullptr;
+                    m_rhi->retireBuffer(m_rhi->getCurrentFrameIndex(),
+                                        output.skinned_position_buffer,
+                                        output.skinned_position_memory);
                 }
 
                 m_rhi->createBuffer(
@@ -535,8 +492,6 @@ namespace Piccolo
             if (m_skin_compute_pipeline == nullptr) return false;
         }
 
-        flushPendingBufferDestroys();
-
         auto render_scene = m_render_resource_impl->getCurrentRenderScene();
         if (render_scene == nullptr) return false;
 
@@ -588,9 +543,9 @@ namespace Piccolo
         {
             if (m_skinned_vertex_output_buffer != nullptr)
             {
-                queueBufferDestroy(m_skinned_vertex_output_buffer, m_skinned_vertex_output_memory);
-                m_skinned_vertex_output_buffer = nullptr;
-                m_skinned_vertex_output_memory = nullptr;
+                m_rhi->retireBuffer(m_rhi->getCurrentFrameIndex(),
+                                    m_skinned_vertex_output_buffer,
+                                    m_skinned_vertex_output_memory);
             }
 
             m_skinned_vertex_output_capacity = required_size * 2;
@@ -607,17 +562,58 @@ namespace Piccolo
         m_render_resource_impl->setSkinnedVertexBuffer(m_skinned_vertex_output_buffer);
 
         dispatchSkinCompute(command_buffer, skinned_meshes);
-        ++m_dispatch_index;
         return true;
     }
 
     void GpuSkinningPass::teardown()
     {
-        flushPendingBufferDestroys(true);
-
         if (m_rhi == nullptr)
         {
             return;
+        }
+
+        RHIDescriptorPool* descriptor_pool = m_rhi->getDescriptorPoor();
+        for (uint32_t frame_index = 0; frame_index < m_rhi->getMaxFramesInFlight(); ++frame_index)
+        {
+            RHIDescriptorSet*& frame_set = m_frame_shared_descriptor_sets[frame_index];
+            if (frame_set != nullptr)
+            {
+                m_rhi->freeDescriptorSets(descriptor_pool, 1, &frame_set);
+            }
+        }
+
+        if (m_render_resource_impl != nullptr)
+        {
+            if (auto render_scene = m_render_resource_impl->getCurrentRenderScene())
+            {
+                for (RenderEntity& entity : render_scene->m_render_entities)
+                {
+                    try
+                    {
+                        RenderMeshGPUResource& mesh = m_render_resource_impl->getEntityMesh(entity);
+                        for (auto& [instance_id, output] : mesh.skinned_mesh_outputs)
+                        {
+                            (void)instance_id;
+                            if (!output.gpu_skinning_instance_sets_allocated)
+                            {
+                                continue;
+                            }
+                            for (uint32_t frame_index = 0; frame_index < m_rhi->getMaxFramesInFlight(); ++frame_index)
+                            {
+                                RHIDescriptorSet*& instance_set = output.gpu_skinning_instance_sets[frame_index];
+                                if (instance_set != nullptr)
+                                {
+                                    m_rhi->freeDescriptorSets(descriptor_pool, 1, &instance_set);
+                                }
+                            }
+                            output.gpu_skinning_instance_sets_allocated = false;
+                        }
+                    }
+                    catch (const std::exception&)
+                    {
+                    }
+                }
+            }
         }
 
         m_rhi->destroyPipeline(m_skin_compute_pipeline);

@@ -55,6 +55,7 @@ namespace Piccolo
                            0,
                            1,
                            1);
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[0].image, "Pick.ObjectId");
         m_rhi->createImageView(m_framebuffer.attachments[0].image,
                                m_framebuffer.attachments[0].format,
                                RHI_IMAGE_ASPECT_COLOR_BIT,
@@ -62,6 +63,7 @@ namespace Piccolo
                                1,
                                1,
                                m_framebuffer.attachments[0].view);
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[0].view, "Pick.ObjectId.View");
     }
     void PickPass::setupRenderPass()
     {
@@ -114,6 +116,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create inefficient pick render pass");
         }
+        static_cast<RHIObject*>(m_framebuffer.render_pass)->setDebugName("Pick.RenderPass");
     }
     void PickPass::setupFramebuffer()
     {
@@ -132,6 +135,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create inefficient pick framebuffer");
         }
+        static_cast<RHIObject*>(m_framebuffer.framebuffer)->setDebugName("Pick.Framebuffer");
     }
     void PickPass::setupDescriptorSetLayout()
     {
@@ -183,6 +187,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create mesh inefficient pick global layout");
         }
+        static_cast<RHIObject*>(m_descriptor_infos[0].layout)->setDebugName("Pick.DescriptorSetLayout");
     }
     void PickPass::setupPipelines()
     {
@@ -199,6 +204,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create mesh inefficient pick pipeline layout");
         }
+        static_cast<RHIObject*>(m_render_pipelines[0].layout)->setDebugName("Pick.PipelineLayout");
 
         RHIShader* vert_shader_module =
             m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_INEFFICIENT_PICK_VERT));
@@ -315,6 +321,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create mesh inefficient pick graphics pipeline");
         }
+        m_rhi->setDebugObjectName(m_render_pipelines[0].pipeline, "Pick.Pipeline");
 
         m_rhi->destroyShaderModule(vert_shader_module);
         m_rhi->destroyShaderModule(frag_shader_module);
@@ -332,6 +339,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate mesh inefficient pick global descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[0].descriptor_set, "Pick.DescriptorSet");
 
         RHIDescriptorBufferInfo mesh_inefficient_pick_perframe_storage_buffer_info = {};
         // this offset plus dynamic_offset should not be greater than the size of
@@ -775,6 +783,7 @@ namespace Piccolo
                             RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                             inefficient_staging_buffer,
                             inefficient_staging_buffer_memory);
+        m_rhi->setDebugObjectName(inefficient_staging_buffer, "Pick.StagingBuffer");
 
         RHIImageMemoryBarrier copy_to_buffer_barrier {};
         copy_to_buffer_barrier.sType               = RHI_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

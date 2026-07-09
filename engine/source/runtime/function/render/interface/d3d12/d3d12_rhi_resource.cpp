@@ -181,6 +181,42 @@ bool D3D12RHI::allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAlloc
     pDescriptorSets = descriptor_set;
     return true;
 }
+
+void D3D12RHI::freeDescriptorSets(RHIDescriptorPool* pool, uint32_t count, RHIDescriptorSet** sets)
+{
+    if (pool == nullptr || sets == nullptr || count == 0)
+    {
+        return;
+    }
+
+    auto* d3d_pool = static_cast<D3D12RHIDescriptorPool*>(pool);
+
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        if (sets[i] == nullptr)
+        {
+            continue;
+        }
+
+        auto* descriptor_set = static_cast<D3D12RHIDescriptorSet*>(sets[i]);
+
+        if (d3d_pool->enforce_limits && descriptor_set->layout != nullptr)
+        {
+            --d3d_pool->allocated_sets;
+            d3d_pool->allocated_cbv_srv_uav_descriptors -= descriptor_set->layout->cbv_srv_uav_descriptor_count;
+            d3d_pool->allocated_sampler_descriptors -= descriptor_set->layout->sampler_descriptor_count;
+            for (uint32_t type_index = 0; type_index < kTrackedDescriptorTypeCount; ++type_index)
+            {
+                d3d_pool->allocated_descriptor_type_counts[type_index] -=
+                    descriptor_set->layout->descriptor_type_counts[type_index];
+            }
+        }
+
+        delete descriptor_set;
+        sets[i] = nullptr;
+    }
+}
+
 void D3D12RHI::createFramebufferImageAndView()
 {
     if (m_depth_desc.depth_image != nullptr)
@@ -214,6 +250,8 @@ void D3D12RHI::createFramebufferImageAndView()
                     1,
                     1,
                     m_depth_desc.depth_image_view);
+    setDebugObjectName(m_depth_desc.depth_image, "RHI.DepthStencil.Image");
+    setDebugObjectName(m_depth_desc.depth_image_view, "RHI.DepthStencil.View");
     freeMemory(depth_memory);
     return;
 }
@@ -2033,9 +2071,211 @@ void D3D12RHI::destroyMipmappedSampler()
     m_mipmap_sampler_map.clear();
     return;
 }
-void D3D12RHI::destroyShaderModule(RHIShader* shader)
+
+#ifdef _WIN32
+namespace
 {
-    delete shader;
+std::wstring utf8ToWideString(const char* utf8)
+{
+    if (utf8 == nullptr || utf8[0] == '\0')
+    {
+        return {};
+    }
+
+    const int required = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+    if (required <= 0)
+    {
+        return {};
+    }
+
+    std::wstring wide(static_cast<size_t>(required - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide.data(), required);
+    return wide;
+}
+
+void applyD3D12ObjectName(ID3D12DeviceChild* object, const char* name)
+{
+    if (object == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    const std::wstring wide_name = utf8ToWideString(name);
+    if (!wide_name.empty())
+    {
+        object->SetName(wide_name.c_str());
+    }
+}
+} // namespace
+
+void D3D12RHI::setDebugObjectName(RHIBuffer* buffer, const char* name)
+{
+    if (buffer == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    buffer->setDebugName(name);
+    auto* impl = static_cast<D3D12RHIBuffer*>(buffer);
+    if (impl->resource != nullptr)
+    {
+        applyD3D12ObjectName(impl->resource.Get(), name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIImage* image, const char* name)
+{
+    if (image == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    image->setDebugName(name);
+    auto* impl = static_cast<D3D12RHIImage*>(image);
+    if (impl->resource != nullptr)
+    {
+        applyD3D12ObjectName(impl->resource.Get(), name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIImageView* image_view, const char* name)
+{
+    if (image_view == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    image_view->setDebugName(name);
+    auto* impl = static_cast<D3D12RHIImageView*>(image_view);
+    if (impl->image != nullptr && impl->image->resource != nullptr)
+    {
+        applyD3D12ObjectName(impl->image->resource.Get(), name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIPipeline* pipeline, const char* name)
+{
+    if (pipeline == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    pipeline->setDebugName(name);
+    auto* impl = static_cast<D3D12RHIPipeline*>(pipeline);
+#if PICCOLO_D3D12_HAS_DXR
+    if (impl->state_object != nullptr)
+    {
+        applyD3D12ObjectName(impl->state_object.Get(), name);
+        return;
+    }
+#endif
+    if (impl->pipeline_state != nullptr)
+    {
+        applyD3D12ObjectName(impl->pipeline_state.Get(), name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHICommandBuffer* command_buffer, const char* name)
+{
+    if (command_buffer == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    command_buffer->setDebugName(name);
+    auto* impl = static_cast<D3D12RHICommandBuffer*>(command_buffer);
+    if (impl->command_list != nullptr)
+    {
+        applyD3D12ObjectName(impl->command_list.Get(), name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name)
+{
+    if (descriptor_set == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    descriptor_set->setDebugName(name);
+}
+
+void D3D12RHI::setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name)
+{
+    if (acceleration_structure == nullptr || name == nullptr)
+    {
+        return;
+    }
+
+    acceleration_structure->setDebugName(name);
+    auto* impl = static_cast<D3D12RHIAccelerationStructure*>(acceleration_structure);
+    if (impl->result != nullptr)
+    {
+        applyD3D12ObjectName(impl->result.Get(), name);
+    }
+}
+#else
+void D3D12RHI::setDebugObjectName(RHIBuffer* buffer, const char* name)
+{
+    if (buffer != nullptr && name != nullptr)
+    {
+        buffer->setDebugName(name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIImage* image, const char* name)
+{
+    if (image != nullptr && name != nullptr)
+    {
+        image->setDebugName(name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIImageView* image_view, const char* name)
+{
+    if (image_view != nullptr && name != nullptr)
+    {
+        image_view->setDebugName(name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIPipeline* pipeline, const char* name)
+{
+    if (pipeline != nullptr && name != nullptr)
+    {
+        pipeline->setDebugName(name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHICommandBuffer* command_buffer, const char* name)
+{
+    if (command_buffer != nullptr && name != nullptr)
+    {
+        command_buffer->setDebugName(name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name)
+{
+    if (descriptor_set != nullptr && name != nullptr)
+    {
+        descriptor_set->setDebugName(name);
+    }
+}
+
+void D3D12RHI::setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name)
+{
+    if (acceleration_structure != nullptr && name != nullptr)
+    {
+        acceleration_structure->setDebugName(name);
+    }
+}
+#endif
+
+void D3D12RHI::destroyShaderModule(RHIShader*& shader)
+{
+    delete static_cast<D3D12RHIShader*>(shader);
+    shader = nullptr;
 }
 void D3D12RHI::destroyPipeline(RHIPipeline*& pipeline)
 {
@@ -2057,11 +2297,12 @@ void D3D12RHI::destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_se
     delete static_cast<D3D12RHIDescriptorSetLayout*>(descriptor_set_layout);
     descriptor_set_layout = nullptr;
 }
-void D3D12RHI::destroySemaphore(RHISemaphore* semaphore)
+void D3D12RHI::destroySemaphore(RHISemaphore*& semaphore)
 {
     delete static_cast<D3D12RHISemaphore*>(semaphore);
+    semaphore = nullptr;
 }
-void D3D12RHI::destroySampler(RHISampler* sampler)
+void D3D12RHI::destroySampler(RHISampler*& sampler)
 {
     if (sampler == nullptr)
     {
@@ -2089,13 +2330,14 @@ void D3D12RHI::destroySampler(RHISampler* sampler)
     }
 
     delete static_cast<D3D12RHISampler*>(sampler);
-    return;
+    sampler = nullptr;
 }
-void D3D12RHI::destroyInstance(RHIInstance* instance)
+void D3D12RHI::destroyInstance(RHIInstance*& instance)
 {
     delete instance;
+    instance = nullptr;
 }
-void D3D12RHI::destroyImageView(RHIImageView* imageView)
+void D3D12RHI::destroyImageView(RHIImageView*& imageView)
 {
     if (imageView == nullptr)
     {
@@ -2104,8 +2346,9 @@ void D3D12RHI::destroyImageView(RHIImageView* imageView)
 
     if (imageView == m_depth_desc.depth_image_view)
     {
-        delete m_depth_desc.depth_image_view;
+        delete static_cast<D3D12RHIImageView*>(m_depth_desc.depth_image_view);
         m_depth_desc.depth_image_view = nullptr;
+        imageView = nullptr;
         return;
     }
 
@@ -2113,16 +2356,17 @@ void D3D12RHI::destroyImageView(RHIImageView* imageView)
     {
         if (swapchain_image_view == imageView)
         {
-            delete swapchain_image_view;
+            delete static_cast<D3D12RHIImageView*>(swapchain_image_view);
             swapchain_image_view = nullptr;
+            imageView = nullptr;
             return;
         }
     }
 
-    delete imageView;
-    return;
+    delete static_cast<D3D12RHIImageView*>(imageView);
+    imageView = nullptr;
 }
-void D3D12RHI::destroyImage(RHIImage* image)
+void D3D12RHI::destroyImage(RHIImage*& image)
 {
     if (image == nullptr)
     {
@@ -2131,19 +2375,32 @@ void D3D12RHI::destroyImage(RHIImage* image)
 
     if (image == m_depth_desc.depth_image)
     {
-        delete m_depth_desc.depth_image;
+        delete static_cast<D3D12RHIImage*>(m_depth_desc.depth_image);
         m_depth_desc.depth_image = nullptr;
+        image = nullptr;
         return;
     }
 
-    delete image;
-    return;
+    for (auto*& swapchain_image : m_owned_swapchain_images)
+    {
+        if (swapchain_image == image)
+        {
+            delete static_cast<D3D12RHIImage*>(swapchain_image);
+            swapchain_image = nullptr;
+            image = nullptr;
+            return;
+        }
+    }
+
+    delete static_cast<D3D12RHIImage*>(image);
+    image = nullptr;
 }
-void D3D12RHI::destroyFramebuffer(RHIFramebuffer* framebuffer)
+void D3D12RHI::destroyFramebuffer(RHIFramebuffer*& framebuffer)
 {
     delete static_cast<D3D12RHIFramebuffer*>(framebuffer);
+    framebuffer = nullptr;
 }
-void D3D12RHI::destroyFence(RHIFence* fence)
+void D3D12RHI::destroyFence(RHIFence*& fence)
 {
     if (fence == nullptr)
     {
@@ -2156,14 +2413,15 @@ void D3D12RHI::destroyFence(RHIFence* fence)
         {
             delete static_cast<D3D12RHIFence*>(frame_fence);
             frame_fence = nullptr;
+            fence = nullptr;
             return;
         }
     }
 
     delete static_cast<D3D12RHIFence*>(fence);
-    return;
+    fence = nullptr;
 }
-void D3D12RHI::destroyCommandPool(RHICommandPool* commandPool)
+void D3D12RHI::destroyCommandPool(RHICommandPool*& commandPool)
 {
     if (commandPool == nullptr)
     {
@@ -2172,13 +2430,14 @@ void D3D12RHI::destroyCommandPool(RHICommandPool* commandPool)
 
     if (commandPool == m_default_command_pool)
     {
-        delete m_default_command_pool;
+        delete static_cast<D3D12RHICommandPool*>(m_default_command_pool);
         m_default_command_pool = nullptr;
+        commandPool = nullptr;
         return;
     }
 
-    delete commandPool;
-    return;
+    delete static_cast<D3D12RHICommandPool*>(commandPool);
+    commandPool = nullptr;
 }
 void D3D12RHI::destroyBuffer(RHIBuffer* &buffer)
 {
@@ -2205,13 +2464,11 @@ void D3D12RHI::destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image
     if (image_view != nullptr)
     {
         destroyImageView(image_view);
-        delete image_view;
         image_view = nullptr;
     }
     if (image != nullptr)
     {
         destroyImage(image);
-        delete image;
         image = nullptr;
     }
     freeAllocation(allocation);

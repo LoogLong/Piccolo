@@ -219,6 +219,14 @@ void D3D12RHI::createSwapchainImageViews()
         image_view->rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
         m_owned_swapchain_images[image_index] = image;
         m_owned_swapchain_image_views[image_index] = image_view;
+        {
+            char image_debug_name[64];
+            char view_debug_name[64];
+            snprintf(image_debug_name, sizeof(image_debug_name), "RHI.Swapchain.Image[%u]", image_index);
+            snprintf(view_debug_name, sizeof(view_debug_name), "RHI.Swapchain.View[%u]", image_index);
+            setDebugObjectName(image, image_debug_name);
+            setDebugObjectName(image_view, view_debug_name);
+        }
         m_swapchain_desc.imageViews.push_back(image_view);
         rtv_handle.ptr += static_cast<SIZE_T>(m_d3d12_rtv_descriptor_size);
     }

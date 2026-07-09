@@ -58,6 +58,8 @@ namespace Piccolo
                                1,
                                1,
                                m_framebuffer.attachments[0].view);
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[0].image, "DirectionalLightShadow.Color");
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[0].view, "DirectionalLightShadow.Color.View");
 
         // depth
         m_framebuffer.attachments[1].format = m_rhi->getDepthImageInfo().depth_image_format;
@@ -79,6 +81,8 @@ namespace Piccolo
                                 1,
                                 1,
                                 m_framebuffer.attachments[1].view);
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[1].image, "DirectionalLightShadow.Depth");
+        m_rhi->setDebugObjectName(m_framebuffer.attachments[1].view, "DirectionalLightShadow.Depth.View");
     }
     void DirectionalLightShadowPass::setupRenderPass()
     {
@@ -147,6 +151,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create directional light shadow render pass");
         }
+        static_cast<RHIObject*>(m_framebuffer.render_pass)->setDebugName("DirectionalLightShadow.RenderPass");
     }
     void DirectionalLightShadowPass::setupFramebuffer()
     {
@@ -166,6 +171,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create directional light shadow framebuffer");
         }
+        static_cast<RHIObject*>(m_framebuffer.framebuffer)->setDebugName("DirectionalLightShadow.Framebuffer");
     }
     void DirectionalLightShadowPass::setupDescriptorSetLayout()
     {
@@ -354,6 +360,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create mesh directional light shadow graphics pipeline");
         }
+        m_rhi->setDebugObjectName(m_render_pipelines[0].pipeline, "DirectionalLightShadow.Pipeline");
 
         m_rhi->destroyShaderModule(vert_shader_module);
         m_rhi->destroyShaderModule(frag_shader_module);

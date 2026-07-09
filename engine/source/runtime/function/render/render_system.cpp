@@ -280,6 +280,21 @@ namespace Piccolo
         }
     }
 
+    void RenderSystem::waitForGpuIdle()
+    {
+        if (!m_rhi)
+        {
+            return;
+        }
+
+        if (m_render_pipeline)
+        {
+            m_render_pipeline->waitAllPendingGpuWork();
+        }
+        m_rhi->waitAllFramesInFlight();
+        m_rhi->waitDeviceIdle();
+    }
+
     void RenderSystem::clear()
     {
         if (m_rhi)

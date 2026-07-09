@@ -136,7 +136,7 @@ namespace Piccolo
         // Release path tracing scene buffers (legacy VkDeviceMemory, not VMA).
         if (m_path_tracing_rhi != nullptr)
         {
-            flushPendingPathTracingBufferDestroys(0, true);
+            m_path_tracing_rhi->flushAllRetiredResources();
 
             auto destroy_buffer = [this](RHIBuffer*& buffer, RHIDeviceMemory*& memory) {
                 if (buffer != nullptr)
@@ -164,7 +164,6 @@ namespace Piccolo
             m_path_tracing_instance_buffer_capacity = 0;
             m_path_tracing_rhi                      = nullptr;
         }
-        m_pending_destroy_path_tracing_buffers.clear();
 
         m_skinned_vertex_buffer = nullptr;
         m_gpu_resource_rhi      = nullptr;
@@ -315,6 +314,10 @@ namespace Piccolo
             brdf_map->m_height,
             brdf_map->m_pixels,
             brdf_map->m_format);
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._brdfLUT_texture_image,
+                                "Global.IBL.BRDFLUT");
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._brdfLUT_texture_image_view,
+                                "Global.IBL.BRDFLUT.View");
 
         // color grading
         std::shared_ptr<TextureData> color_grading_map =
@@ -329,6 +332,12 @@ namespace Piccolo
             color_grading_map->m_height,
             color_grading_map->m_pixels,
             color_grading_map->m_format);
+        rhi->setDebugObjectName(
+            m_global_render_resource._color_grading_resource._color_grading_LUT_texture_image,
+            "Global.ColorGrading.LUT");
+        rhi->setDebugObjectName(
+            m_global_render_resource._color_grading_resource._color_grading_LUT_texture_image_view,
+            "Global.ColorGrading.LUT.View");
 
         createDefaultMaterialTexture(rhi);
     }
@@ -620,41 +629,9 @@ namespace Piccolo
         return m_current_render_scene.lock();
     }
 
-    void RenderResource::flushPendingPathTracingBufferDestroys(uint64_t current_dispatch_index, bool force_all)
-    {
-        if (m_path_tracing_rhi == nullptr)
-        {
-            m_pending_destroy_path_tracing_buffers.clear();
-            return;
-        }
-
-        const uint64_t max_frames_in_flight = m_path_tracing_rhi->getMaxFramesInFlight();
-        auto it = m_pending_destroy_path_tracing_buffers.begin();
-        while (it != m_pending_destroy_path_tracing_buffers.end())
-        {
-            if (force_all || it->queued_at_dispatch_index + max_frames_in_flight <= current_dispatch_index)
-            {
-                if (it->buffer != nullptr)
-                {
-                    m_path_tracing_rhi->destroyBuffer(it->buffer);
-                }
-                if (it->memory != nullptr)
-                {
-                    m_path_tracing_rhi->freeMemory(it->memory);
-                }
-                it = m_pending_destroy_path_tracing_buffers.erase(it);
-            }
-            else
-            {
-                ++it;
-            }
-        }
-    }
-
     bool RenderResource::updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
                                                        const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
-                                                       bool full_rebuild,
-                                                       uint64_t dispatch_index)
+                                                       bool full_rebuild)
     {
         // Cache the RHI so the buffers created below can be released in clear().
         m_path_tracing_rhi = rhi.get();
@@ -808,7 +785,7 @@ namespace Piccolo
                                                          RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
         // Helper lambda to allocate or update a buffer
-        auto update_buffer = [this, rhi, usage, memory_properties, dispatch_index](
+        auto update_buffer = [this, rhi, usage, memory_properties](
             RHIBuffer*& buffer,
             RHIDeviceMemory*& buffer_memory,
             size_t& capacity,
@@ -825,10 +802,7 @@ namespace Piccolo
             {
                 if (buffer != nullptr || buffer_memory != nullptr)
                 {
-                    m_pending_destroy_path_tracing_buffers.push_back(
-                        PendingPathTracingBufferDestroy {buffer, buffer_memory, dispatch_index});
-                    buffer        = nullptr;
-                    buffer_memory = nullptr;
+                    rhi->retireBuffer(rhi->getCurrentFrameIndex(), buffer, buffer_memory);
                 }
 
                 capacity = data_size * 2; // Allocate with 2x padding for future growth
@@ -995,6 +969,10 @@ namespace Piccolo
              irradiance_maps[5]->m_pixels },
             irradiance_maps[0]->m_format,
             irradiance_cubemap_miplevels);
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._irradiance_texture_image,
+                                "Global.IBL.Irradiance");
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._irradiance_texture_image_view,
+                                "Global.IBL.Irradiance.View");
 
         uint32_t specular_cubemap_miplevels =
             static_cast<uint32_t>(
@@ -1014,6 +992,10 @@ namespace Piccolo
              specular_maps[5]->m_pixels },
             specular_maps[0]->m_format,
             specular_cubemap_miplevels);
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._specular_texture_image,
+                                "Global.IBL.Specular");
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._specular_texture_image_view,
+                                "Global.IBL.Specular.View");
     }
 
     RenderMeshGPUResource&
@@ -1912,6 +1894,10 @@ namespace Piccolo
             texture_data.base_color_image_height,
             texture_data.base_color_image_pixels,
             texture_data.base_color_image_format);
+        rhi->setDebugObjectName(texture_data.now_material->base_color_texture_image,
+                                "Material.BaseColor");
+        rhi->setDebugObjectName(texture_data.now_material->base_color_image_view,
+                                "Material.BaseColor.View");
 
         rhi->createGlobalImage(
             texture_data.now_material->metallic_roughness_texture_image,
@@ -1921,6 +1907,10 @@ namespace Piccolo
             texture_data.metallic_roughness_image_height,
             texture_data.metallic_roughness_image_pixels,
             texture_data.metallic_roughness_image_format);
+        rhi->setDebugObjectName(texture_data.now_material->metallic_roughness_texture_image,
+                                "Material.MetallicRoughness");
+        rhi->setDebugObjectName(texture_data.now_material->metallic_roughness_image_view,
+                                "Material.MetallicRoughness.View");
 
         rhi->createGlobalImage(
             texture_data.now_material->normal_texture_image,
@@ -1930,6 +1920,8 @@ namespace Piccolo
             texture_data.normal_roughness_image_height,
             texture_data.normal_roughness_image_pixels,
             texture_data.normal_roughness_image_format);
+        rhi->setDebugObjectName(texture_data.now_material->normal_texture_image, "Material.Normal");
+        rhi->setDebugObjectName(texture_data.now_material->normal_image_view, "Material.Normal.View");
 
         rhi->createGlobalImage(
             texture_data.now_material->occlusion_texture_image,
@@ -1939,6 +1931,8 @@ namespace Piccolo
             texture_data.occlusion_image_height,
             texture_data.occlusion_image_pixels,
             texture_data.occlusion_image_format);
+        rhi->setDebugObjectName(texture_data.now_material->occlusion_texture_image, "Material.Occlusion");
+        rhi->setDebugObjectName(texture_data.now_material->occlusion_image_view, "Material.Occlusion.View");
 
         rhi->createGlobalImage(
             texture_data.now_material->emissive_texture_image,
@@ -1948,6 +1942,8 @@ namespace Piccolo
             texture_data.emissive_image_height,
             texture_data.emissive_image_pixels,
             texture_data.emissive_image_format);
+        rhi->setDebugObjectName(texture_data.now_material->emissive_texture_image, "Material.Emissive");
+        rhi->setDebugObjectName(texture_data.now_material->emissive_image_view, "Material.Emissive.View");
     }
 
     RenderMeshGPUResource& RenderResource::getEntityMesh(RenderEntity entity)
@@ -2069,5 +2065,7 @@ namespace Piccolo
                                const_cast<uint8_t*>(default_pixel),
                                RHIFormat::RHI_FORMAT_R8G8B8A8_UNORM,
                                1);
+        rhi->setDebugObjectName(resource._image, "Global.DefaultMaterial");
+        rhi->setDebugObjectName(resource._image_view, "Global.DefaultMaterial.View");
     }
 } // namespace Piccolo

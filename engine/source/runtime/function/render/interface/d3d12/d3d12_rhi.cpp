@@ -210,6 +210,8 @@ using namespace d3d12_detail;
     }
     void D3D12RHI::clear()
     {
+        flushAllRetiredResources();
+
 #ifdef _WIN32
         waitForGpu();
 
@@ -218,9 +220,9 @@ using namespace d3d12_detail;
         destroyMipmappedSampler();
 #endif
 
-        delete m_default_command_pool;
+        delete static_cast<D3D12RHICommandPool*>(m_default_command_pool);
         m_default_command_pool = nullptr;
-        delete m_default_descriptor_pool;
+        delete static_cast<D3D12RHIDescriptorPool*>(m_default_descriptor_pool);
         m_default_descriptor_pool = nullptr;
         delete static_cast<D3D12RHIQueue*>(m_graphics_queue);
         m_graphics_queue = nullptr;
@@ -255,20 +257,20 @@ using namespace d3d12_detail;
 
         for (auto*& image_view : m_owned_swapchain_image_views)
         {
-            delete image_view;
+            delete static_cast<D3D12RHIImageView*>(image_view);
             image_view = nullptr;
         }
         m_owned_swapchain_image_views.clear();
         for (auto*& image : m_owned_swapchain_images)
         {
-            delete image;
+            delete static_cast<D3D12RHIImage*>(image);
             image = nullptr;
         }
         m_owned_swapchain_images.clear();
 
-        delete m_depth_desc.depth_image;
+        delete static_cast<D3D12RHIImage*>(m_depth_desc.depth_image);
         m_depth_desc.depth_image = nullptr;
-        delete m_depth_desc.depth_image_view;
+        delete static_cast<D3D12RHIImageView*>(m_depth_desc.depth_image_view);
         m_depth_desc.depth_image_view = nullptr;
 
         m_swapchain_desc.imageViews.clear();

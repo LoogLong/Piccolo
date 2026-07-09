@@ -43,6 +43,7 @@ namespace Piccolo
         void initialize(RenderSystemInitInfo init_info);
         void tick(float delta_time);
         void clear();
+        void waitForGpuIdle();
 
         void                          swapLogicRenderData();
         RenderSwapContext&            getSwapContext();

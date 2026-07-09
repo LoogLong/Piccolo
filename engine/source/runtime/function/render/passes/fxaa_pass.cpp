@@ -1,5 +1,6 @@
 #include "runtime/function/render/passes/fxaa_pass.h"
 
+#include "runtime/function/render/interface/rhi_object.h"
 #include "runtime/function/render/render_common.h"
 #include "runtime/function/render/render_mesh.h"
 #include "runtime/function/render/render_pass.h"
@@ -54,6 +55,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create post process global layout");
         }
+        static_cast<RHIObject*>(m_descriptor_infos[0].layout)->setDebugName("FXAA.DescriptorSetLayout");
     }
 
     void FXAAPass::setupPipelines()
@@ -70,6 +72,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create post process pipeline layout");
         }
+        static_cast<RHIObject*>(m_render_pipelines[0].layout)->setDebugName("FXAA.PipelineLayout");
 
         RHIShader* vert_shader_module =
             m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, FXAA_VERT));
@@ -186,6 +189,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create post process graphics pipeline");
         }
+        m_rhi->setDebugObjectName(m_render_pipelines[0].pipeline, "FXAA.Pipeline");
 
         m_rhi->destroyShaderModule(vert_shader_module);
         m_rhi->destroyShaderModule(frag_shader_module);
@@ -204,6 +208,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate post process global descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[0].descriptor_set, "FXAA.DescriptorSet");
     }
 
     void FXAAPass::updateAfterFramebufferRecreate(RHIImageView* input_attachment)

@@ -492,8 +492,9 @@ namespace Piccolo
 
     void ParticlePass::updateAfterFramebufferRecreate()
     {
-        m_rhi->destroyImage(m_dst_depth_image);
-        m_rhi->freeMemory(m_dst_depth_image_memory);
+        const uint8_t slot = m_rhi->getCurrentFrameIndex();
+        m_rhi->retireImage(slot, m_dst_depth_image, m_src_depth_image_view, m_dst_depth_image_memory);
+        m_rhi->retireImage(slot, m_dst_normal_image, m_src_normal_image_view, m_dst_normal_image_memory);
 
         m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
                            m_rhi->getSwapchainInfo().extent.height,
@@ -507,8 +508,7 @@ namespace Piccolo
                            1,
                            1);
 
-        m_rhi->destroyImage(m_dst_normal_image);
-        m_rhi->freeMemory(m_dst_normal_image_memory);
+        m_rhi->setDebugObjectName(m_dst_depth_image, "Particle.DstDepth");
 
         m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
                            m_rhi->getSwapchainInfo().extent.height,
@@ -521,6 +521,7 @@ namespace Piccolo
                            0,
                            1,
                            1);
+        m_rhi->setDebugObjectName(m_dst_normal_image, "Particle.DstNormal");
 
         m_rhi->createImageView(m_dst_depth_image,
                                m_rhi->getDepthImageInfo().depth_image_format,
@@ -529,6 +530,7 @@ namespace Piccolo
                                1,
                                1,
                                m_src_depth_image_view);
+        m_rhi->setDebugObjectName(m_src_depth_image_view, "Particle.SrcDepth.View");
 
         m_rhi->createImageView(m_dst_normal_image,
                                RHI_FORMAT_R8G8B8A8_UNORM,
@@ -537,6 +539,7 @@ namespace Piccolo
                                1,
                                1,
                                m_src_normal_image_view);
+        m_rhi->setDebugObjectName(m_src_normal_image_view, "Particle.SrcNormal.View");
 
         updateDescriptorSet();
     }
@@ -580,6 +583,8 @@ namespace Piccolo
                                      m_particle_billboard_texture_resource->m_height,
                                      m_particle_billboard_texture_resource->m_pixels,
                                      m_particle_billboard_texture_resource->m_format);
+            m_rhi->setDebugObjectName(m_particle_billboard_texture_image, "Particle.BillboardTexture");
+            m_rhi->setDebugObjectName(m_particle_billboard_texture_image_view, "Particle.BillboardTexture.View");
         }
 
         // piccolo texture
@@ -593,6 +598,8 @@ namespace Piccolo
                                      m_piccolo_logo_texture_resource->m_height,
                                      m_piccolo_logo_texture_resource->m_pixels,
                                      m_piccolo_logo_texture_resource->m_format);
+            m_rhi->setDebugObjectName(m_piccolo_logo_texture_image, "Particle.LogoTexture");
+            m_rhi->setDebugObjectName(m_piccolo_logo_texture_image_view, "Particle.LogoTexture.View");
         }
 
         m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
@@ -606,6 +613,7 @@ namespace Piccolo
                            0,
                            1,
                            1);
+        m_rhi->setDebugObjectName(m_dst_depth_image, "Particle.DstDepth");
 
         m_rhi->createImage(m_rhi->getSwapchainInfo().extent.width,
                            m_rhi->getSwapchainInfo().extent.height,
@@ -618,6 +626,7 @@ namespace Piccolo
                            0,
                            1,
                            1);
+        m_rhi->setDebugObjectName(m_dst_normal_image, "Particle.DstNormal");
 
         m_rhi->createImageView(m_dst_depth_image,
                                m_rhi->getDepthImageInfo().depth_image_format,
@@ -626,6 +635,7 @@ namespace Piccolo
                                1,
                                1,
                                m_src_depth_image_view);
+        m_rhi->setDebugObjectName(m_src_depth_image_view, "Particle.SrcDepth.View");
 
         m_rhi->createImageView(m_dst_normal_image,
                                RHI_FORMAT_R8G8B8A8_UNORM,
@@ -634,6 +644,7 @@ namespace Piccolo
                                1,
                                1,
                                m_src_normal_image_view);
+        m_rhi->setDebugObjectName(m_src_normal_image_view, "Particle.SrcNormal.View");
     }
 
     void ParticlePass::setupParticleDescriptorSet()
@@ -1308,6 +1319,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle kickoff pipe");
             }
+            m_rhi->setDebugObjectName(m_kickoff_pipeline, "Particle.Kickoff.Pipeline");
             m_rhi->destroyShaderModule(kickoff_shader_module);
         }
 
@@ -1323,6 +1335,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle emit pipe");
             }
+            m_rhi->setDebugObjectName(m_emit_pipeline, "Particle.Emit.Pipeline");
             m_rhi->destroyShaderModule(emit_shader_module);
         }
 
@@ -1339,6 +1352,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle simulate pipe");
             }
+            m_rhi->setDebugObjectName(m_simulate_pipeline, "Particle.Simulate.Pipeline");
             m_rhi->destroyShaderModule(simulate_shader_module);
         }
 
@@ -1472,6 +1486,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create particle billboard graphics pipeline");
             }
+            m_rhi->setDebugObjectName(m_render_pipelines[1].pipeline, "Particle.Billboard.Pipeline");
 
             m_rhi->destroyShaderModule(vert_shader_module);
             m_rhi->destroyShaderModule(frag_shader_module);

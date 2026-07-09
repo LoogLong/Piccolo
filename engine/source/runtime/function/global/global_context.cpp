@@ -66,10 +66,18 @@ namespace Piccolo
     {
         m_render_debug_config.reset();
 
+        if (m_render_system != nullptr)
+        {
+            m_render_system->waitForGpuIdle();
+        }
+
         m_debugdraw_manager.reset();
 
-        m_render_system->clear();
-        m_render_system.reset();
+        if (m_render_system != nullptr)
+        {
+            m_render_system->clear();
+            m_render_system.reset();
+        }
 
         m_window_system.reset();
 

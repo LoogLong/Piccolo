@@ -4,7 +4,6 @@
 #include "debug_draw_primitive.h"
 #include "debug_draw_font.h"
 
-#include <queue>
 namespace Piccolo
 {
     class DebugDrawAllocator
@@ -85,17 +84,10 @@ namespace Piccolo
         //font resource
         DebugDrawFont* m_font = nullptr;
 
-        //resource deleter
-        static const uint32_t k_deferred_delete_resource_frame_count = 5;//the count means after count-1 frame will be delete
-        uint32_t m_current_frame = 0;
-        std::queue<Resource> m_deffer_delete_queue[k_deferred_delete_resource_frame_count];
-
     private:
         void setupDescriptorSet();
         void prepareDescriptorSet();
         void updateDescriptorSet();
-        void flushPendingDelete();
-        void flushAllDeferredDeletes();
         void unloadMeshBuffer();
         void loadSphereMeshBuffer();
         void loadCylinderMeshBuffer();

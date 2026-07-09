@@ -2,6 +2,7 @@
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <fstream>
+#include <cstdio>
 #include "runtime/function/global/global_context.h"
 #include "runtime/function/render/render_system.h"
 namespace Piccolo
@@ -93,6 +94,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create inefficient pick render pass");
         }
+        static_cast<RHIObject*>(m_framebuffer.render_pass)->setDebugName("DebugDraw.RenderPass");
     }
     void DebugDrawPipeline::setupFramebuffer()
     {
@@ -115,6 +117,9 @@ namespace Piccolo
             {
                 throw std::runtime_error("create inefficient pick framebuffer");
             }
+            char framebuffer_debug_name[64];
+            std::snprintf(framebuffer_debug_name, sizeof(framebuffer_debug_name), "DebugDraw.Framebuffer[%zu]", i);
+            static_cast<RHIObject*>(m_framebuffer.framebuffers[i])->setDebugName(framebuffer_debug_name);
         }
     }
 
@@ -148,6 +153,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create debug draw layout");
         }
+        static_cast<RHIObject*>(m_descriptor_layout)->setDebugName("DebugDraw.DescriptorSetLayout");
     }
 
     void DebugDrawPipeline::setupPipelines()
@@ -165,6 +171,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create mesh inefficient pick pipeline layout");
         }
+        static_cast<RHIObject*>(m_render_pipelines[0].layout)->setDebugName("DebugDraw.PipelineLayout");
 
         RHIShader* vert_shader_module =
             m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEBUGDRAW_VERT));
@@ -311,6 +318,7 @@ namespace Piccolo
         {
             throw std::runtime_error("create debug draw graphics pipeline");
         }
+        m_rhi->setDebugObjectName(m_render_pipelines[0].pipeline, "DebugDraw.Pipeline");
 
         m_rhi->destroyShaderModule(vert_shader_module);
         m_rhi->destroyShaderModule(frag_shader_module);

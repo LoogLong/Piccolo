@@ -1,10 +1,10 @@
 #pragma once
 
+#include "runtime/function/render/interface/rhi_object.h"
+
 namespace Piccolo
 {
-    class RHIAllocation
+    class RHIAllocation : public RHIObject
     {
-    public:
-        virtual ~RHIAllocation() = default;
     };
 } // namespace Piccolo

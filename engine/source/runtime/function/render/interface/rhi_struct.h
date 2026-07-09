@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/function/render/render_type.h"
+#include "runtime/function/render/interface/rhi_object.h"
 #include <optional>
 #include <vector>
 namespace Piccolo
@@ -9,32 +10,32 @@ namespace Piccolo
     #define RHI_DELETE_PTR(x) delete x; x = nullptr;
 
     ////////////////////class////////////////////////
-    class RHIBuffer { };
-    class RHIBufferView { };
-    class RHICommandBuffer { };
-    class RHICommandPool { };
-    class RHIDescriptorPool { };
-    class RHIDescriptorSet { };
-    class RHIDescriptorSetLayout { };
-    class RHIDevice { };
-    class RHIDeviceMemory { };
-    class RHIEvent { };
-    class RHIFence { };
-    class RHIFramebuffer { };
-    class RHIImage { };
-    class RHIImageView { };
-    class RHIInstance { };
-    class RHIQueue { };
-    class RHIPhysicalDevice { };
-    class RHIPipeline { };
-    class RHIPipelineCache { };
-    class RHIPipelineLayout { };
-    class RHIRenderPass { };
-    class RHISampler { };
-    class RHISemaphore { };
-    class RHIShader { };
-    class RHIAccelerationStructure { };
-    class RHIShaderBindingTable { };
+    class RHIBuffer : public RHIObject {};
+    class RHIBufferView : public RHIObject {};
+    class RHICommandBuffer : public RHIObject {};
+    class RHICommandPool : public RHIObject {};
+    class RHIDescriptorPool : public RHIObject {};
+    class RHIDescriptorSet : public RHIObject {};
+    class RHIDescriptorSetLayout : public RHIObject {};
+    class RHIDevice : public RHIObject {};
+    class RHIDeviceMemory : public RHIObject {};
+    class RHIEvent : public RHIObject {};
+    class RHIFence : public RHIObject {};
+    class RHIFramebuffer : public RHIObject {};
+    class RHIImage : public RHIObject {};
+    class RHIImageView : public RHIObject {};
+    class RHIInstance : public RHIObject {};
+    class RHIQueue : public RHIObject {};
+    class RHIPhysicalDevice : public RHIObject {};
+    class RHIPipeline : public RHIObject {};
+    class RHIPipelineCache : public RHIObject {};
+    class RHIPipelineLayout : public RHIObject {};
+    class RHIRenderPass : public RHIObject {};
+    class RHISampler : public RHIObject {};
+    class RHISemaphore : public RHIObject {};
+    class RHIShader : public RHIObject {};
+    class RHIAccelerationStructure : public RHIObject {};
+    class RHIShaderBindingTable : public RHIObject {};
 
 
     ////////////////////struct//////////////////////////

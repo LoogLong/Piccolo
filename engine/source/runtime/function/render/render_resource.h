@@ -214,12 +214,9 @@ namespace Piccolo
 
         std::vector<RenderPathTracingCollectedInstance> collectPathTracingInstances(RenderScene& scene);
 
-        void flushPendingPathTracingBufferDestroys(uint64_t current_dispatch_index, bool force_all = false);
-
         bool updatePathTracingSceneBuffers(std::shared_ptr<RHI> rhi,
                                            const std::vector<RenderPathTracingCollectedInstance>& collected_instances,
-                                           bool full_rebuild,
-                                           uint64_t dispatch_index);
+                                           bool full_rebuild);
 
         RHIBuffer* getPathTracingVertexBuffer() const { return m_path_tracing_vertex_buffer; }
         RHIBuffer* getPathTracingIndexBuffer() const { return m_path_tracing_index_buffer; }
@@ -266,13 +263,6 @@ namespace Piccolo
         RHIDescriptorSetLayout* const* m_gpu_skinning_mesh_descriptor_set_layout {nullptr};
 
     private:
-        struct PendingPathTracingBufferDestroy
-        {
-            RHIBuffer*       buffer {nullptr};
-            RHIDeviceMemory* memory {nullptr};
-            uint64_t         queued_at_dispatch_index {0};
-        };
-
         std::weak_ptr<RenderScene> m_current_render_scene;
 
         // Path tracing scene data
@@ -300,8 +290,6 @@ namespace Piccolo
         size_t m_path_tracing_material_buffer_capacity {0};
         size_t m_path_tracing_geometry_buffer_capacity {0};
         size_t m_path_tracing_instance_buffer_capacity {0};
-
-        std::vector<PendingPathTracingBufferDestroy> m_pending_destroy_path_tracing_buffers;
 
         // Non-owning RHI handles cached while GPU resources exist, so clear() can release them.
         RHI* m_gpu_resource_rhi {nullptr};

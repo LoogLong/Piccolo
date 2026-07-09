@@ -44,6 +44,7 @@ namespace Piccolo
     bool isPointLightShadowEnabled() override;
     bool allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers) override;
     bool allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAllocateInfo, RHIDescriptorSet* &pDescriptorSets) override;
+    void freeDescriptorSets(RHIDescriptorPool* pool, uint32_t count, RHIDescriptorSet** sets) override;
     void createSwapchain() override;
     void recreateSwapchain() override;
     void createSwapchainImageViews() override;
@@ -145,30 +146,30 @@ namespace Piccolo
     void pushEvent(RHICommandBuffer* commond_buffer, const char* name, const float* color) override;
     void popEvent(RHICommandBuffer* commond_buffer) override;
 
-    void setDebugObjectName(RHIImage* image, const char* name) override {}
-    void setDebugObjectName(RHIImageView* image_view, const char* name) override {}
-    void setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name) override {}
-    void setDebugObjectName(RHICommandBuffer* command_buffer, const char* name) override {}
-    void setDebugObjectName(RHIPipeline* pipeline, const char* name) override {}
-    void setDebugObjectName(RHIBuffer* buffer, const char* name) override {}
-    void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) override {}
+    void setDebugObjectName(RHIImage* image, const char* name) override;
+    void setDebugObjectName(RHIImageView* image_view, const char* name) override;
+    void setDebugObjectName(RHIDescriptorSet* descriptor_set, const char* name) override;
+    void setDebugObjectName(RHICommandBuffer* command_buffer, const char* name) override;
+    void setDebugObjectName(RHIPipeline* pipeline, const char* name) override;
+    void setDebugObjectName(RHIBuffer* buffer, const char* name) override;
+    void setDebugObjectName(RHIAccelerationStructure* acceleration_structure, const char* name) override;
     void clearSwapchain() override;
     void destroyDefaultSampler(RHIDefaultSamplerType type) override;
     void destroyMipmappedSampler() override;
-    void destroyShaderModule(RHIShader* shader) override;
+    void destroyShaderModule(RHIShader*& shader) override;
     void destroyPipeline(RHIPipeline*& pipeline) override;
     void destroyPipelineLayout(RHIPipelineLayout*& pipeline_layout) override;
     void destroyRenderPass(RHIRenderPass*& render_pass) override;
     void destroyDescriptorSetLayout(RHIDescriptorSetLayout*& descriptor_set_layout) override;
-    void destroySemaphore(RHISemaphore* semaphore) override;
-    void destroySampler(RHISampler* sampler) override;
-    void destroyInstance(RHIInstance* instance) override;
-    void destroyImageView(RHIImageView* imageView) override;
-    void destroyImage(RHIImage* image) override;
-    void destroyFramebuffer(RHIFramebuffer* framebuffer) override;
-    void destroyFence(RHIFence* fence) override;
+    void destroySemaphore(RHISemaphore*& semaphore) override;
+    void destroySampler(RHISampler*& sampler) override;
+    void destroyInstance(RHIInstance*& instance) override;
+    void destroyImageView(RHIImageView*& image_view) override;
+    void destroyImage(RHIImage*& image) override;
+    void destroyFramebuffer(RHIFramebuffer*& framebuffer) override;
+    void destroyFence(RHIFence*& fence) override;
     void destroyDevice() override;
-    void destroyCommandPool(RHICommandPool* commandPool) override;
+    void destroyCommandPool(RHICommandPool*& command_pool) override;
     void destroyBuffer(RHIBuffer* &buffer) override;
     void destroyBufferWithAllocation(RHIBuffer*& buffer, RHIAllocation*& allocation) override;
     void destroyImageWithAllocation(RHIImage*& image, RHIImageView*& image_view, RHIAllocation*& allocation) override;

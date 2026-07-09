@@ -5,11 +5,46 @@
 #include "runtime/function/render/render_resource.h"
 #include "runtime/function/render/render_shader_bytecode.h"
 
+#include <cstdio>
 #include <map>
 #include <stdexcept>
 
 namespace Piccolo
 {
+    namespace
+    {
+        const char* mainCameraAttachmentImageDebugName(int attachment_index)
+        {
+            switch (attachment_index)
+            {
+                case _main_camera_pass_gbuffer_a:
+                    return "MainCamera.GBuffer.Color0";
+                case _main_camera_pass_gbuffer_b:
+                    return "MainCamera.GBuffer.Color1";
+                case _main_camera_pass_gbuffer_c:
+                    return "MainCamera.GBuffer.Color2";
+                case _main_camera_pass_backup_buffer_odd:
+                    return "MainCamera.BackupBuffer.Odd";
+                case _main_camera_pass_backup_buffer_even:
+                    return "MainCamera.BackupBuffer.Even";
+                case _main_camera_pass_post_process_buffer_odd:
+                    return "MainCamera.PostProcess.Odd";
+                case _main_camera_pass_post_process_buffer_even:
+                    return "MainCamera.PostProcess.Even";
+                default:
+                    return "MainCamera.Attachment.Unknown";
+            }
+        }
+
+        void formatMainCameraAttachmentViewDebugName(char* out, size_t out_size, int attachment_index)
+        {
+            if (out == nullptr || out_size == 0)
+            {
+                return;
+            }
+            std::snprintf(out, out_size, "%s.View", mainCameraAttachmentImageDebugName(attachment_index));
+        }
+    } // namespace
     void MainCameraPass::initialize(const RenderPassInitInfo* init_info)
     {
         RenderPass::initialize(nullptr);
@@ -93,6 +128,9 @@ namespace Piccolo
                                    1);
             }
 
+            m_rhi->setDebugObjectName(m_framebuffer.attachments[buffer_index].image,
+                                      mainCameraAttachmentImageDebugName(buffer_index));
+
             m_rhi->createImageView(m_framebuffer.attachments[buffer_index].image,
                                    m_framebuffer.attachments[buffer_index].format,
                                    RHI_IMAGE_ASPECT_COLOR_BIT,
@@ -100,6 +138,10 @@ namespace Piccolo
                                    1,
                                    1,
                                    m_framebuffer.attachments[buffer_index].view);
+
+            char view_debug_name[80];
+            formatMainCameraAttachmentViewDebugName(view_debug_name, sizeof(view_debug_name), buffer_index);
+            m_rhi->setDebugObjectName(m_framebuffer.attachments[buffer_index].view, view_debug_name);
         }
 
         m_framebuffer.attachments[_main_camera_pass_post_process_buffer_odd].format  = RHI_FORMAT_R16G16B16A16_SFLOAT;
@@ -122,6 +164,9 @@ namespace Piccolo
                                1,
                                1);
 
+            m_rhi->setDebugObjectName(m_framebuffer.attachments[attachment_index].image,
+                                        mainCameraAttachmentImageDebugName(attachment_index));
+
             m_rhi->createImageView(m_framebuffer.attachments[attachment_index].image,
                                    m_framebuffer.attachments[attachment_index].format,
                                    RHI_IMAGE_ASPECT_COLOR_BIT,
@@ -129,6 +174,10 @@ namespace Piccolo
                                    1,
                                    1,
                                    m_framebuffer.attachments[attachment_index].view);
+
+            char view_debug_name[80];
+            formatMainCameraAttachmentViewDebugName(view_debug_name, sizeof(view_debug_name), attachment_index);
+            m_rhi->setDebugObjectName(m_framebuffer.attachments[attachment_index].view, view_debug_name);
         }
     }
 
@@ -412,6 +461,7 @@ namespace Piccolo
         {
             throw std::runtime_error("failed to create render pass");
         }
+        static_cast<RHIObject*>(m_framebuffer.render_pass)->setDebugName("MainCamera.RenderPass");
     }
 
     void MainCameraPass::setupPathTracingCompositeRenderPass()
@@ -697,6 +747,8 @@ namespace Piccolo
         {
             throw std::runtime_error("failed to create path tracing composite render pass");
         }
+        static_cast<RHIObject*>(m_path_tracing_composite_render_pass)
+            ->setDebugName("MainCamera.PathTracingComposite.RenderPass");
     }
 
     void MainCameraPass::setupDescriptorSetLayout()
@@ -722,6 +774,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh mesh layout");
             }
+            static_cast<RHIObject*>(m_descriptor_infos[_per_mesh].layout)->setDebugName("MainCamera.PerMesh.DescriptorSetLayout");
         }
 
         {
@@ -794,6 +847,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh global layout");
             }
+            static_cast<RHIObject*>(m_descriptor_infos[_mesh_global].layout)
+                ->setDebugName("MainCamera.MeshGlobal.DescriptorSetLayout");
         }
 
         {
@@ -852,6 +907,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh material layout");
             }
+            static_cast<RHIObject*>(m_descriptor_infos[_mesh_per_material].layout)
+                ->setDebugName("MainCamera.MeshMaterial.DescriptorSetLayout");
         }
 
         {
@@ -880,6 +937,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create skybox layout");
             }
+            static_cast<RHIObject*>(m_descriptor_infos[_skybox].layout)->setDebugName("MainCamera.Skybox.DescriptorSetLayout");
         }
 
         {
@@ -908,6 +966,7 @@ namespace Piccolo
             {
                 throw std::runtime_error("create axis layout");
             }
+            static_cast<RHIObject*>(m_descriptor_infos[_axis].layout)->setDebugName("MainCamera.Axis.DescriptorSetLayout");
         }
 
         {
@@ -956,6 +1015,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create deferred lighting global layout");
             }
+            static_cast<RHIObject*>(m_descriptor_infos[_deferred_lighting].layout)
+                ->setDebugName("MainCamera.DeferredLighting.DescriptorSetLayout");
         }
     }
 
@@ -977,6 +1038,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh gbuffer pipeline layout");
             }
+            static_cast<RHIObject*>(m_render_pipelines[_render_pipeline_type_mesh_gbuffer].layout)
+                ->setDebugName("MainCamera.GBuffer.PipelineLayout");
 
             RHIShader* vert_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_VERT));
@@ -1116,6 +1179,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh gbuffer graphics pipeline");
             }
+            m_rhi->setDebugObjectName(m_render_pipelines[_render_pipeline_type_mesh_gbuffer].pipeline,
+                                      "MainCamera.GBuffer.Pipeline");
 
             m_rhi->destroyShaderModule(vert_shader_module);
             m_rhi->destroyShaderModule(frag_shader_module);
@@ -1137,6 +1202,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create deferred lighting pipeline layout");
             }
+            static_cast<RHIObject*>(m_render_pipelines[_render_pipeline_type_deferred_lighting].layout)
+                ->setDebugName("MainCamera.Deferred.PipelineLayout");
 
             RHIShader* vert_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEFERRED_LIGHTING_VERT));
@@ -1259,6 +1326,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create deferred lighting graphics pipeline");
             }
+            m_rhi->setDebugObjectName(m_render_pipelines[_render_pipeline_type_deferred_lighting].pipeline,
+                                      "MainCamera.Deferred.Pipeline");
 
             m_rhi->destroyShaderModule(vert_shader_module);
             m_rhi->destroyShaderModule(frag_shader_module);
@@ -1278,6 +1347,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh lighting pipeline layout");
             }
+            static_cast<RHIObject*>(m_render_pipelines[_render_pipeline_type_mesh_lighting].layout)
+                ->setDebugName("MainCamera.Forward.PipelineLayout");
 
             RHIShader* vert_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, MESH_VERT));
@@ -1400,6 +1471,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create mesh lighting graphics pipeline");
             }
+            m_rhi->setDebugObjectName(m_render_pipelines[_render_pipeline_type_mesh_lighting].pipeline,
+                                      "MainCamera.Forward.Pipeline");
 
             m_rhi->destroyShaderModule(vert_shader_module);
             m_rhi->destroyShaderModule(frag_shader_module);
@@ -1417,6 +1490,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create skybox pipeline layout");
             }
+            static_cast<RHIObject*>(m_render_pipelines[_render_pipeline_type_skybox].layout)
+                ->setDebugName("MainCamera.Skybox.PipelineLayout");
 
             RHIShader* vert_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, SKYBOX_VERT));
@@ -1539,6 +1614,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create skybox graphics pipeline");
             }
+            m_rhi->setDebugObjectName(m_render_pipelines[_render_pipeline_type_skybox].pipeline,
+                                      "MainCamera.Skybox.Pipeline");
 
             m_rhi->destroyShaderModule(vert_shader_module);
             m_rhi->destroyShaderModule(frag_shader_module);
@@ -1556,6 +1633,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create axis pipeline layout");
             }
+            static_cast<RHIObject*>(m_render_pipelines[_render_pipeline_type_axis].layout)
+                ->setDebugName("MainCamera.Axis.PipelineLayout");
 
             RHIShader* vert_shader_module =
                 m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, AXIS_VERT));
@@ -1677,6 +1756,8 @@ namespace Piccolo
             {
                 throw std::runtime_error("create axis graphics pipeline");
             }
+            m_rhi->setDebugObjectName(m_render_pipelines[_render_pipeline_type_axis].pipeline,
+                                      "MainCamera.Axis.Pipeline");
 
             m_rhi->destroyShaderModule(vert_shader_module);
             m_rhi->destroyShaderModule(frag_shader_module);
@@ -1705,6 +1786,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate mesh global descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[_mesh_global].descriptor_set, "MainCamera.MeshGlobal.DescriptorSet");
 
         RHIDescriptorBufferInfo mesh_perframe_storage_buffer_info = {};
         // this offset plus dynamic_offset should not be greater than the size of the buffer
@@ -1833,6 +1915,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate skybox descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[_skybox].descriptor_set, "MainCamera.Skybox.DescriptorSet");
 
         RHIDescriptorBufferInfo mesh_perframe_storage_buffer_info = {};
         mesh_perframe_storage_buffer_info.offset                 = 0;
@@ -1882,6 +1965,7 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate axis descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[_axis].descriptor_set, "MainCamera.Axis.DescriptorSet");
 
         RHIDescriptorBufferInfo mesh_perframe_storage_buffer_info = {};
         mesh_perframe_storage_buffer_info.offset                 = 0;
@@ -1934,6 +2018,8 @@ namespace Piccolo
         {
             throw std::runtime_error("allocate gbuffer light global descriptor set");
         }
+        m_rhi->setDebugObjectName(m_descriptor_infos[_deferred_lighting].descriptor_set,
+                                  "MainCamera.DeferredLighting.DescriptorSet");
     }
 
     void MainCameraPass::setupFramebufferDescriptorSet()
@@ -2049,6 +2135,9 @@ namespace Piccolo
             {
                 throw std::runtime_error("create main camera framebuffer");
             }
+            char framebuffer_debug_name[64];
+            std::snprintf(framebuffer_debug_name, sizeof(framebuffer_debug_name), "MainCamera.SwapchainFramebuffer[%zu]", i);
+            static_cast<RHIObject*>(m_swapchain_framebuffers[i])->setDebugName(framebuffer_debug_name);
         }
     }
 
@@ -2083,16 +2172,25 @@ namespace Piccolo
             {
                 throw std::runtime_error("create path tracing composite framebuffer");
             }
+            char framebuffer_debug_name[64];
+            std::snprintf(framebuffer_debug_name,
+                          sizeof(framebuffer_debug_name),
+                          "MainCamera.PathTracingComposite.Framebuffer[%zu]",
+                          i);
+            static_cast<RHIObject*>(m_path_tracing_composite_swapchain_framebuffers[i])
+                ->setDebugName(framebuffer_debug_name);
         }
     }
 
     void MainCameraPass::updateAfterFramebufferRecreate()
     {
+        const uint8_t slot = m_rhi->getCurrentFrameIndex();
         for (size_t i = 0; i < m_framebuffer.attachments.size(); i++)
         {
-            m_rhi->destroyImage(m_framebuffer.attachments[i].image);
-            m_rhi->destroyImageView(m_framebuffer.attachments[i].view);
-            m_rhi->freeMemory(m_framebuffer.attachments[i].mem);
+            m_rhi->retireImage(slot,
+                               m_framebuffer.attachments[i].image,
+                               m_framebuffer.attachments[i].view,
+                               m_framebuffer.attachments[i].mem);
         }
 
         for (auto& framebuffer : m_swapchain_framebuffers)
