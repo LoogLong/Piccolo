@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstdio>
 #include <cmath>
 #include <cwchar>
 #include <cstring>
@@ -1267,7 +1268,9 @@ D3D12_RESOURCE_STATES toD3D12ResourceState(RHIImageLayout layout)
 
 D3D12_RESOURCE_STATES toD3D12BufferState(RHIAccessFlags access,
                                          RHIBufferUsageFlags usage,
-                                         D3D12_HEAP_TYPE heap_type)
+                                         D3D12_HEAP_TYPE heap_type,
+                                         RHIPipelineStageFlags src_stage_mask,
+                                         RHIPipelineStageFlags dst_stage_mask)
 {
     if (heap_type == D3D12_HEAP_TYPE_UPLOAD)
     {
@@ -1277,6 +1280,19 @@ D3D12_RESOURCE_STATES toD3D12BufferState(RHIAccessFlags access,
     {
         return D3D12_RESOURCE_STATE_COPY_DEST;
     }
+
+    const RHIPipelineStageFlags graphics_stage_mask =
+        RHI_PIPELINE_STAGE_VERTEX_INPUT_BIT | RHI_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+        RHI_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+        RHI_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT | RHI_PIPELINE_STAGE_GEOMETRY_SHADER_BIT |
+        RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+        RHI_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        RHI_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+    const bool compute_domain_barrier =
+        (src_stage_mask & RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT) != 0 &&
+        (dst_stage_mask & graphics_stage_mask) == 0 &&
+        (dst_stage_mask & RHI_PIPELINE_STAGE_TRANSFER_BIT) == 0 &&
+        (dst_stage_mask & RHI_PIPELINE_STAGE_HOST_BIT) == 0;
 
     D3D12_RESOURCE_STATES state = static_cast<D3D12_RESOURCE_STATES>(0);
     if (hasFlag(access, RHI_ACCESS_TRANSFER_READ_BIT))
@@ -1296,6 +1312,12 @@ D3D12_RESOURCE_STATES toD3D12BufferState(RHIAccessFlags access,
     {
         return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     }
+    if (compute_domain_barrier && hasFlag(usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+        hasFlag(access, RHI_ACCESS_INDIRECT_COMMAND_READ_BIT) &&
+        !hasFlag(access, RHI_ACCESS_SHADER_READ_BIT) && !hasFlag(access, RHI_ACCESS_SHADER_WRITE_BIT))
+    {
+        return D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+    }
     if (hasFlag(access, RHI_ACCESS_INDEX_READ_BIT))
     {
         state |= D3D12_RESOURCE_STATE_INDEX_BUFFER;
@@ -1313,8 +1335,15 @@ D3D12_RESOURCE_STATES toD3D12BufferState(RHIAccessFlags access,
          hasFlag(access, RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT)) &&
         !hasFlag(access, RHI_ACCESS_INDIRECT_COMMAND_READ_BIT))
     {
-        state |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
-                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        if (compute_domain_barrier)
+        {
+            state |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        }
+        else
+        {
+            state |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        }
     }
 
     if (state == 0)
@@ -1756,6 +1785,7 @@ bool createCommittedBuffer(ID3D12Device* device,
     resource_desc.SampleDesc.Quality = 0;
     resource_desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     resource_desc.Flags              = bufferResourceFlags(usage, buffer.heap_type);
+    buffer.resource_flags            = resource_desc.Flags;
 
     const HRESULT resource_result =
         device->CreateCommittedResource(&heap_properties,
@@ -1802,6 +1832,44 @@ void transitionResource(ID3D12GraphicsCommandList* command_list,
     {
         return;
     }
+
+#ifdef _WIN32
+    const D3D12_COMMAND_LIST_TYPE list_type = command_list->GetType();
+    const D3D12_RESOURCE_STATES compute_invalid_state_mask =
+        D3D12_RESOURCE_STATE_RENDER_TARGET | D3D12_RESOURCE_STATE_DEPTH_WRITE |
+        D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER;
+    const D3D12_RESOURCE_STATES sanitized_current_state =
+        static_cast<D3D12_RESOURCE_STATES>(current_state & (~compute_invalid_state_mask));
+    const D3D12_RESOURCE_STATES sanitized_target_state =
+        static_cast<D3D12_RESOURCE_STATES>(target_state & (~compute_invalid_state_mask));
+    if (list_type == D3D12_COMMAND_LIST_TYPE_COMPUTE || list_type == D3D12_COMMAND_LIST_TYPE_DIRECT)
+    {
+        if (current_state == D3D12_RESOURCE_STATE_COMMON || target_state == D3D12_RESOURCE_STATE_COMMON)
+        {
+            current_state = target_state;
+            return;
+        }
+    }
+
+    if (list_type == D3D12_COMMAND_LIST_TYPE_COMPUTE &&
+        (sanitized_current_state != current_state || sanitized_target_state != target_state))
+    {
+        LOG_ERROR("D3D12 compute transition sanitized for resource 0x{:X}: before={} after={} sanitized_before={} sanitized_after={}",
+                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(resource)),
+                  static_cast<unsigned int>(current_state),
+                  static_cast<unsigned int>(target_state),
+                  static_cast<unsigned int>(sanitized_current_state),
+                  static_cast<unsigned int>(sanitized_target_state));
+        if (sanitized_current_state == sanitized_target_state)
+        {
+            current_state = target_state;
+            return;
+        }
+        current_state = sanitized_current_state;
+        target_state  = sanitized_target_state;
+    }
+#endif
 
     D3D12_RESOURCE_BARRIER barrier {};
     barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -2774,11 +2842,11 @@ bool ensureDispatchArgumentScratchBuffer(ID3D12Device* device, D3D12RHICommandBu
     resource_desc.Layout             = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     resource_desc.Flags              = D3D12_RESOURCE_FLAG_NONE;
 
-    command_buffer.dispatch_argument_buffer_state = D3D12_RESOURCE_STATE_COPY_DEST;
+    command_buffer.dispatch_argument_buffer_state = D3D12_RESOURCE_STATE_COMMON;
     return SUCCEEDED(device->CreateCommittedResource(&heap_properties,
                                                      D3D12_HEAP_FLAG_NONE,
                                                      &resource_desc,
-                                                     command_buffer.dispatch_argument_buffer_state,
+                                                     D3D12_RESOURCE_STATE_COMMON,
                                                      nullptr,
                                                      IID_PPV_ARGS(&command_buffer.dispatch_argument_buffer)));
 }
@@ -3202,6 +3270,95 @@ DXGI_FORMAT toVertexDXGIFormat(RHIFormat format)
 UINT formatByteSize(RHIFormat format)
 {
     return resourceBytesPerPixel(format);
+}
+
+void endGraphicsBindingScope(D3D12RHICommandBuffer& command_buffer)
+{
+    command_buffer.graphics_binding_scope = {};
+    command_buffer.bound_graphics_root_signature = nullptr;
+    command_buffer.graphics_root_signature_dirty = true;
+    clearRootDescriptorTableCache(command_buffer, RHI_PIPELINE_BIND_POINT_GRAPHICS);
+}
+
+void beginGraphicsBindingScope(D3D12RHICommandBuffer& command_buffer, D3D12RHIPipeline& pipeline)
+{
+    auto& scope = command_buffer.graphics_binding_scope;
+    scope.valid         = true;
+    scope.pipeline      = &pipeline;
+    scope.layout        = pipeline.layout;
+    scope.render_pass   = pipeline.graphics_render_pass;
+    scope.subpass_index = pipeline.graphics_subpass_index;
+    scope.vertex_strides = pipeline.vertex_strides;
+}
+
+void validateGraphicsPipelineBindContract(const D3D12RHICommandBuffer& command_buffer,
+                                          const D3D12RHIPipeline& pipeline)
+{
+    if (pipeline.graphics_render_pass == nullptr || !command_buffer.in_render_pass)
+    {
+        return;
+    }
+    if (command_buffer.active_render_pass != pipeline.graphics_render_pass)
+    {
+        LOG_WARN("D3D12 graphics pipeline bind: render pass mismatch (active={}, pipeline={})",
+                 static_cast<const void*>(command_buffer.active_render_pass),
+                 static_cast<const void*>(pipeline.graphics_render_pass));
+        return;
+    }
+    if (command_buffer.active_subpass_index != pipeline.graphics_subpass_index)
+    {
+        LOG_ERROR("D3D12 graphics pipeline bind: subpass mismatch active={} pipeline={}. "
+                  "Call cmdNextSubpass before cmdBindPipeline.",
+                  command_buffer.active_subpass_index,
+                  pipeline.graphics_subpass_index);
+    }
+}
+
+void validateGraphicsBindingScopeForDraw(const D3D12RHICommandBuffer& command_buffer)
+{
+    if (!command_buffer.in_render_pass)
+    {
+        return;
+    }
+    const auto& scope = command_buffer.graphics_binding_scope;
+    if (!scope.valid)
+    {
+        LOG_ERROR("D3D12 draw inside render pass without active graphics binding scope. "
+                  "Call cmdBindPipeline before draw.");
+        return;
+    }
+    if (scope.render_pass != nullptr &&
+        (command_buffer.active_render_pass != scope.render_pass ||
+         command_buffer.active_subpass_index != scope.subpass_index))
+    {
+        LOG_ERROR("D3D12 draw with stale graphics binding scope: active=(rp={}, subpass={}) "
+                  "scope=(rp={}, subpass={}). Subpass advanced without rebinding pipeline.",
+                  static_cast<const void*>(command_buffer.active_render_pass),
+                  command_buffer.active_subpass_index,
+                  static_cast<const void*>(scope.render_pass),
+                  scope.subpass_index);
+    }
+}
+
+void resetCommandBufferRecordingState(D3D12RHICommandBuffer& command_buffer, uint32_t transient_descriptor_next)
+{
+    command_buffer.is_open                   = true;
+    command_buffer.has_recorded_commands     = false;
+    command_buffer.in_render_pass            = false;
+    endGraphicsBindingScope(command_buffer);
+    command_buffer.bound_compute_pipeline_layout     = nullptr;
+    command_buffer.bound_ray_tracing_pipeline_layout = nullptr;
+    command_buffer.bound_compute_root_signature    = nullptr;
+    command_buffer.bound_ray_tracing_root_signature = nullptr;
+    command_buffer.active_render_pass      = nullptr;
+    command_buffer.active_framebuffer      = nullptr;
+    command_buffer.active_render_pass_begin_info = {};
+    command_buffer.active_clear_values.clear();
+    command_buffer.attachment_load_ops_applied.clear();
+    command_buffer.active_subpass_index    = 0;
+    command_buffer.transient_cbv_srv_uav_descriptor_next = transient_descriptor_next;
+    command_buffer.dynamic_descriptor_table_cache.clear();
+    resetCommandBufferDescriptorHeapState(command_buffer);
 }
 #endif
 } // namespace d3d12_detail

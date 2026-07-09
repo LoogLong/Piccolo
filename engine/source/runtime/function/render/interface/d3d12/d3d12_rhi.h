@@ -53,6 +53,7 @@ namespace Piccolo
     RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) override;
     void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) override;
     void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) override;
+    void registerBufferCrossQueueDomains(RHIBuffer* buffer, RHICrossQueueDomainFlags domains) override;
     bool createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation) override;
     bool createBufferWithAlignment(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIDeviceSize minAlignment, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation) override;
     void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) override;
@@ -280,7 +281,6 @@ namespace Piccolo
         std::map<uint32_t, RHISampler*> m_mipmap_sampler_map;
         bool              m_in_render_pass {false};
         bool              m_command_list_open {false};
-        RHIPipeline*      m_bound_graphics_pipeline {nullptr};
         RHIRenderPass*    m_active_render_pass {nullptr};
         RHIFramebuffer*   m_active_framebuffer {nullptr};
         uint32_t          m_active_subpass_index {0};

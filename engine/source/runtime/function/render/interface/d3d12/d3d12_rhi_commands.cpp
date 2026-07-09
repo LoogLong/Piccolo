@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstdio>
 #include <cmath>
 #include <cwchar>
 #include <cstring>
@@ -197,25 +198,8 @@ bool D3D12RHI::beginCommandBufferPFN(RHICommandBuffer* commandBuffer, const RHIC
         return false;
     }
 
-    d3d_command_buffer->is_open = true;
-    d3d_command_buffer->has_recorded_commands = false;
-    d3d_command_buffer->in_render_pass = false;
-    d3d_command_buffer->bound_graphics_pipeline = nullptr;
-    d3d_command_buffer->bound_graphics_pipeline_layout = nullptr;
-    d3d_command_buffer->bound_compute_pipeline_layout = nullptr;
-    d3d_command_buffer->bound_ray_tracing_pipeline_layout = nullptr;
-    d3d_command_buffer->bound_graphics_root_signature = nullptr;
-    d3d_command_buffer->bound_compute_root_signature = nullptr;
-    d3d_command_buffer->bound_ray_tracing_root_signature = nullptr;
-    d3d_command_buffer->active_render_pass = nullptr;
-    d3d_command_buffer->active_framebuffer = nullptr;
-    d3d_command_buffer->active_render_pass_begin_info = {};
-    d3d_command_buffer->active_clear_values.clear();
-    d3d_command_buffer->attachment_load_ops_applied.clear();
-    d3d_command_buffer->active_subpass_index = 0;
-    d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
-    d3d_command_buffer->dynamic_descriptor_table_cache.clear();
-    resetCommandBufferDescriptorHeapState(*d3d_command_buffer);
+    d3d12_detail::resetCommandBufferRecordingState(*d3d_command_buffer,
+                                                   m_d3d12_transient_cbv_srv_uav_descriptor_next);
     return true;
 #else
     (void)commandBuffer;
@@ -236,8 +220,15 @@ bool D3D12RHI::endCommandBufferPFN(RHICommandBuffer* commandBuffer)
         return true;
     }
 
-    if (FAILED(d3d_command_buffer->command_list->Close()))
+    const HRESULT close_hr = d3d_command_buffer->command_list->Close();
+    if (FAILED(close_hr))
     {
+        const HRESULT removed_reason =
+            m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+        LOG_ERROR("D3D12 endCommandBuffer Close failed (close_hr=0x{:08X}, removed_reason=0x{:08X}, command_list_type={})",
+                  static_cast<unsigned int>(close_hr),
+                  static_cast<unsigned int>(removed_reason),
+                  static_cast<unsigned int>(d3d_command_buffer->command_list_type));
         return false;
     }
 
@@ -308,7 +299,9 @@ void D3D12RHI::cmdBeginRenderPassPFN(RHICommandBuffer* commandBuffer, const RHIR
                               &d3d_command_buffer->active_render_pass_begin_info,
                               d3d_command_buffer->active_subpass_index,
                               true);
+    d3d12_detail::endGraphicsBindingScope(*d3d_command_buffer);
     d3d_command_buffer->in_render_pass = true;
+
 #else
     (void)commandBuffer;
     (void)pRenderPassBegin;
@@ -356,6 +349,8 @@ void D3D12RHI::cmdNextSubpassPFN(RHICommandBuffer* commandBuffer, RHISubpassCont
                               &d3d_command_buffer->active_render_pass_begin_info,
                               d3d_command_buffer->active_subpass_index,
                               true);
+    d3d12_detail::endGraphicsBindingScope(*d3d_command_buffer);
+
 #else
     (void)commandBuffer;
 #endif
@@ -430,6 +425,7 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
     d3d_command_buffer->active_clear_values.clear();
     d3d_command_buffer->attachment_load_ops_applied.clear();
     d3d_command_buffer->active_subpass_index = 0;
+
 #else
     (void)commandBuffer;
 #endif
@@ -477,6 +473,12 @@ void D3D12RHI::cmdBindPipelinePFN(RHICommandBuffer* commandBuffer, RHIPipelineBi
         return;
     }
 
+    if (pipelineBindPoint == RHI_PIPELINE_BIND_POINT_GRAPHICS)
+    {
+        d3d12_detail::validateGraphicsPipelineBindContract(*d3d_command_buffer, *d3d_pipeline);
+        d3d12_detail::beginGraphicsBindingScope(*d3d_command_buffer, *d3d_pipeline);
+    }
+
     if (d3d_pipeline->pipeline_state != nullptr)
     {
         command_list->SetPipelineState(d3d_pipeline->pipeline_state.Get());
@@ -498,13 +500,11 @@ void D3D12RHI::cmdBindPipelinePFN(RHICommandBuffer* commandBuffer, RHIPipelineBi
         }
         else
         {
-            if (d3d_command_buffer->bound_graphics_pipeline_layout != d3d_pipeline->layout ||
+            if (d3d_command_buffer->graphics_binding_scope.layout != d3d_pipeline->layout ||
                 d3d_command_buffer->bound_graphics_root_signature != root_signature)
             {
                 clearRootDescriptorTableCache(*d3d_command_buffer, RHI_PIPELINE_BIND_POINT_GRAPHICS);
             }
-            d3d_command_buffer->bound_graphics_pipeline = pipeline;
-            d3d_command_buffer->bound_graphics_pipeline_layout = d3d_pipeline->layout;
             d3d_command_buffer->bound_graphics_root_signature = root_signature;
             command_list->SetGraphicsRootSignature(root_signature);
             d3d_command_buffer->graphics_root_signature_dirty = false;
@@ -596,7 +596,7 @@ void D3D12RHI::cmdBindVertexBuffersPFN( RHICommandBuffer* commandBuffer, uint32_
         return;
     }
 
-    const auto* bound_pipeline = static_cast<const D3D12RHIPipeline*>(d3d_command_buffer->bound_graphics_pipeline);
+    const auto& strides = d3d_command_buffer->graphics_binding_scope.vertex_strides;
     std::vector<D3D12_VERTEX_BUFFER_VIEW> views;
     views.reserve(bindingCount);
     for (uint32_t i = 0; i < bindingCount; ++i)
@@ -620,9 +620,9 @@ void D3D12RHI::cmdBindVertexBuffersPFN( RHICommandBuffer* commandBuffer, uint32_
         view.BufferLocation = buffer->resource->GetGPUVirtualAddress() + offset;
         view.SizeInBytes    = offset < buffer->size ? static_cast<UINT>(buffer->size - offset) : 0;
         const uint32_t binding_index = firstBinding + i;
-        if (bound_pipeline != nullptr && binding_index < bound_pipeline->vertex_strides.size())
+        if (!strides.empty() && binding_index < strides.size())
         {
-            view.StrideInBytes = bound_pipeline->vertex_strides[binding_index];
+            view.StrideInBytes = strides[binding_index];
         }
         views.push_back(view);
     }
@@ -689,6 +689,7 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
         return;
     }
 
+    const D3D12_COMMAND_LIST_TYPE list_type = command_list->GetType();
     uint32_t preflight_dynamic_offset_index = 0;
     uint32_t preflight_transient_next = d3d_command_buffer->transient_cbv_srv_uav_descriptor_next;
     for (uint32_t i = 0; i < descriptorSetCount; ++i)
@@ -790,10 +791,35 @@ void D3D12RHI::cmdBindDescriptorSetsPFN( RHICommandBuffer* commandBuffer, RHIPip
             auto* buffer = buffer_descriptor.buffer;
             if (buffer != nullptr && buffer->resource != nullptr && buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
             {
+                D3D12_RESOURCE_STATES target_state =
+                    descriptorBufferState(buffer_descriptor.range_type);
+                if (buffer_descriptor.range_type == D3D12_DESCRIPTOR_RANGE_TYPE_SRV &&
+                    hasFlag(buffer->usage, RHI_BUFFER_USAGE_INDIRECT_BUFFER_BIT))
+                {
+                    target_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                }
+
+                // Portable handoff for cross-domain buffers (declared by the owning pass).
+                // Publish a compute-portable SRV state on graphics for vertex-only bindings.
+                if (buffer->requires_cross_queue_handoff() &&
+                    list_type == D3D12_COMMAND_LIST_TYPE_DIRECT &&
+                    buffer_descriptor.range_type == D3D12_DESCRIPTOR_RANGE_TYPE_SRV &&
+                    (target_state & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) != 0)
+                {
+                    const auto* layout_binding_range = set_layout->find(buffer_descriptor.binding);
+                    const uint32_t stage_flags =
+                        layout_binding_range != nullptr ? layout_binding_range->binding.stageFlags : 0;
+                    const bool has_vertex_stage   = hasFlag(stage_flags, RHI_SHADER_STAGE_VERTEX_BIT);
+                    const bool has_fragment_stage = hasFlag(stage_flags, RHI_SHADER_STAGE_FRAGMENT_BIT);
+                    if (has_vertex_stage && !has_fragment_stage)
+                    {
+                        target_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                    }
+                }
                 transitionResource(command_list,
-                                    buffer->resource.Get(),
-                                    buffer->current_state,
-                                    descriptorBufferState(buffer_descriptor.range_type));
+                                   buffer->resource.Get(),
+                                   buffer->current_state,
+                                   target_state);
             }
         }
 
@@ -970,6 +996,7 @@ void D3D12RHI::cmdDrawIndexedPFN(RHICommandBuffer* commandBuffer, uint32_t index
 
     if (d3d_command_buffer != nullptr)
     {
+        d3d12_detail::validateGraphicsBindingScopeForDraw(*d3d_command_buffer);
         bindEngineDescriptorHeaps(command_list,
                                   *d3d_command_buffer,
                                   m_d3d12_cbv_srv_uav_heap.Get(),
@@ -1621,6 +1648,7 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
 
     if (d3d_command_buffer != nullptr)
     {
+        d3d12_detail::validateGraphicsBindingScopeForDraw(*d3d_command_buffer);
         bindEngineDescriptorHeaps(command_list,
                                   *d3d_command_buffer,
                                   m_d3d12_cbv_srv_uav_heap.Get(),
@@ -1639,6 +1667,15 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
         {
             LOG_WARN("D3D12 cmdDispatchIndirect skipped because the scratch argument buffer is unavailable");
             return;
+        }
+
+        const D3D12_RESOURCE_STATES compute_invalid_state_mask =
+            D3D12_RESOURCE_STATE_RENDER_TARGET | D3D12_RESOURCE_STATE_DEPTH_WRITE |
+            D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER;
+        if ((d3d_buffer->current_state & compute_invalid_state_mask) != 0)
+        {
+            d3d_buffer->current_state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         }
 
         transitionResource(command_list,
@@ -1674,12 +1711,22 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
                            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     }
 
+    const HRESULT removed_before =
+        m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
     command_list->ExecuteIndirect(m_d3d12_dispatch_command_signature.Get(),
                                   1,
                                   argument_resource,
                                   argument_offset,
                                   nullptr,
                                   0);
+    const HRESULT removed_after =
+        m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
+    if (FAILED(removed_after) || removed_after != removed_before)
+    {
+        LOG_ERROR("D3D12 cmdDispatchIndirect device removed/transition (removed_before=0x{:08X}, removed_after=0x{:08X})",
+                  static_cast<unsigned int>(removed_before),
+                  static_cast<unsigned int>(removed_after));
+    }
 #else
     (void)commandBuffer;
     (void)buffer;
@@ -1689,8 +1736,6 @@ void D3D12RHI::cmdDispatchIndirect(RHICommandBuffer* commandBuffer, RHIBuffer* b
 }
 void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineStageFlags srcStageMask, RHIPipelineStageFlags dstStageMask, RHIDependencyFlags dependencyFlags, uint32_t memoryBarrierCount, const RHIMemoryBarrier* pMemoryBarriers, uint32_t bufferMemoryBarrierCount, const RHIBufferMemoryBarrier* pBufferMemoryBarriers, uint32_t imageMemoryBarrierCount, const RHIImageMemoryBarrier* pImageMemoryBarriers)
 {
-    (void)srcStageMask;
-    (void)dstStageMask;
     (void)dependencyFlags;
 #ifdef _WIN32
     auto* command_list = d3d12CommandListFor(commandBuffer);
@@ -1706,6 +1751,23 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
         }
         return;
     }
+
+    const RHIPipelineStageFlags graphics_stage_mask =
+        RHI_PIPELINE_STAGE_VERTEX_INPUT_BIT | RHI_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+        RHI_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+        RHI_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT | RHI_PIPELINE_STAGE_GEOMETRY_SHADER_BIT |
+        RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+        RHI_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        RHI_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+    const bool compute_domain_barrier =
+        (srcStageMask & RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT) != 0 &&
+        (dstStageMask & graphics_stage_mask) == 0 &&
+        (dstStageMask & RHI_PIPELINE_STAGE_TRANSFER_BIT) == 0 &&
+        (dstStageMask & RHI_PIPELINE_STAGE_HOST_BIT) == 0;
+    const D3D12_RESOURCE_STATES compute_invalid_state_mask =
+        D3D12_RESOURCE_STATE_RENDER_TARGET | D3D12_RESOURCE_STATE_DEPTH_WRITE |
+        D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER;
 
     if (pMemoryBarriers != nullptr)
     {
@@ -1737,8 +1799,11 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
                 continue;
             }
 
-            const D3D12_RESOURCE_STATES target_state =
-                toD3D12BufferState(buffer_barrier.dstAccessMask, buffer->usage, buffer->heap_type);
+            const D3D12_RESOURCE_STATES target_state = toD3D12BufferState(buffer_barrier.dstAccessMask,
+                                                                       buffer->usage,
+                                                                       buffer->heap_type,
+                                                                       srcStageMask,
+                                                                       dstStageMask);
             if (buffer->heap_type == D3D12_HEAP_TYPE_DEFAULT)
             {
                 if (bufferAccessIncludesGpuWrite(buffer_barrier.srcAccessMask) ||
@@ -1748,9 +1813,48 @@ void D3D12RHI::cmdPipelineBarrier(RHICommandBuffer* commandBuffer, RHIPipelineSt
                     buffer->host_data_uploadable = false;
                 }
 
-                if (buffer->current_state == target_state &&
-                    (hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
-                     hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT)))
+                const bool compute_shader_sync =
+                    compute_domain_barrier &&
+                    (hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_READ_BIT) ||
+                     hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_READ_BIT) ||
+                     hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
+                     hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT));
+                const bool storage_indirect_only_sync =
+                    hasFlag(buffer->usage, RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT) &&
+                    hasFlag(buffer->usage, RHI_BUFFER_USAGE_INDIRECT_BUFFER_BIT) &&
+                    hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_INDIRECT_COMMAND_READ_BIT) &&
+                    hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_INDIRECT_COMMAND_READ_BIT) &&
+                    !hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_READ_BIT) &&
+                    !hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_READ_BIT) &&
+                    !hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) &&
+                    !hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT);
+                const bool current_state_invalid_on_compute =
+                    compute_domain_barrier &&
+                    (buffer->current_state & compute_invalid_state_mask) != 0;
+                const bool target_state_invalid_on_compute =
+                    compute_domain_barrier &&
+                    (target_state & compute_invalid_state_mask) != 0;
+
+                if (compute_shader_sync || storage_indirect_only_sync ||
+                    current_state_invalid_on_compute || target_state_invalid_on_compute)
+                {
+                    D3D12_RESOURCE_BARRIER barrier {};
+                    barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                    barrier.Flags         = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                    barrier.UAV.pResource = buffer->resource.Get();
+                    command_list->ResourceBarrier(1, &barrier);
+                    if (storage_indirect_only_sync)
+                    {
+                        buffer->current_state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                    }
+                    else
+                    {
+                        buffer->current_state = target_state;
+                    }
+                }
+                else if (buffer->current_state == target_state &&
+                         (hasFlag(buffer_barrier.srcAccessMask, RHI_ACCESS_SHADER_WRITE_BIT) ||
+                          hasFlag(buffer_barrier.dstAccessMask, RHI_ACCESS_SHADER_WRITE_BIT)))
                 {
                     D3D12_RESOURCE_BARRIER barrier {};
                     barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1899,7 +2003,8 @@ bool D3D12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmi
 
             if (!submit_command_lists.empty())
             {
-                command_queue->ExecuteCommandLists(static_cast<UINT>(submit_command_lists.size()), submit_command_lists.data());
+                command_queue->ExecuteCommandLists(static_cast<UINT>(submit_command_lists.size()),
+                                                 submit_command_lists.data());
             }
 
             for (uint32_t semaphore_index = 0; semaphore_index < submit.signalSemaphoreCount; ++semaphore_index)
@@ -2090,8 +2195,21 @@ void D3D12RHI::setCommandBufferComputeQueue(RHICommandBuffer* command_buffer, bo
         return;
     }
 
-    d3d_command_buffer->command_list_type =
+    const D3D12_COMMAND_LIST_TYPE requested_type =
         use_compute_queue ? D3D12_COMMAND_LIST_TYPE_COMPUTE : D3D12_COMMAND_LIST_TYPE_DIRECT;
+    if (d3d_command_buffer->command_list != nullptr &&
+        d3d_command_buffer->command_list_type != requested_type)
+    {
+        LOG_ERROR(
+            "D3D12 setCommandBufferComputeQueue called after command list creation; use "
+            "RHICommandBufferAllocateInfo::queueBindPoint at allocation instead");
+        return;
+    }
+
+    d3d_command_buffer->command_list_type = requested_type;
+#else
+    (void)command_buffer;
+    (void)use_compute_queue;
 #endif
 }
 QueueFamilyIndices D3D12RHI::getQueueFamilyIndices() const
@@ -2212,22 +2330,8 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
                           static_cast<uint32_t>(m_current_frame_index));
                 return true;
             }
-            d3d_command_buffer->is_open = true;
-            d3d_command_buffer->has_recorded_commands = false;
-            d3d_command_buffer->in_render_pass = false;
-            d3d_command_buffer->bound_graphics_pipeline = nullptr;
-            d3d_command_buffer->bound_graphics_pipeline_layout = nullptr;
-            d3d_command_buffer->bound_compute_pipeline_layout = nullptr;
-            d3d_command_buffer->bound_ray_tracing_pipeline_layout = nullptr;
-            d3d_command_buffer->bound_graphics_root_signature = nullptr;
-            d3d_command_buffer->bound_compute_root_signature = nullptr;
-            d3d_command_buffer->bound_ray_tracing_root_signature = nullptr;
-            d3d_command_buffer->active_render_pass = nullptr;
-            d3d_command_buffer->active_framebuffer = nullptr;
-            d3d_command_buffer->active_subpass_index = 0;
-            d3d_command_buffer->transient_cbv_srv_uav_descriptor_next = m_d3d12_transient_cbv_srv_uav_descriptor_next;
-            d3d_command_buffer->dynamic_descriptor_table_cache.clear();
-            resetCommandBufferDescriptorHeapState(*d3d_command_buffer);
+            d3d12_detail::resetCommandBufferRecordingState(*d3d_command_buffer,
+                                                           m_d3d12_transient_cbv_srv_uav_descriptor_next);
         }
     }
 #endif

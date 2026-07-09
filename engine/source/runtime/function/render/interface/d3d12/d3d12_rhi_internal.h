@@ -96,7 +96,11 @@ void copyTextureRowToD3D12Upload(uint8_t* dst_row, const uint8_t* src_row, uint3
 D3D12_RESOURCE_FLAGS imageResourceFlags(RHIImageUsageFlags usage);
 D3D12_RESOURCE_STATES initialImageState(RHIImageUsageFlags usage);
 D3D12_RESOURCE_STATES toD3D12ResourceState(RHIImageLayout layout);
-D3D12_RESOURCE_STATES toD3D12BufferState(RHIAccessFlags access, RHIBufferUsageFlags usage, D3D12_HEAP_TYPE heap_type);
+D3D12_RESOURCE_STATES toD3D12BufferState(RHIAccessFlags access,
+                                         RHIBufferUsageFlags usage,
+                                         D3D12_HEAP_TYPE heap_type,
+                                         RHIPipelineStageFlags src_stage_mask = 0,
+                                         RHIPipelineStageFlags dst_stage_mask = 0);
 uint32_t d3d12SubresourceIndex(const D3D12RHIImage& image, uint32_t mip_level, uint32_t array_layer);
 void appendUniqueBuffer(std::vector<D3D12RHIBuffer*>& buffers, D3D12RHIBuffer* buffer);
 void rebuildDescriptorSetBufferLists(D3D12RHIDescriptorSet& descriptor_set);
@@ -184,6 +188,12 @@ bool createRayTracingBuffer(ID3D12Device* device, uint64_t size, D3D12_RESOURCE_
 bool createUploadBuffer(ID3D12Device* device, uint64_t size, ID3D12Resource** resource);
 DXGI_FORMAT toVertexDXGIFormat(RHIFormat format);
 UINT formatByteSize(RHIFormat format);
+void endGraphicsBindingScope(D3D12RHICommandBuffer& command_buffer);
+void beginGraphicsBindingScope(D3D12RHICommandBuffer& command_buffer, D3D12RHIPipeline& pipeline);
+void validateGraphicsPipelineBindContract(const D3D12RHICommandBuffer& command_buffer,
+                                          const D3D12RHIPipeline& pipeline);
+void validateGraphicsBindingScopeForDraw(const D3D12RHICommandBuffer& command_buffer);
+void resetCommandBufferRecordingState(D3D12RHICommandBuffer& command_buffer, uint32_t transient_descriptor_next);
 #endif // _WIN32
 
 } // namespace d3d12_detail

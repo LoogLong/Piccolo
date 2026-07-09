@@ -36,6 +36,13 @@ struct D3D12RHIBuffer final : RHIBuffer
     RHIMemoryPropertyFlags memory_properties {0};
     D3D12_HEAP_TYPE        heap_type {D3D12_HEAP_TYPE_DEFAULT};
     D3D12_RESOURCE_STATES  current_state {D3D12_RESOURCE_STATE_COMMON};
+    D3D12_RESOURCE_FLAGS   resource_flags {D3D12_RESOURCE_FLAG_NONE};
+    RHICrossQueueDomainFlags registered_domains {RHI_CROSS_QUEUE_DOMAIN_NONE};
+    bool requires_cross_queue_handoff() const
+    {
+        return (registered_domains & (RHI_CROSS_QUEUE_DOMAIN_GRAPHICS | RHI_CROSS_QUEUE_DOMAIN_COMPUTE)) ==
+               (RHI_CROSS_QUEUE_DOMAIN_GRAPHICS | RHI_CROSS_QUEUE_DOMAIN_COMPUTE);
+    }
     std::vector<uint8_t>   host_data;
     bool                   host_data_valid {false};
     bool                   host_data_write_mapped {false};
@@ -113,6 +120,12 @@ struct D3D12RHIBuffer final : RHIBuffer
 {
     RHIDeviceSize        size {0};
     RHIBufferUsageFlags  usage {0};
+    RHICrossQueueDomainFlags registered_domains {RHI_CROSS_QUEUE_DOMAIN_NONE};
+    bool requires_cross_queue_handoff() const
+    {
+        return (registered_domains & (RHI_CROSS_QUEUE_DOMAIN_GRAPHICS | RHI_CROSS_QUEUE_DOMAIN_COMPUTE)) ==
+               (RHI_CROSS_QUEUE_DOMAIN_GRAPHICS | RHI_CROSS_QUEUE_DOMAIN_COMPUTE);
+    }
     std::vector<uint8_t> host_data;
     bool                 host_data_valid {false};
     bool                 host_data_write_mapped {false};
@@ -191,6 +204,16 @@ struct D3D12RHIShaderBindingTable final : RHIShaderBindingTable
 #endif
 };
 
+struct D3D12GraphicsBindingScope
+{
+    bool                    valid {false};
+    RHIPipeline*            pipeline {nullptr};
+    D3D12RHIPipelineLayout* layout {nullptr};
+    RHIRenderPass*          render_pass {nullptr};
+    uint32_t                subpass_index {0};
+    std::vector<uint32_t>   vertex_strides;
+};
+
 struct D3D12RHICommandBuffer final : RHICommandBuffer
 {
 #ifdef _WIN32
@@ -209,8 +232,7 @@ struct D3D12RHICommandBuffer final : RHICommandBuffer
     bool                              is_open {false};
     bool                              has_recorded_commands {false};
     bool                              in_render_pass {false};
-    RHIPipeline*                      bound_graphics_pipeline {nullptr};
-    D3D12RHIPipelineLayout*           bound_graphics_pipeline_layout {nullptr};
+    D3D12GraphicsBindingScope         graphics_binding_scope {};
     D3D12RHIPipelineLayout*           bound_compute_pipeline_layout {nullptr};
     D3D12RHIPipelineLayout*           bound_ray_tracing_pipeline_layout {nullptr};
     ID3D12RootSignature*              bound_graphics_root_signature {nullptr};
@@ -480,6 +502,11 @@ struct D3D12RHIPipeline final : RHIPipeline
     RHIPipelineBindPoint bind_point {RHI_PIPELINE_BIND_POINT_GRAPHICS};
     D3D12RHIPipelineLayout* layout {nullptr};
     std::vector<uint32_t> vertex_strides;
+    RHIRenderPass*        graphics_render_pass {nullptr};
+    uint32_t              graphics_subpass_index {0};
+    uint32_t              graphics_primary_rtv_format {0};
+    uint32_t              graphics_num_render_targets {0};
+    std::array<uint32_t, 8> graphics_rtv_formats {};
 #ifdef _WIN32
     ComPtr<ID3D12PipelineState> pipeline_state;
 #if PICCOLO_D3D12_HAS_DXR

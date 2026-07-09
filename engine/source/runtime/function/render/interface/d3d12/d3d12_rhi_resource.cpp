@@ -36,6 +36,23 @@ bool D3D12RHI::isPointLightShadowEnabled()
 {
     return true;
 }
+
+namespace
+{
+D3D12_COMMAND_LIST_TYPE d3d12CommandListTypeForQueueBindPoint(RHIPipelineBindPoint bind_point)
+{
+    switch (bind_point)
+    {
+    case RHI_PIPELINE_BIND_POINT_COMPUTE:
+        return D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    case RHI_PIPELINE_BIND_POINT_GRAPHICS:
+    case RHI_PIPELINE_BIND_POINT_RAY_TRACING_KHR: // NV alias shares same value
+    default:
+        return D3D12_COMMAND_LIST_TYPE_DIRECT;
+    }
+}
+} // namespace
+
 bool D3D12RHI::allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer* &pCommandBuffers)
 {
     if (pAllocateInfo != nullptr && pAllocateInfo->commandBufferCount != 1)
@@ -45,6 +62,10 @@ bool D3D12RHI::allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAlloc
 
     auto* command_buffer = new D3D12RHICommandBuffer();
 #ifdef _WIN32
+    if (pAllocateInfo != nullptr)
+    {
+        command_buffer->command_list_type = d3d12CommandListTypeForQueueBindPoint(pAllocateInfo->queueBindPoint);
+    }
     if (m_d3d12_device != nullptr && !ensureCommandBufferObjects(command_buffer))
     {
         delete command_buffer;
@@ -383,6 +404,28 @@ void D3D12RHI::createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPro
     }
     return;
 }
+
+void D3D12RHI::registerBufferCrossQueueDomains(RHIBuffer* buffer, RHICrossQueueDomainFlags domains)
+{
+#ifdef _WIN32
+    if (buffer == nullptr)
+    {
+        return;
+    }
+
+    auto* d3d_buffer = static_cast<D3D12RHIBuffer*>(buffer);
+    if (d3d_buffer == nullptr)
+    {
+        return;
+    }
+
+    d3d_buffer->registered_domains |= domains;
+#else
+    (void)buffer;
+    (void)domains;
+#endif
+}
+
 bool D3D12RHI::createBufferWithAllocation(const RHIBufferCreateInfo* pBufferCreateInfo, RHIMemoryPropertyFlags memoryPropertyFlags, RHIBuffer* &pBuffer, RHIAllocation*& pAllocation)
 {
     const RHIBufferCreateInfo default_buffer_info {RHI_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -1144,8 +1187,10 @@ bool D3D12RHI::createGraphicsPipelines(RHIPipelineCache* pipelineCache, uint32_t
 
     const RHIGraphicsPipelineCreateInfo& create_info = pCreateInfos[0];
     auto* pipeline = new D3D12RHIPipeline();
-    pipeline->bind_point = RHI_PIPELINE_BIND_POINT_GRAPHICS;
-    pipeline->layout = static_cast<D3D12RHIPipelineLayout*>(create_info.layout);
+    pipeline->bind_point             = RHI_PIPELINE_BIND_POINT_GRAPHICS;
+    pipeline->layout                 = static_cast<D3D12RHIPipelineLayout*>(create_info.layout);
+    pipeline->graphics_render_pass   = create_info.renderPass;
+    pipeline->graphics_subpass_index = create_info.subpass;
 
 #ifdef _WIN32
     if (m_d3d12_device == nullptr || pipeline->layout == nullptr || pipeline->layout->root_signature == nullptr)
@@ -1350,6 +1395,16 @@ bool D3D12RHI::createGraphicsPipelines(RHIPipelineCache* pipelineCache, uint32_t
     desc.NodeMask = 0;
     desc.CachedPSO = {};
     desc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+    pipeline->graphics_primary_rtv_format =
+        desc.NumRenderTargets > 0 ? static_cast<uint32_t>(desc.RTVFormats[0]) : 0U;
+    pipeline->graphics_num_render_targets = desc.NumRenderTargets;
+    pipeline->graphics_rtv_formats = {};
+    for (uint32_t rtv_index = 0; rtv_index < desc.NumRenderTargets && rtv_index < pipeline->graphics_rtv_formats.size();
+         ++rtv_index)
+    {
+        pipeline->graphics_rtv_formats[rtv_index] = static_cast<uint32_t>(desc.RTVFormats[rtv_index]);
+    }
 
     const HRESULT graphics_pso_result =
         m_d3d12_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline->pipeline_state));

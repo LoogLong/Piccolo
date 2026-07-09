@@ -278,7 +278,6 @@ using namespace d3d12_detail;
         destroyDevice();
 
         m_current_command_buffer = nullptr;
-        m_bound_graphics_pipeline = nullptr;
         m_active_render_pass = nullptr;
         m_active_framebuffer = nullptr;
         m_active_subpass_index = 0;
