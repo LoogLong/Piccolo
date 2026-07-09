@@ -1,6 +1,8 @@
 #include "runtime/core/math/math.h"
 #include "runtime/core/math/matrix4.h"
 
+#include <cstdint>
+
 namespace Piccolo
 {
     Math::AngleUnit Math::k_AngleUnit;
@@ -149,6 +151,21 @@ namespace Piccolo
         ret[2][3]     = -(zfar * znear) / (zfar - znear);
 
         return ret;
+    }
+
+    Matrix4x4 Math::makePerspectiveMatrix(Radian fovy,
+                                          float aspect,
+                                          float znear,
+                                          float zfar,
+                                          ClipSpaceConvention clip_space)
+    {
+        Matrix4x4 proj = makePerspectiveMatrix(fovy, aspect, znear, zfar);
+        if (clip_space == ClipSpaceConvention::YDownNDC)
+        {
+            const Matrix4x4 y_flip(1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+            proj = y_flip * proj;
+        }
+        return proj;
     }
 
     Matrix4x4

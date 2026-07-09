@@ -26,7 +26,7 @@ namespace Piccolo
         void prepareContext() override;
         void clear() override;
         RHIBackendType getBackendType() const override;
-        bool           usesDedicatedComputeSubmission() const override { return true; }
+        ClipSpaceConvention getClipSpaceConvention() const override { return ClipSpaceConvention::YUpNDC; }
         void           destroyRayTracingPipeline(RHIPipeline*& pipeline) override;
         void setViewport(float x, float y, float width, float height, float min_depth = 0.0f, float max_depth = 1.0f) override;
         RHIViewport getViewport() const override;

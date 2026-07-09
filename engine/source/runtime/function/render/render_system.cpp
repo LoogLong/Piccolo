@@ -203,6 +203,8 @@ namespace Piccolo
         }
 #endif
 
+        m_render_camera->setClipSpaceConvention(m_rhi->getClipSpaceConvention());
+
         // descriptor set layout in main camera pass will be used when uploading resource
         std::static_pointer_cast<RenderResource>(m_render_resource)->m_mesh_descriptor_set_layout =
             &static_cast<RenderPass*>(m_render_pipeline->m_main_camera_pass.get())
@@ -236,8 +238,7 @@ namespace Piccolo
 
         // update per-frame visible objects
         m_render_scene->updateVisibleObjects(std::static_pointer_cast<RenderResource>(m_render_resource),
-                                             m_render_camera,
-                                             m_rhi->usesVulkanClipSpace());
+                                             m_render_camera);
 
         // prepare pipeline's render passes data
         m_render_pipeline->preparePassData(m_render_resource);

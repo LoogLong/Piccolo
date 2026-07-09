@@ -375,7 +375,7 @@ namespace Piccolo
         m_current_render_scene = render_scene;
 
         Matrix4x4 view_matrix = camera->getViewMatrix();
-        Matrix4x4 proj_matrix = camera->getPersProjMatrix(rhi->usesVulkanClipSpace());
+        Matrix4x4 proj_matrix = camera->getPersProjMatrix();
         Vector3   camera_position = camera->position();
         Matrix4x4 proj_view_matrix = proj_matrix * view_matrix;
 

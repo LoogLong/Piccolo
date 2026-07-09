@@ -9,6 +9,8 @@
 #include "rhi_ray_tracing.h"
 #include "rhi_struct.h"
 
+#include "runtime/core/math/math.h"
+
 namespace Piccolo
 {
     static constexpr uint8_t k_rhi_max_frames_in_flight = 3;
@@ -174,19 +176,10 @@ namespace Piccolo
         virtual bool queueWaitIdle(RHIQueue* queue) = 0;
         virtual RHIBackendType getBackendType() const = 0;
 
-        // Backend behaviour capability queries. The render layer uses these instead of hard-coding
-        // getBackendType()==D3D12 so that pass/pipeline code stays backend-neutral. Defaults describe
-        // the Vulkan execution model; backends override where their submission model differs.
-
-        // Whether the normal/depth copy for the particle pass must be recorded inline in the current
-        // command buffer before submitRendering (legacy); both backends use deferred copy (false).
-        virtual bool requiresDepthNormalCopyBeforeSubmit() const { return false; }
-        // Whether particle GPU compute uses dedicated per-frame compute command buffers and fences
-        // (true for Vulkan and D3D12).
-        virtual bool usesDedicatedComputeSubmission() const { return false; }
-        // Whether the backend uses the Vulkan clip-space convention (Y-down NDC, [0,1] depth) for
-        // projection matrices. D3D12 uses [0,1] depth with Y-up, so it returns false (the default).
-        virtual bool usesVulkanClipSpace() const { return false; }
+        virtual ClipSpaceConvention getClipSpaceConvention() const
+        {
+            return ClipSpaceConvention::YUpNDC;
+        }
 
         virtual void resetCommandPool() = 0;
         virtual bool waitForFences() = 0;

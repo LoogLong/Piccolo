@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 #define CMP(x, y) (fabsf(x - y) < FLT_EPSILON * fmaxf(1.0f, fmaxf(fabsf(x), fabsf(y))))
@@ -189,6 +190,12 @@ namespace Piccolo
         explicit operator Degree() const;
     };
 
+    enum class ClipSpaceConvention : uint8_t
+    {
+        YUpNDC   = 0,
+        YDownNDC = 1,
+    };
+
     class Math
     {
     private:
@@ -262,6 +269,12 @@ namespace Piccolo
         makeLookAtMatrix(const Vector3& eye_position, const Vector3& target_position, const Vector3& up_dir);
 
         static Matrix4x4 makePerspectiveMatrix(Radian fovy, float aspect, float znear, float zfar);
+
+        static Matrix4x4 makePerspectiveMatrix(Radian fovy,
+                                               float aspect,
+                                               float znear,
+                                               float zfar,
+                                               ClipSpaceConvention clip_space);
 
         static Matrix4x4
         makeOrthographicProjectionMatrix(float left, float right, float bottom, float top, float znear, float zfar);
