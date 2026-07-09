@@ -486,8 +486,7 @@ namespace Piccolo
 
         if (mesh.path_tracing_bottom_level_as != nullptr)
         {
-            rhi->destroyAccelerationStructure(mesh.path_tracing_bottom_level_as);
-            mesh.path_tracing_bottom_level_as = nullptr;
+            rhi->retireAccelerationStructure(rhi->getCurrentFrameIndex(), mesh.path_tracing_bottom_level_as);
         }
 
         RHIAccelerationStructureGeometryDesc geometry;
