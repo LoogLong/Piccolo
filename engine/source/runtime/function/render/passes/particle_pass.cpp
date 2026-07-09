@@ -907,7 +907,7 @@ namespace Piccolo
             }
 
             // Submit to the queue
-            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &submitInfo, fence))
+            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getGraphicsQueue(), 1, &submitInfo, fence))
             {
                 throw std::runtime_error("queue submit");
             }
@@ -974,6 +974,12 @@ namespace Piccolo
                                              m_emitter_buffer_batches[id].m_position_render_memory,
                                              staggingBuferSize);
 
+            // This buffer is shared between graphics billboard SRV and compute simulation UAV.
+            // Declare the cross-domain usage so the D3D12 backend can publish a portable handoff state.
+            m_rhi->registerBufferCrossQueueDomains(m_emitter_buffer_batches[id].m_position_render_buffer,
+                                                    static_cast<RHICrossQueueDomainFlags>(RHI_CROSS_QUEUE_DOMAIN_GRAPHICS |
+                                                                                          RHI_CROSS_QUEUE_DOMAIN_COMPUTE));
+
             // Copy to staging buffer
             RHICommandBufferAllocateInfo cmdBufAllocateInfo {};
             cmdBufAllocateInfo.sType              = RHI_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1017,7 +1023,7 @@ namespace Piccolo
             }
 
             // Submit to the queue
-            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getComputeQueue(), 1, &submitInfo, fence))
+            if (RHI_SUCCESS != m_rhi->queueSubmit(m_rhi->getGraphicsQueue(), 1, &submitInfo, fence))
             {
                 throw std::runtime_error("queue submit");
             }
@@ -1051,7 +1057,12 @@ namespace Piccolo
         cmdBufAllocateInfo.commandPool        = m_rhi->getCommandPoor();
         cmdBufAllocateInfo.level              = RHI_COMMAND_BUFFER_LEVEL_PRIMARY;
         cmdBufAllocateInfo.commandBufferCount = 1;
-        if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, m_compute_command_buffer))
+        cmdBufAllocateInfo.queueBindPoint     = RHI_PIPELINE_BIND_POINT_GRAPHICS;
+
+        RHICommandBufferAllocateInfo computeCmdBufAllocateInfo = cmdBufAllocateInfo;
+        computeCmdBufAllocateInfo.queueBindPoint               = RHI_PIPELINE_BIND_POINT_COMPUTE;
+
+        if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&computeCmdBufAllocateInfo, m_compute_command_buffer))
             throw std::runtime_error("alloc compute command buffer");
 
         m_copy_command_buffers.resize(m_rhi->getMaxFramesInFlight(), nullptr);
@@ -1069,12 +1080,8 @@ namespace Piccolo
             m_compute_command_buffers.resize(m_rhi->getMaxFramesInFlight(), nullptr);
             for (RHICommandBuffer*& compute_command_buffer : m_compute_command_buffers)
             {
-                if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&cmdBufAllocateInfo, compute_command_buffer))
+                if (RHI_SUCCESS != m_rhi->allocateCommandBuffers(&computeCmdBufAllocateInfo, compute_command_buffer))
                     throw std::runtime_error("alloc particle compute command buffer");
-                if (m_rhi->getBackendType() == RHIBackendType::D3D12)
-                {
-                    m_rhi->setCommandBufferComputeQueue(compute_command_buffer, true);
-                }
             }
 
             m_compute_fences.resize(m_rhi->getMaxFramesInFlight(), nullptr);

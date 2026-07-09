@@ -1452,6 +1452,17 @@ namespace Piccolo
         RHI_BUFFER_USAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
     };
 
+    // Used to declare resources that are shared across different GPU execution domains
+    // (graphics vs compute). RHI can then apply portable handoff normalization for these
+    // declared buffers, instead of inferring cross-domain sharing implicitly.
+    enum RHICrossQueueDomainFlagBits {
+        RHI_CROSS_QUEUE_DOMAIN_NONE = 0,
+        RHI_CROSS_QUEUE_DOMAIN_GRAPHICS = 1 << 0,
+        RHI_CROSS_QUEUE_DOMAIN_COMPUTE = 1 << 1,
+        RHI_CROSS_QUEUE_DOMAIN_COPY = 1 << 2,
+        RHI_CROSS_QUEUE_DOMAIN_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+    };
+
     enum RHIMemoryPropertyFlagBits {
         RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = 0x00000001,
         RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT = 0x00000002,
@@ -1629,6 +1640,7 @@ namespace Piccolo
     typedef uint32_t RHIDeviceCreateFlags;
     typedef uint32_t RHIDeviceQueueCreateFlags;
     typedef uint32_t RHIPipelineStageFlags;
+    typedef uint32_t RHICrossQueueDomainFlags;
     typedef uint32_t RHIMemoryMapFlags;
     typedef uint32_t RHISparseMemoryBindFlags;
     typedef uint32_t RHISparseImageFormatFlags;

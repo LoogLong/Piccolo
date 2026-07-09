@@ -286,6 +286,7 @@ namespace Piccolo
         RHICommandPool* commandPool;
         RHICommandBufferLevel level;
         uint32_t commandBufferCount;
+        RHIPipelineBindPoint queueBindPoint {RHI_PIPELINE_BIND_POINT_GRAPHICS};
     };
 
     struct RHICommandBufferBeginInfo

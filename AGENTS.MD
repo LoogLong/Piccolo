@@ -6,3 +6,5 @@
  - 所有计划必须以 Markdown 文件落地到 Docs/ 目录（建议 Docs/plans/）；聊天里只摘要，完整计划以 md 为准。Docs/ 不纳入版本控制。
  - 当任务为查bug任务时，需要先向我报告bug原因和修复方案，等我审核后才正式修改
  - 文件的修改，限定在本仓库内，任何超出本仓库目录的修改都是不允许的
+ - 编译必须使用项目提供的脚本：windows 使用build_windows.bat, linux使用build_linux.sh，macOS使用build_macos.sh
+ - 启动项目的工作空间为./bin
