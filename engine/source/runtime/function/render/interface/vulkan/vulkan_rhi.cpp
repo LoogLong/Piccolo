@@ -4350,7 +4350,7 @@ namespace Piccolo
             miplevels);
 
         auto* vulkan_image = new VulkanImage();
-        if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
+        if ((image_usage_flags & RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
         {
             vulkan_image->clear_binding = RHI_CLEAR_BINDING_DEPTH_STENCIL;
             if (pOptimizedClear != nullptr)
@@ -4362,7 +4362,7 @@ namespace Piccolo
                 vulkan_image->optimized_clear.depthStencil = {1.0f, 0};
             }
         }
-        else if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+        else if ((image_usage_flags & RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0)
         {
             vulkan_image->clear_binding = RHI_CLEAR_BINDING_COLOR;
             if (pOptimizedClear != nullptr)

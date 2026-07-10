@@ -116,7 +116,6 @@ bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDe
                                acceleration_structure_impl->scratch.ReleaseAndGetAddressOf());
     if (!result_created || !scratch_created)
     {
-        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "ray tracing acceleration structure allocation failure");
         delete acceleration_structure_impl;
         return false;
     }
@@ -371,7 +370,6 @@ bool D3D12RHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* c
         FAILED(pipeline_impl->state_object.As(&pipeline_impl->state_object_properties)) ||
         pipeline_impl->state_object_properties == nullptr)
     {
-        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "ray tracing pipeline creation failure");
         LOG_ERROR("D3D12 ray tracing pipeline creation failed (HRESULT=0x{:08X})",
                   static_cast<unsigned int>(state_object_result));
         delete pipeline_impl;
@@ -419,8 +417,12 @@ bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* c
 
     const uint64_t record_size = alignUp(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
                                          D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-    const uint64_t table_size = alignUp(record_size * 3,
-                                        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+    const uint64_t miss_table_offset =
+        alignUp(record_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+    const uint64_t hit_group_table_offset =
+        alignUp(miss_table_offset + record_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+    const uint64_t table_size =
+        alignUp(hit_group_table_offset + record_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
     auto* shader_binding_table_impl = new D3D12RHIShaderBindingTable();
     if (!createUploadBuffer(m_d3d12_device.Get(),
                             table_size,
@@ -440,19 +442,21 @@ bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* c
         delete shader_binding_table_impl;
         return false;
     }
-    std::memcpy(mapped_records + record_size * 0, raygen_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-    std::memcpy(mapped_records + record_size * 1, miss_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-    std::memcpy(mapped_records + record_size * 2, hit_group_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    std::memcpy(mapped_records, raygen_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    std::memcpy(mapped_records + miss_table_offset, miss_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    std::memcpy(mapped_records + hit_group_table_offset,
+                hit_group_identifier,
+                D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
     shader_binding_table_impl->resource->Unmap(0, nullptr);
 
     const D3D12_GPU_VIRTUAL_ADDRESS table_start =
         shader_binding_table_impl->resource->GetGPUVirtualAddress();
     shader_binding_table_impl->raygen_start = table_start;
     shader_binding_table_impl->raygen_size = record_size;
-    shader_binding_table_impl->miss_start = table_start + record_size;
+    shader_binding_table_impl->miss_start = table_start + miss_table_offset;
     shader_binding_table_impl->miss_size = record_size;
     shader_binding_table_impl->miss_stride = record_size;
-    shader_binding_table_impl->hit_group_start = table_start + record_size * 2;
+    shader_binding_table_impl->hit_group_start = table_start + hit_group_table_offset;
     shader_binding_table_impl->hit_group_size = record_size;
     shader_binding_table_impl->hit_group_stride = record_size;
     shader_binding_table = shader_binding_table_impl;

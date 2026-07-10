@@ -369,42 +369,6 @@ bool createCpuDescriptorHeap(ID3D12Device* device,
                                 descriptor_next);
 }
 
-void logD3D12InfoQueueMessages(ID3D12Device* device, const char* context, UINT64 max_messages)
-{
-    if (device == nullptr)
-    {
-        return;
-    }
-
-    ComPtr<ID3D12InfoQueue> info_queue;
-    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&info_queue))) || info_queue == nullptr)
-    {
-        return;
-    }
-
-    const UINT64 message_count = info_queue->GetNumStoredMessages();
-    const UINT64 first_message = message_count > max_messages ? message_count - max_messages : 0;
-    for (UINT64 message_index = first_message; message_index < message_count; ++message_index)
-    {
-        SIZE_T message_size = 0;
-        if (FAILED(info_queue->GetMessage(message_index, nullptr, &message_size)) || message_size == 0)
-        {
-            continue;
-        }
-
-        std::vector<char> message_storage(message_size);
-        auto* message = reinterpret_cast<D3D12_MESSAGE*>(message_storage.data());
-        if (SUCCEEDED(info_queue->GetMessage(message_index, message, &message_size)) &&
-            message->pDescription != nullptr)
-        {
-            LOG_ERROR("D3D12 {} message {}: {}",
-                      context != nullptr ? context : "debug",
-                      static_cast<uint64_t>(message_index),
-                      message->pDescription);
-        }
-    }
-}
-
 std::string dxgiAdapterDescriptionToUtf8(const WCHAR* description)
 {
     if (description == nullptr || description[0] == L'\0')
@@ -1801,7 +1765,6 @@ bool createCommittedBuffer(ID3D12Device* device,
         buffer.host_data_valid = false;
         buffer.host_data_uploadable = false;
         const HRESULT removed_reason = device->GetDeviceRemovedReason();
-        logD3D12InfoQueueMessages(device, "buffer creation failure");
         LOG_ERROR("Failed to create D3D12 buffer resource (size={}, usage={}, memory_properties={}, heap_type={}, initial_state={}, flags={}, HRESULT=0x{:08X}, removed_reason=0x{:08X})",
                   size,
                   usage,

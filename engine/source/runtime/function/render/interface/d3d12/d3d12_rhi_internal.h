@@ -61,7 +61,6 @@ D3D12_CPU_DESCRIPTOR_HANDLE cpuDescriptor(ID3D12DescriptorHeap* heap, uint32_t d
 D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptor(ID3D12DescriptorHeap* heap, uint32_t descriptor_size, uint32_t index);
 bool createDescriptorHeap(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t descriptor_count, bool shader_visible, ComPtr<ID3D12DescriptorHeap>& heap, uint32_t& descriptor_size, uint32_t& descriptor_capacity, uint32_t& descriptor_next);
 bool createCpuDescriptorHeap(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t descriptor_count, ComPtr<ID3D12DescriptorHeap>& heap);
-void logD3D12InfoQueueMessages(ID3D12Device* device, const char* context, UINT64 max_messages = 16);
 std::string dxgiAdapterDescriptionToUtf8(const WCHAR* description);
 bool reserveDescriptors(uint32_t count, uint32_t& next, uint32_t capacity, uint32_t& base);
 void rememberCachedDynamicDescriptorTable( D3D12RHICommandBuffer& command_buffer, const D3D12RHIDescriptorSet& descriptor_set, uint32_t set_index, const std::vector<uint32_t>& dynamic_offsets, D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav_gpu_base);

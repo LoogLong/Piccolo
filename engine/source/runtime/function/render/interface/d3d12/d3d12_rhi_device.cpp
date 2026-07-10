@@ -1,3 +1,4 @@
+#include "runtime/function/render/interface/d3d12/d3d12_debug_layer.h"
 #include "runtime/function/render/interface/d3d12/d3d12_rhi.h"
 #include "runtime/function/render/interface/d3d12/d3d12_rhi_internal.h"
 #include "runtime/function/render/interface/d3d12/d3d12_rhi_resource.h"
@@ -314,6 +315,7 @@ void D3D12RHI::clearSwapchain()
 void D3D12RHI::destroyDevice()
 {
 #ifdef _WIN32
+    d3d12_detail::shutdownD3D12DebugLayerLogging(m_d3d12_device.Get());
     waitForGpu();
 
     if (m_d3d12_fence_event)
@@ -503,6 +505,8 @@ void D3D12RHI::destroyDevice()
             m_allow_tearing = false;
         }
         LOG_INFO("D3D12 tearing present {}", m_allow_tearing ? "enabled" : "unavailable");
+
+        d3d12_detail::setupD3D12DebugLayerLogging(m_d3d12_device.Get());
     }
     void D3D12RHI::createCommandQueue()
     {
@@ -667,7 +671,6 @@ void D3D12RHI::destroyDevice()
                                                        IID_PPV_ARGS(&d3d_command_buffer->command_allocator));
             if (FAILED(allocator_result))
             {
-                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "command buffer allocator creation failure");
                 LOG_ERROR("D3D12 command allocator creation failed (HRESULT=0x{:08X})",
                           static_cast<unsigned int>(allocator_result));
                 return false;
@@ -684,14 +687,12 @@ void D3D12RHI::destroyDevice()
                                                   IID_PPV_ARGS(&d3d_command_buffer->command_list));
             if (FAILED(list_result))
             {
-                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "command buffer list creation failure");
                 LOG_ERROR("D3D12 command list creation failed (HRESULT=0x{:08X})",
                           static_cast<unsigned int>(list_result));
                 return false;
             }
             if (FAILED(d3d_command_buffer->command_list->Close()))
             {
-                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "initial command buffer list close failure");
                 return false;
             }
             d3d_command_buffer->is_open = false;
@@ -1275,7 +1276,6 @@ void D3D12RHI::destroyDevice()
         if (FAILED(signal_result))
         {
             const HRESULT removed_reason = m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
-            logD3D12InfoQueueMessages(m_d3d12_device.Get(), "waitForGpu signal failure");
             LOG_ERROR("D3D12 queue Signal failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
                       static_cast<unsigned int>(signal_result),
                       static_cast<unsigned int>(removed_reason));
@@ -1290,7 +1290,6 @@ void D3D12RHI::destroyDevice()
             if (FAILED(event_result))
             {
                 const HRESULT removed_reason = m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
-                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "waitForGpu event failure");
                 LOG_ERROR("D3D12 fence SetEventOnCompletion failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
                           static_cast<unsigned int>(event_result),
                           static_cast<unsigned int>(removed_reason));

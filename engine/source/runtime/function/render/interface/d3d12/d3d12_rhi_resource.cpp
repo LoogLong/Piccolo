@@ -1472,27 +1472,8 @@ bool D3D12RHI::createGraphicsPipelines(RHIPipelineCache* pipelineCache, uint32_t
         m_d3d12_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline->pipeline_state));
     if (FAILED(graphics_pso_result))
     {
-        ComPtr<ID3D12InfoQueue> info_queue;
-        if (SUCCEEDED(m_d3d12_device.As(&info_queue)) && info_queue != nullptr)
-        {
-            const UINT64 message_count = info_queue->GetNumStoredMessages();
-            const UINT64 first_message = message_count > 8 ? message_count - 8 : 0;
-            for (UINT64 message_index = first_message; message_index < message_count; ++message_index)
-            {
-                SIZE_T message_size = 0;
-                if (FAILED(info_queue->GetMessage(message_index, nullptr, &message_size)) || message_size == 0)
-                {
-                    continue;
-                }
-                std::vector<char> message_storage(message_size);
-                auto* message = reinterpret_cast<D3D12_MESSAGE*>(message_storage.data());
-                if (SUCCEEDED(info_queue->GetMessage(message_index, message, &message_size)) &&
-                    message->pDescription != nullptr)
-                {
-                    LOG_ERROR("D3D12 message {}: {}", static_cast<uint64_t>(message_index), message->pDescription);
-                }
-            }
-        }
+        LOG_ERROR("D3D12 CreateGraphicsPipelineState failed (HRESULT=0x{:08X})",
+                  static_cast<unsigned int>(graphics_pso_result));
         delete pipeline;
         return false;
     }

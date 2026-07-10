@@ -2321,7 +2321,6 @@ bool D3D12RHI::prepareBeforePass(std::function<void()> passUpdateAfterRecreateSw
             if (FAILED(d3d_command_buffer->command_allocator->Reset()) ||
                 FAILED(d3d_command_buffer->command_list->Reset(d3d_command_buffer->command_allocator.Get(), nullptr)))
             {
-                logD3D12InfoQueueMessages(m_d3d12_device.Get(), "prepareBeforePass command buffer reset failure");
                 LOG_ERROR("D3D12 prepareBeforePass failed to reset command buffer for frame {}",
                           static_cast<uint32_t>(m_current_frame_index));
                 return true;
@@ -2363,7 +2362,6 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
         {
             const HRESULT removed_reason =
                 m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
-            logD3D12InfoQueueMessages(m_d3d12_device.Get(), "submitRendering command list close failure");
             LOG_ERROR("D3D12 submitRendering command list close failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
                       static_cast<unsigned int>(close_result),
                       static_cast<unsigned int>(removed_reason));
@@ -2395,7 +2393,6 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
     {
         const HRESULT removed_reason =
             m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
-        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "submitRendering queue submit failure");
         LOG_ERROR("D3D12 submitRendering queue submit failed (removed_reason=0x{:08X})",
                   static_cast<unsigned int>(removed_reason));
         return;
@@ -2409,7 +2406,6 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
 
         const HRESULT removed_reason =
             m_d3d12_device != nullptr ? m_d3d12_device->GetDeviceRemovedReason() : S_OK;
-        logD3D12InfoQueueMessages(m_d3d12_device.Get(), "submitRendering present failure");
         LOG_ERROR("D3D12 submitRendering Present failed (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
                   static_cast<unsigned int>(present_result),
                   static_cast<unsigned int>(removed_reason));
