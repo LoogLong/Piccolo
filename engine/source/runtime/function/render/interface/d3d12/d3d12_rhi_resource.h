@@ -180,6 +180,7 @@ struct D3D12RHIAccelerationStructure final : RHIAccelerationStructure
     ComPtr<ID3D12Resource> scratch;
     ComPtr<ID3D12Resource> instance_upload;
     D3D12_GPU_VIRTUAL_ADDRESS gpu_address {0};
+    D3D12_RESOURCE_STATES  scratch_current_state {D3D12_RESOURCE_STATE_COMMON};
 #else
     uint64_t gpu_address {0};
 #endif
@@ -210,8 +211,6 @@ struct D3D12GraphicsBindingScope
     bool                    valid {false};
     RHIPipeline*            pipeline {nullptr};
     D3D12RHIPipelineLayout* layout {nullptr};
-    RHIRenderPass*          render_pass {nullptr};
-    uint32_t                subpass_index {0};
     std::vector<uint32_t>   vertex_strides;
 };
 

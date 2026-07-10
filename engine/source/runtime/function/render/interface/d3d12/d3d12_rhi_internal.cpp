@@ -3246,26 +3246,17 @@ void endGraphicsBindingScope(D3D12RHICommandBuffer& command_buffer)
 void beginGraphicsBindingScope(D3D12RHICommandBuffer& command_buffer, D3D12RHIPipeline& pipeline)
 {
     auto& scope = command_buffer.graphics_binding_scope;
-    scope.valid         = true;
-    scope.pipeline      = &pipeline;
-    scope.layout        = pipeline.layout;
-    scope.render_pass   = pipeline.graphics_render_pass;
-    scope.subpass_index = pipeline.graphics_subpass_index;
+    scope.valid          = true;
+    scope.pipeline       = &pipeline;
+    scope.layout         = pipeline.layout;
     scope.vertex_strides = pipeline.vertex_strides;
 }
 
 void validateGraphicsPipelineBindContract(const D3D12RHICommandBuffer& command_buffer,
                                           const D3D12RHIPipeline& pipeline)
 {
-    if (pipeline.graphics_render_pass == nullptr || !command_buffer.in_render_pass)
+    if (!command_buffer.in_render_pass)
     {
-        return;
-    }
-    if (command_buffer.active_render_pass != pipeline.graphics_render_pass)
-    {
-        LOG_WARN("D3D12 graphics pipeline bind: render pass mismatch (active={}, pipeline={})",
-                 static_cast<const void*>(command_buffer.active_render_pass),
-                 static_cast<const void*>(pipeline.graphics_render_pass));
         return;
     }
     if (command_buffer.active_subpass_index != pipeline.graphics_subpass_index)
@@ -3283,23 +3274,10 @@ void validateGraphicsBindingScopeForDraw(const D3D12RHICommandBuffer& command_bu
     {
         return;
     }
-    const auto& scope = command_buffer.graphics_binding_scope;
-    if (!scope.valid)
+    if (!command_buffer.graphics_binding_scope.valid)
     {
         LOG_ERROR("D3D12 draw inside render pass without active graphics binding scope. "
                   "Call cmdBindPipeline before draw.");
-        return;
-    }
-    if (scope.render_pass != nullptr &&
-        (command_buffer.active_render_pass != scope.render_pass ||
-         command_buffer.active_subpass_index != scope.subpass_index))
-    {
-        LOG_ERROR("D3D12 draw with stale graphics binding scope: active=(rp={}, subpass={}) "
-                  "scope=(rp={}, subpass={}). Subpass advanced without rebinding pipeline.",
-                  static_cast<const void*>(command_buffer.active_render_pass),
-                  command_buffer.active_subpass_index,
-                  static_cast<const void*>(scope.render_pass),
-                  scope.subpass_index);
     }
 }
 

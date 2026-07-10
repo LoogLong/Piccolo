@@ -111,7 +111,7 @@ bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDe
     const bool scratch_created =
         createRayTracingBuffer(m_d3d12_device.Get(),
                                scratch_size,
-                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                               D3D12_RESOURCE_STATE_COMMON,
                                D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
                                acceleration_structure_impl->scratch.ReleaseAndGetAddressOf());
     if (!result_created || !scratch_created)
@@ -120,6 +120,7 @@ bool D3D12RHI::createAccelerationStructure(const RHIAccelerationStructureBuildDe
         return false;
     }
 
+    acceleration_structure_impl->scratch_current_state = D3D12_RESOURCE_STATE_COMMON;
     acceleration_structure_impl->gpu_address =
         acceleration_structure_impl->result->GetGPUVirtualAddress();
     acceleration_structure = acceleration_structure_impl;
@@ -259,6 +260,11 @@ bool D3D12RHI::buildAccelerationStructure(RHICommandBuffer* command_buffer,
             build_as_desc.SourceAccelerationStructureData = source->result->GetGPUVirtualAddress();
         }
     }
+
+    transitionResource(command_list,
+                       acceleration_structure_impl->scratch.Get(),
+                       acceleration_structure_impl->scratch_current_state,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
     command_list4->BuildRaytracingAccelerationStructure(&build_as_desc, 0, nullptr);
 
