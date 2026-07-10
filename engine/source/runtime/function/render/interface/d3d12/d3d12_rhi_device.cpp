@@ -203,8 +203,7 @@ void D3D12RHI::createSwapchainImageViews()
         image->format                  = RHI_FORMAT_R8G8B8A8_UNORM;
         image->dxgi_format             = DXGI_FORMAT_R8G8B8A8_UNORM;
         image->usage                   = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        image->clear_binding           = RHI_CLEAR_BINDING_COLOR;
-        image->optimized_clear.color   = {{0.0f, 0.0f, 0.0f, 0.0f}};
+        initializeRHIImageClearBinding(*image, RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, nullptr);
         initializeImageSubresourceStates(*image, D3D12_RESOURCE_STATE_PRESENT);
         image->source_bytes_per_pixel  = 4;
         image->resource_bytes_per_pixel = 4;

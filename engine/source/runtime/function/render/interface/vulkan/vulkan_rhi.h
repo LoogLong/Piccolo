@@ -245,9 +245,10 @@ namespace Piccolo
 
         VkSwapchainKHR           m_swapchain {nullptr};
         std::vector<VkImage>     m_swapchain_images;
+        std::vector<RHIImage*>   m_owned_swapchain_images;
 
         RHIImage*        m_depth_image = new VulkanImage();
-        VkDeviceMemory m_depth_image_memory {nullptr};
+        RHIDeviceMemory* m_depth_image_memory {nullptr};
 
         std::vector<VkFramebuffer> m_swapchain_framebuffers;
 

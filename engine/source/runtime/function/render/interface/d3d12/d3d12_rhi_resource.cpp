@@ -659,45 +659,22 @@ void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIForma
 
         D3D12_CLEAR_VALUE clear_value {};
         D3D12_CLEAR_VALUE* clear_value_ptr = nullptr;
-        if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
+        initializeRHIImageClearBinding(*d3d_image, image_usage_flags, pOptimizedClear);
+        if (d3d_image->clear_binding == RHI_CLEAR_BINDING_DEPTH_STENCIL)
         {
             clear_value.Format               = toDSVFormat(format);
-            clear_value.DepthStencil.Depth   = 1.0f;
-            clear_value.DepthStencil.Stencil = 0;
-            if (pOptimizedClear != nullptr)
-            {
-                clear_value.DepthStencil.Depth   = pOptimizedClear->depthStencil.depth;
-                clear_value.DepthStencil.Stencil = static_cast<UINT8>(pOptimizedClear->depthStencil.stencil);
-                d3d_image->optimized_clear       = *pOptimizedClear;
-            }
-            else
-            {
-                d3d_image->optimized_clear.depthStencil = {1.0f, 0};
-            }
-            d3d_image->clear_binding = RHI_CLEAR_BINDING_DEPTH_STENCIL;
-            clear_value_ptr          = &clear_value;
+            clear_value.DepthStencil.Depth   = d3d_image->optimized_clear.depthStencil.depth;
+            clear_value.DepthStencil.Stencil = static_cast<UINT8>(d3d_image->optimized_clear.depthStencil.stencil);
+            clear_value_ptr                  = &clear_value;
         }
-        else if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+        else if (d3d_image->clear_binding == RHI_CLEAR_BINDING_COLOR)
         {
             clear_value.Format   = d3d_image->dxgi_format;
-            clear_value.Color[0] = 0.0f;
-            clear_value.Color[1] = 0.0f;
-            clear_value.Color[2] = 0.0f;
-            clear_value.Color[3] = 0.0f;
-            if (pOptimizedClear != nullptr)
-            {
-                clear_value.Color[0] = pOptimizedClear->color.float32[0];
-                clear_value.Color[1] = pOptimizedClear->color.float32[1];
-                clear_value.Color[2] = pOptimizedClear->color.float32[2];
-                clear_value.Color[3] = pOptimizedClear->color.float32[3];
-                d3d_image->optimized_clear = *pOptimizedClear;
-            }
-            else
-            {
-                d3d_image->optimized_clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-            }
-            d3d_image->clear_binding = RHI_CLEAR_BINDING_COLOR;
-            clear_value_ptr          = &clear_value;
+            clear_value.Color[0] = d3d_image->optimized_clear.color.float32[0];
+            clear_value.Color[1] = d3d_image->optimized_clear.color.float32[1];
+            clear_value.Color[2] = d3d_image->optimized_clear.color.float32[2];
+            clear_value.Color[3] = d3d_image->optimized_clear.color.float32[3];
+            clear_value_ptr      = &clear_value;
         }
 
         const HRESULT resource_result =

@@ -258,6 +258,12 @@ namespace Piccolo
 
             if (m_swapchain != VK_NULL_HANDLE)
             {
+                for (RHIImage* image : m_owned_swapchain_images)
+                {
+                    delete static_cast<VulkanImage*>(image);
+                }
+                m_owned_swapchain_images.clear();
+
                 for (auto* image_view : m_swapchain_imageviews)
                 {
                     if (image_view != nullptr)
@@ -271,19 +277,33 @@ namespace Piccolo
                 m_swapchain = VK_NULL_HANDLE;
             }
 
-            if (m_depth_image_view != nullptr && ((VulkanImageView*)m_depth_image_view)->getResource() != VK_NULL_HANDLE)
+            if (m_depth_image_view != nullptr)
             {
-                destroyImageView(m_depth_image_view);
+                if (((VulkanImageView*)m_depth_image_view)->getResource() != VK_NULL_HANDLE)
+                {
+                    destroyImageView(m_depth_image_view);
+                }
+                else
+                {
+                    delete static_cast<VulkanImageView*>(m_depth_image_view);
+                    m_depth_image_view = nullptr;
+                }
             }
-            if (m_depth_image != nullptr && ((VulkanImage*)m_depth_image)->getResource() != VK_NULL_HANDLE)
+            if (m_depth_image != nullptr)
             {
-                vkDestroyImage(m_device, ((VulkanImage*)m_depth_image)->getResource(), nullptr);
-                ((VulkanImage*)m_depth_image)->setResource(VK_NULL_HANDLE);
+                if (((VulkanImage*)m_depth_image)->getResource() != VK_NULL_HANDLE)
+                {
+                    destroyImage(m_depth_image);
+                }
+                else
+                {
+                    delete static_cast<VulkanImage*>(m_depth_image);
+                    m_depth_image = nullptr;
+                }
             }
-            if (m_depth_image_memory != VK_NULL_HANDLE)
+            if (m_depth_image_memory != nullptr)
             {
-                vkFreeMemory(m_device, m_depth_image_memory, nullptr);
-                m_depth_image_memory = VK_NULL_HANDLE;
+                freeMemory(m_depth_image_memory);
             }
 
             for (uint32_t i = 0; i < k_max_frames_in_flight; ++i)
@@ -4123,23 +4143,54 @@ namespace Piccolo
 
     void VulkanRHI::createFramebufferImageAndView()
     {
-        VulkanUtil::createImage(m_physical_device,
-                                m_device,
-                                m_swapchain_extent.width,
-                                m_swapchain_extent.height,
-                                (VkFormat)m_depth_image_format,
-                                VK_IMAGE_TILING_OPTIMAL,
-                                VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                ((VulkanImage*)m_depth_image)->getResource(),
-                                m_depth_image_memory,
-                                0,
-                                1,
-                                1);
+        if (m_depth_image_view != nullptr)
+        {
+            if (((VulkanImageView*)m_depth_image_view)->getResource() != VK_NULL_HANDLE)
+            {
+                destroyImageView(m_depth_image_view);
+            }
+            else
+            {
+                delete static_cast<VulkanImageView*>(m_depth_image_view);
+                m_depth_image_view = nullptr;
+            }
+        }
+        if (m_depth_image != nullptr)
+        {
+            if (((VulkanImage*)m_depth_image)->getResource() != VK_NULL_HANDLE)
+            {
+                destroyImage(m_depth_image);
+            }
+            else
+            {
+                delete static_cast<VulkanImage*>(m_depth_image);
+                m_depth_image = nullptr;
+            }
+        }
+        if (m_depth_image_memory != nullptr)
+        {
+            freeMemory(m_depth_image_memory);
+        }
 
-        ((VulkanImageView*)m_depth_image_view)->setResource(
-            VulkanUtil::createImageView(m_device, ((VulkanImage*)m_depth_image)->getResource(), (VkFormat)m_depth_image_format, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_VIEW_TYPE_2D, 1, 1));
+        createImage(m_swapchain_extent.width,
+                    m_swapchain_extent.height,
+                    m_depth_image_format,
+                    RHI_IMAGE_TILING_OPTIMAL,
+                    RHI_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                        RHI_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                    RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    m_depth_image,
+                    m_depth_image_memory,
+                    0,
+                    1,
+                    1);
+        createImageView(m_depth_image,
+                        m_depth_image_format,
+                        RHI_IMAGE_ASPECT_DEPTH_BIT,
+                        RHI_IMAGE_VIEW_TYPE_2D,
+                        1,
+                        1,
+                        m_depth_image_view);
     }
 
     RHISampler* VulkanRHI::getOrCreateDefaultSampler(RHIDefaultSamplerType type)
@@ -4350,30 +4401,7 @@ namespace Piccolo
             miplevels);
 
         auto* vulkan_image = new VulkanImage();
-        if ((image_usage_flags & RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
-        {
-            vulkan_image->clear_binding = RHI_CLEAR_BINDING_DEPTH_STENCIL;
-            if (pOptimizedClear != nullptr)
-            {
-                vulkan_image->optimized_clear = *pOptimizedClear;
-            }
-            else
-            {
-                vulkan_image->optimized_clear.depthStencil = {1.0f, 0};
-            }
-        }
-        else if ((image_usage_flags & RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0)
-        {
-            vulkan_image->clear_binding = RHI_CLEAR_BINDING_COLOR;
-            if (pOptimizedClear != nullptr)
-            {
-                vulkan_image->optimized_clear = *pOptimizedClear;
-            }
-            else
-            {
-                vulkan_image->optimized_clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-            }
-        }
+        initializeRHIImageClearBinding(*vulkan_image, image_usage_flags, pOptimizedClear);
 
         image = vulkan_image;
         memory = new VulkanDeviceMemory();
@@ -4405,6 +4433,7 @@ namespace Piccolo
         image_allocation = allocation;
         ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
+        image_view->image = image;
     }
 
     void VulkanRHI::createCubeMap(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels)
@@ -4420,25 +4449,37 @@ namespace Piccolo
         image_allocation = allocation;
         ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanImageView*)image_view)->setResource(vk_image_view);
+        image_view->image = image;
     }
 
     void VulkanRHI::createSwapchainImageViews()
     {
+        for (RHIImage* image : m_owned_swapchain_images)
+        {
+            delete static_cast<VulkanImage*>(image);
+        }
+        m_owned_swapchain_images.clear();
         m_swapchain_imageviews.resize(m_swapchain_images.size());
+        m_owned_swapchain_images.resize(m_swapchain_images.size());
 
-        // create imageview (one for each this time) for all swapchain images
         for (size_t i = 0; i < m_swapchain_images.size(); i++)
         {
-            VkImageView vk_image_view;
-            vk_image_view = VulkanUtil::createImageView(m_device,
-                                                                   m_swapchain_images[i],
-                                                                   (VkFormat)m_swapchain_image_format,
-                                                                   VK_IMAGE_ASPECT_COLOR_BIT,
-                                                                   VK_IMAGE_VIEW_TYPE_2D,
-                                                                   1,
-                                                                   1);
-            m_swapchain_imageviews[i] = new VulkanImageView();
-            ((VulkanImageView*)m_swapchain_imageviews[i])->setResource(vk_image_view);
+            auto* image = new VulkanImage();
+            initializeRHIImageClearBinding(*image, RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, nullptr);
+            m_owned_swapchain_images[i] = image;
+
+            VkImageView vk_image_view =
+                VulkanUtil::createImageView(m_device,
+                                              m_swapchain_images[i],
+                                              (VkFormat)m_swapchain_image_format,
+                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                              VK_IMAGE_VIEW_TYPE_2D,
+                                              1,
+                                              1);
+            auto* image_view = new VulkanImageView();
+            image_view->image = image;
+            image_view->setResource(vk_image_view);
+            m_swapchain_imageviews[i] = image_view;
         }
     }
 
@@ -4638,10 +4679,18 @@ namespace Piccolo
 
     void VulkanRHI::clearSwapchain()
     {
+        for (RHIImage* image : m_owned_swapchain_images)
+        {
+            delete static_cast<VulkanImage*>(image);
+        }
+        m_owned_swapchain_images.clear();
+
         for (auto imageview : m_swapchain_imageviews)
         {
             vkDestroyImageView(m_device, ((VulkanImageView*)imageview)->getResource(), NULL);
+            delete imageview;
         }
+        m_swapchain_imageviews.clear();
         vkDestroySwapchainKHR(m_device, m_swapchain, NULL); // also swapchain images
     }
 
@@ -5027,13 +5076,24 @@ namespace Piccolo
         }
 
         destroyImageView(m_depth_image_view);
-        vkDestroyImage(m_device, ((VulkanImage*)m_depth_image)->getResource(), NULL);
-        vkFreeMemory(m_device, m_depth_image_memory, NULL);
+        destroyImage(m_depth_image);
+        if (m_depth_image_memory != nullptr)
+        {
+            freeMemory(m_depth_image_memory);
+        }
+
+        for (RHIImage* image : m_owned_swapchain_images)
+        {
+            delete static_cast<VulkanImage*>(image);
+        }
+        m_owned_swapchain_images.clear();
 
         for (auto imageview : m_swapchain_imageviews)
         {
             vkDestroyImageView(m_device, ((VulkanImageView*)imageview)->getResource(), NULL);
+            delete imageview;
         }
+        m_swapchain_imageviews.clear();
         vkDestroySwapchainKHR(m_device, m_swapchain, NULL);
 
         createSwapchain();

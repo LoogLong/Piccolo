@@ -302,6 +302,40 @@ namespace Piccolo
     };
 
     inline RHI::~RHI() = default;
+
+    inline void initializeRHIImageClearBinding(RHIImage& image,
+                                              RHIImageUsageFlags usage,
+                                              const RHIClearValue* pOptimizedClear = nullptr)
+    {
+        image.clear_binding   = RHI_CLEAR_BINDING_NONE;
+        image.optimized_clear = {};
+
+        if ((usage & RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
+        {
+            image.clear_binding = RHI_CLEAR_BINDING_DEPTH_STENCIL;
+            if (pOptimizedClear != nullptr)
+            {
+                image.optimized_clear = *pOptimizedClear;
+            }
+            else
+            {
+                image.optimized_clear.depthStencil = {1.0f, 0};
+            }
+        }
+        else if ((usage & RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0)
+        {
+            image.clear_binding = RHI_CLEAR_BINDING_COLOR;
+            if (pOptimizedClear != nullptr)
+            {
+                image.optimized_clear = *pOptimizedClear;
+            }
+            else
+            {
+                image.optimized_clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            }
+        }
+    }
+
     inline RHIClearValue getImageClearValue(const RHIImage* image)
     {
         RHIClearValue clear_value {};
