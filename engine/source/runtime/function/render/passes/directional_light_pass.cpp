@@ -38,8 +38,10 @@ namespace Piccolo
         // color and depth
         m_framebuffer.attachments.resize(2);
 
-        // color
+        // color — R32 stores shadow depth ratio; empty texels must clear to 1.0 (far plane).
         m_framebuffer.attachments[0].format = RHI_FORMAT_R32_SFLOAT;
+        RHIClearValue shadow_color_clear {};
+        shadow_color_clear.color            = {{1.0f, 0.0f, 0.0f, 0.0f}};
         m_rhi->createImage(s_directional_light_shadow_map_dimension,
                            s_directional_light_shadow_map_dimension,
                            m_framebuffer.attachments[0].format,
@@ -50,7 +52,8 @@ namespace Piccolo
                            m_framebuffer.attachments[0].mem,
                            0,
                            1,
-                           1);
+                           1,
+                           &shadow_color_clear);
         m_rhi->createImageView(m_framebuffer.attachments[0].image,
                                m_framebuffer.attachments[0].format,
                                RHI_IMAGE_ASPECT_COLOR_BIT,
@@ -497,12 +500,6 @@ namespace Piccolo
             renderpass_begin_info.renderArea.offset = {0, 0};
             renderpass_begin_info.renderArea.extent = {s_directional_light_shadow_map_dimension,
                                                        s_directional_light_shadow_map_dimension};
-
-            RHIClearValue clear_values[2];
-            clear_values[0].color                 = {1.0f};
-            clear_values[1].depthStencil          = {1.0f, 0};
-            renderpass_begin_info.clearValueCount = (sizeof(clear_values) / sizeof(clear_values[0]));
-            renderpass_begin_info.pClearValues    = clear_values;
 
             m_rhi->cmdBeginRenderPassPFN(m_rhi->getCurrentCommandBuffer(), &renderpass_begin_info, RHI_SUBPASS_CONTENTS_INLINE);
 

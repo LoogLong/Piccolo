@@ -548,7 +548,7 @@ bool descriptorWriteHasRequiredResources(const RHIWriteDescriptorSet& write,
             }
 
             const auto* image_view = static_cast<D3D12RHIImageView*>(write.pImageInfo[descriptor_index].imageView);
-            if (image_view == nullptr || image_view->image == nullptr || image_view->image->resource == nullptr)
+            if (image_view == nullptr || image_view->image == nullptr || image_view->d3dImage()->resource == nullptr)
             {
                 return false;
             }
@@ -2521,12 +2521,12 @@ void transitionImageView(ID3D12GraphicsCommandList* command_list,
                          D3D12RHIImageView* view,
                          D3D12_RESOURCE_STATES target_state)
 {
-    if (view == nullptr || view->image == nullptr || view->image->resource == nullptr)
+    if (view == nullptr || view->image == nullptr || view->d3dImage()->resource == nullptr)
     {
         return;
     }
     transitionImageSubresourceRange(command_list,
-                                    *view->image,
+                                    *view->d3dImage(),
                                     0,
                                     view->mip_levels,
                                     0,
@@ -2620,7 +2620,7 @@ void transitionD3D12SubpassBoundary(ID3D12GraphicsCommandList* command_list,
         }
 
         D3D12RHIImageView* view = framebufferAttachment(framebuffer, attachment_index);
-        if (view == nullptr || view->image == nullptr || view->image->resource == nullptr)
+        if (view == nullptr || view->image == nullptr || view->d3dImage()->resource == nullptr)
         {
             continue;
         }
@@ -2672,9 +2672,9 @@ void finishD3D12Subpass(ID3D12GraphicsCommandList* command_list,
             resolve_view == nullptr ||
             source_view->image == nullptr ||
             resolve_view->image == nullptr ||
-            source_view->image->resource == nullptr ||
-            resolve_view->image->resource == nullptr ||
-            source_view->image->resource.Get() == resolve_view->image->resource.Get())
+            source_view->d3dImage()->resource == nullptr ||
+            resolve_view->d3dImage()->resource == nullptr ||
+            source_view->d3dImage()->resource.Get() == resolve_view->d3dImage()->resource.Get())
         {
             continue;
         }
@@ -2692,15 +2692,15 @@ void finishD3D12Subpass(ID3D12GraphicsCommandList* command_list,
         }
 
         bool wrote_resolve_attachment = false;
-        const D3D12_RESOURCE_DESC source_desc  = source_view->image->resource->GetDesc();
-        const D3D12_RESOURCE_DESC resolve_desc = resolve_view->image->resource->GetDesc();
+        const D3D12_RESOURCE_DESC source_desc  = source_view->d3dImage()->resource->GetDesc();
+        const D3D12_RESOURCE_DESC resolve_desc = resolve_view->d3dImage()->resource->GetDesc();
         if (source_desc.SampleDesc.Count > 1 && resolve_desc.SampleDesc.Count == 1)
         {
             transitionImageView(command_list, source_view, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
             transitionImageView(command_list, resolve_view, D3D12_RESOURCE_STATE_RESOLVE_DEST);
-            command_list->ResolveSubresource(resolve_view->image->resource.Get(),
+            command_list->ResolveSubresource(resolve_view->d3dImage()->resource.Get(),
                                              0,
-                                             source_view->image->resource.Get(),
+                                             source_view->d3dImage()->resource.Get(),
                                              0,
                                              resolve_format);
             wrote_resolve_attachment = true;
@@ -2711,14 +2711,14 @@ void finishD3D12Subpass(ID3D12GraphicsCommandList* command_list,
             transitionImageView(command_list, resolve_view, D3D12_RESOURCE_STATE_COPY_DEST);
 
             D3D12_TEXTURE_COPY_LOCATION source_location {};
-            source_location.pResource        = source_view->image->resource.Get();
+            source_location.pResource        = source_view->d3dImage()->resource.Get();
             source_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            source_location.SubresourceIndex = d3d12SubresourceIndex(*source_view->image, 0, 0);
+            source_location.SubresourceIndex = d3d12SubresourceIndex(*source_view->d3dImage(), 0, 0);
 
             D3D12_TEXTURE_COPY_LOCATION resolve_location {};
-            resolve_location.pResource        = resolve_view->image->resource.Get();
+            resolve_location.pResource        = resolve_view->d3dImage()->resource.Get();
             resolve_location.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            resolve_location.SubresourceIndex = d3d12SubresourceIndex(*resolve_view->image, 0, 0);
+            resolve_location.SubresourceIndex = d3d12SubresourceIndex(*resolve_view->d3dImage(), 0, 0);
 
             command_list->CopyTextureRegion(&resolve_location, 0, 0, 0, &source_location, nullptr);
             wrote_resolve_attachment = true;

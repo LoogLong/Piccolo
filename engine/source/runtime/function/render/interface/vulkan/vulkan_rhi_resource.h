@@ -180,6 +180,7 @@ namespace Piccolo
         {
             return m_resource;
         }
+        std::vector<RHIImageView*> attachments;
     private:
         VkFramebuffer m_resource;
     };

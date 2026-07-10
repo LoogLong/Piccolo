@@ -71,7 +71,6 @@ struct D3D12RHIImage final : RHIImage
 
 struct D3D12RHIImageView final : RHIImageView
 {
-    D3D12RHIImage*                    image {nullptr};
     RHIFormat                         format {RHI_FORMAT_UNDEFINED};
     DXGI_FORMAT                       dxgi_format {DXGI_FORMAT_UNKNOWN};
     RHIImageAspectFlags               aspect_flags {0};
@@ -91,6 +90,8 @@ struct D3D12RHIImageView final : RHIImageView
     bool                              has_dsv {false};
     bool                              has_read_only_dsv {false};
     bool                              has_uav {false};
+
+    D3D12RHIImage* d3dImage() const { return static_cast<D3D12RHIImage*>(image); }
 };
 
 struct D3D12RHISampler final : RHISampler

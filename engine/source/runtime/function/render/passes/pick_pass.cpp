@@ -540,11 +540,6 @@ namespace Piccolo
         renderpass_begin_info.renderArea.offset = {0, 0};
         renderpass_begin_info.renderArea.extent = m_rhi->getSwapchainInfo().extent;
 
-        RHIClearColorValue color_value         = {0, 0, 0, 0};
-        RHIClearValue      clearValues[2]      = {color_value, {1.0f, 0}};
-        renderpass_begin_info.clearValueCount  = 2;
-        renderpass_begin_info.pClearValues     = clearValues;
-
         m_rhi->cmdBeginRenderPassPFN(m_rhi->getCurrentCommandBuffer(),
             &renderpass_begin_info,
             RHI_SUBPASS_CONTENTS_INLINE); // no second buffer

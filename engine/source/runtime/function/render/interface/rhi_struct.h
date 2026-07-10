@@ -22,8 +22,8 @@ namespace Piccolo
     class RHIEvent : public RHIObject {};
     class RHIFence : public RHIObject {};
     class RHIFramebuffer : public RHIObject {};
-    class RHIImage : public RHIObject {};
-    class RHIImageView : public RHIObject {};
+    class RHIImage;
+    class RHIImageView;
     class RHIInstance : public RHIObject {};
     class RHIQueue : public RHIObject {};
     class RHIPhysicalDevice : public RHIObject {};
@@ -124,6 +124,42 @@ namespace Piccolo
     union RHIClearValue;
     union RHIClearColorValue;
     struct RHIClearDepthStencilValue;
+
+    struct RHIClearDepthStencilValue {
+        float depth;
+        uint32_t stencil;
+    };
+
+    union RHIClearColorValue {
+        float float32[4];
+        int32_t int32[4];
+        uint32_t uint32[4];
+    };
+
+    union RHIClearValue {
+        RHIClearColorValue color;
+        RHIClearDepthStencilValue depthStencil;
+    };
+
+    enum RHIClearBinding
+    {
+        RHI_CLEAR_BINDING_NONE = 0,
+        RHI_CLEAR_BINDING_COLOR,
+        RHI_CLEAR_BINDING_DEPTH_STENCIL,
+    };
+
+    class RHIImage : public RHIObject
+    {
+    public:
+        RHIClearBinding clear_binding {RHI_CLEAR_BINDING_NONE};
+        RHIClearValue   optimized_clear {};
+    };
+
+    class RHIImageView : public RHIObject
+    {
+    public:
+        RHIImage* image {nullptr};
+    };
 
     ////////////////////struct declaration////////////////////////
     struct RHIMemoryBarrier {
@@ -1092,22 +1128,6 @@ namespace Piccolo
         RHIRect2D renderArea;
         uint32_t clearValueCount;
         const RHIClearValue* pClearValues;
-    };
-
-    struct RHIClearDepthStencilValue {
-        float depth;
-        uint32_t stencil;
-    };
-
-    union RHIClearColorValue {
-        float float32[4];
-        int32_t int32[4];
-        uint32_t uint32[4];
-    };
-
-    union RHIClearValue {
-        RHIClearColorValue color;
-        RHIClearDepthStencilValue depthStencil;
     };
 
     struct RHIClearRect {

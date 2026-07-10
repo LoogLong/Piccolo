@@ -599,7 +599,7 @@ void D3D12RHI::copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceS
 #endif
     return;
 }
-void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags, RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels)
+void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags, RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels, const RHIClearValue* pOptimizedClear)
 {
     image  = nullptr;
     memory = nullptr;
@@ -664,7 +664,18 @@ void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIForma
             clear_value.Format               = toDSVFormat(format);
             clear_value.DepthStencil.Depth   = 1.0f;
             clear_value.DepthStencil.Stencil = 0;
-            clear_value_ptr                  = &clear_value;
+            if (pOptimizedClear != nullptr)
+            {
+                clear_value.DepthStencil.Depth   = pOptimizedClear->depthStencil.depth;
+                clear_value.DepthStencil.Stencil = static_cast<UINT8>(pOptimizedClear->depthStencil.stencil);
+                d3d_image->optimized_clear       = *pOptimizedClear;
+            }
+            else
+            {
+                d3d_image->optimized_clear.depthStencil = {1.0f, 0};
+            }
+            d3d_image->clear_binding = RHI_CLEAR_BINDING_DEPTH_STENCIL;
+            clear_value_ptr          = &clear_value;
         }
         else if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
         {
@@ -673,7 +684,20 @@ void D3D12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIForma
             clear_value.Color[1] = 0.0f;
             clear_value.Color[2] = 0.0f;
             clear_value.Color[3] = 0.0f;
-            clear_value_ptr      = &clear_value;
+            if (pOptimizedClear != nullptr)
+            {
+                clear_value.Color[0] = pOptimizedClear->color.float32[0];
+                clear_value.Color[1] = pOptimizedClear->color.float32[1];
+                clear_value.Color[2] = pOptimizedClear->color.float32[2];
+                clear_value.Color[3] = pOptimizedClear->color.float32[3];
+                d3d_image->optimized_clear = *pOptimizedClear;
+            }
+            else
+            {
+                d3d_image->optimized_clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            }
+            d3d_image->clear_binding = RHI_CLEAR_BINDING_COLOR;
+            clear_value_ptr          = &clear_value;
         }
 
         const HRESULT resource_result =
@@ -1169,7 +1193,7 @@ bool D3D12RHI::createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RH
             continue;
         }
 
-        if (view->has_rtv && view->cpu_descriptor.ptr == 0 && view->image != nullptr && view->image->resource != nullptr)
+        if (view->has_rtv && view->cpu_descriptor.ptr == 0 && view->image != nullptr && view->d3dImage()->resource != nullptr)
         {
             uint32_t descriptor_index = 0;
             if (!reserveDescriptors(1,
@@ -1182,10 +1206,10 @@ bool D3D12RHI::createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RH
             }
             view->descriptor_heap_type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
             view->cpu_descriptor = cpuDescriptor(m_d3d12_rtv_heap.Get(), m_d3d12_rtv_descriptor_size, descriptor_index);
-            m_d3d12_device->CreateRenderTargetView(view->image->resource.Get(), &view->rtv_desc, view->cpu_descriptor);
+            m_d3d12_device->CreateRenderTargetView(view->d3dImage()->resource.Get(), &view->rtv_desc, view->cpu_descriptor);
         }
 
-        if (view->has_dsv && view->cpu_descriptor.ptr == 0 && view->image != nullptr && view->image->resource != nullptr)
+        if (view->has_dsv && view->cpu_descriptor.ptr == 0 && view->image != nullptr && view->d3dImage()->resource != nullptr)
         {
             const uint32_t descriptor_count = view->has_read_only_dsv ? 2U : 1U;
             uint32_t descriptor_index = 0;
@@ -1199,12 +1223,12 @@ bool D3D12RHI::createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RH
             }
             view->descriptor_heap_type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
             view->cpu_descriptor = cpuDescriptor(m_d3d12_dsv_heap.Get(), m_d3d12_dsv_descriptor_size, descriptor_index);
-            m_d3d12_device->CreateDepthStencilView(view->image->resource.Get(), &view->dsv_desc, view->cpu_descriptor);
+            m_d3d12_device->CreateDepthStencilView(view->d3dImage()->resource.Get(), &view->dsv_desc, view->cpu_descriptor);
             if (view->has_read_only_dsv)
             {
                 view->read_only_dsv_cpu_descriptor =
                     cpuDescriptor(m_d3d12_dsv_heap.Get(), m_d3d12_dsv_descriptor_size, descriptor_index + 1);
-                m_d3d12_device->CreateDepthStencilView(view->image->resource.Get(),
+                m_d3d12_device->CreateDepthStencilView(view->d3dImage()->resource.Get(),
                                                        &view->read_only_dsv_desc,
                                                        view->read_only_dsv_cpu_descriptor);
             }
@@ -1865,18 +1889,18 @@ void D3D12RHI::updateDescriptorSets(uint32_t descriptorWriteCount, const RHIWrit
                 {
                     const RHIDescriptorImageInfo* image_info = &write.pImageInfo[descriptor_index];
                     auto* image_view = static_cast<D3D12RHIImageView*>(image_info->imageView);
-                    if (image_view != nullptr && image_view->image != nullptr && image_view->image->resource != nullptr && image_view->has_uav)
+                    if (image_view != nullptr && image_view->image != nullptr && image_view->d3dImage()->resource != nullptr && image_view->has_uav)
                     {
-                        m_d3d12_device->CreateUnorderedAccessView(image_view->image->resource.Get(), nullptr, &image_view->uav_desc, staging_handle);
+                        m_d3d12_device->CreateUnorderedAccessView(image_view->d3dImage()->resource.Get(), nullptr, &image_view->uav_desc, staging_handle);
                     }
                 }
                 else
                 {
                     const RHIDescriptorImageInfo* image_info = &write.pImageInfo[descriptor_index];
                     auto* image_view = static_cast<D3D12RHIImageView*>(image_info->imageView);
-                    if (image_view != nullptr && image_view->image != nullptr && image_view->image->resource != nullptr && image_view->has_srv)
+                    if (image_view != nullptr && image_view->image != nullptr && image_view->d3dImage()->resource != nullptr && image_view->has_srv)
                     {
-                        m_d3d12_device->CreateShaderResourceView(image_view->image->resource.Get(), &image_view->srv_desc, staging_handle);
+                        m_d3d12_device->CreateShaderResourceView(image_view->d3dImage()->resource.Get(), &image_view->srv_desc, staging_handle);
                     }
                 }
                 m_d3d12_device->CopyDescriptorsSimple(1,
@@ -2147,9 +2171,9 @@ void D3D12RHI::setDebugObjectName(RHIImageView* image_view, const char* name)
 
     image_view->setDebugName(name);
     auto* impl = static_cast<D3D12RHIImageView*>(image_view);
-    if (impl->image != nullptr && impl->image->resource != nullptr)
+    if (impl->image != nullptr && impl->d3dImage()->resource != nullptr)
     {
-        applyD3D12ObjectName(impl->image->resource.Get(), name);
+        applyD3D12ObjectName(impl->d3dImage()->resource.Get(), name);
     }
 }
 

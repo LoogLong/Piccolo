@@ -1815,6 +1815,9 @@ namespace Piccolo
         create_info.layers = pCreateInfo->layers;
 
         pFramebuffer = new VulkanFramebuffer();
+        auto* vulkan_framebuffer = static_cast<VulkanFramebuffer*>(pFramebuffer);
+        vulkan_framebuffer->attachments.assign(pCreateInfo->pAttachments,
+                                               pCreateInfo->pAttachments + pCreateInfo->attachmentCount);
         VkFramebuffer vk_framebuffer;
         VkResult result = vkCreateFramebuffer(m_device, &create_info, nullptr, &vk_framebuffer);
         ((VulkanFramebuffer*)pFramebuffer)->setResource(vk_framebuffer);
@@ -2599,12 +2602,19 @@ namespace Piccolo
         rect_2d.offset = offset_2d;
         rect_2d.extent = extent_2d;
 
-        //clear_values
-        int clear_value_size = pRenderPassBegin->clearValueCount;
-        std::vector<VkClearValue> vk_clear_value_list(clear_value_size);
-        for (int i = 0; i < clear_value_size; ++i)
+        //clear_values — sourced from image clear bindings at createImage time.
+        std::vector<RHIClearValue> rhi_clear_values;
+        populateFramebufferClearValues(pRenderPassBegin->framebuffer != nullptr ?
+                                           static_cast<VulkanFramebuffer*>(pRenderPassBegin->framebuffer)->attachments.size() :
+                                           0,
+                                       pRenderPassBegin->framebuffer != nullptr ?
+                                           static_cast<VulkanFramebuffer*>(pRenderPassBegin->framebuffer)->attachments.data() :
+                                           nullptr,
+                                       rhi_clear_values);
+        std::vector<VkClearValue> vk_clear_value_list(rhi_clear_values.size());
+        for (size_t i = 0; i < rhi_clear_values.size(); ++i)
         {
-            const auto& rhi_clear_value_element = pRenderPassBegin->pClearValues[i];
+            const auto& rhi_clear_value_element = rhi_clear_values[i];
             auto& vk_clear_value_element = vk_clear_value_list[i];
 
             VkClearColorValue vk_clear_color_value;
@@ -2636,8 +2646,8 @@ namespace Piccolo
         vk_render_pass_begin_info.renderPass = ((VulkanRenderPass*)pRenderPassBegin->renderPass)->getResource();
         vk_render_pass_begin_info.framebuffer = ((VulkanFramebuffer*)pRenderPassBegin->framebuffer)->getResource();
         vk_render_pass_begin_info.renderArea = rect_2d;
-        vk_render_pass_begin_info.clearValueCount = pRenderPassBegin->clearValueCount;
-        vk_render_pass_begin_info.pClearValues = vk_clear_value_list.data();
+        vk_render_pass_begin_info.clearValueCount = static_cast<uint32_t>(vk_clear_value_list.size());
+        vk_render_pass_begin_info.pClearValues = vk_clear_value_list.empty() ? nullptr : vk_clear_value_list.data();
 
         return _vkCmdBeginRenderPass(((VulkanCommandBuffer*)commandBuffer)->getResource(), &vk_render_pass_begin_info, (VkSubpassContents)contents);
     }
@@ -4320,7 +4330,7 @@ namespace Piccolo
     }
 
     void VulkanRHI::createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
-        RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels)
+        RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels, const RHIClearValue* pOptimizedClear)
     {
         VkImage vk_image;
         VkDeviceMemory vk_device_memory;
@@ -4339,16 +4349,43 @@ namespace Piccolo
             array_layers,
             miplevels);
 
-        image = new VulkanImage();
+        auto* vulkan_image = new VulkanImage();
+        if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
+        {
+            vulkan_image->clear_binding = RHI_CLEAR_BINDING_DEPTH_STENCIL;
+            if (pOptimizedClear != nullptr)
+            {
+                vulkan_image->optimized_clear = *pOptimizedClear;
+            }
+            else
+            {
+                vulkan_image->optimized_clear.depthStencil = {1.0f, 0};
+            }
+        }
+        else if (hasFlag(image_usage_flags, RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+        {
+            vulkan_image->clear_binding = RHI_CLEAR_BINDING_COLOR;
+            if (pOptimizedClear != nullptr)
+            {
+                vulkan_image->optimized_clear = *pOptimizedClear;
+            }
+            else
+            {
+                vulkan_image->optimized_clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+            }
+        }
+
+        image = vulkan_image;
         memory = new VulkanDeviceMemory();
-        ((VulkanImage*)image)->setResource(vk_image);
         ((VulkanDeviceMemory*)memory)->setResource(vk_device_memory);
+        ((VulkanImage*)image)->setResource(vk_image);
     }
 
     void VulkanRHI::createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
         RHIImageView* &image_view)
     {
         image_view = new VulkanImageView();
+        image_view->image = image;
         VkImage vk_image = ((VulkanImage*)image)->getResource();
         VkImageView vk_image_view;
         vk_image_view = VulkanUtil::createImageView(m_device, vk_image, (VkFormat)format, image_aspect_flags, (VkImageViewType)view_type, layout_count, miplevels);

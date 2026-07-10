@@ -75,7 +75,7 @@ namespace Piccolo
             RHIAllocation*& pAllocation) = 0;
         virtual void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) = 0;
         virtual void createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
-            RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels) = 0;
+            RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels, const RHIClearValue* pOptimizedClear = nullptr) = 0;
         virtual void createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
             RHIImageView* &image_view) = 0;
         virtual void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, RHIAllocation*& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) = 0;
@@ -302,4 +302,28 @@ namespace Piccolo
     };
 
     inline RHI::~RHI() = default;
+    inline RHIClearValue getImageClearValue(const RHIImage* image)
+    {
+        RHIClearValue clear_value {};
+        if (image != nullptr && image->clear_binding != RHI_CLEAR_BINDING_NONE)
+        {
+            clear_value = image->optimized_clear;
+        }
+        return clear_value;
+    }
+
+    inline void populateFramebufferClearValues(uint32_t attachment_count,
+                                               RHIImageView* const* attachment_views,
+                                               std::vector<RHIClearValue>& out_clear_values)
+    {
+        out_clear_values.resize(attachment_count);
+        for (uint32_t attachment_index = 0; attachment_index < attachment_count; ++attachment_index)
+        {
+            const RHIImageView* attachment_view =
+                attachment_views != nullptr ? attachment_views[attachment_index] : nullptr;
+            out_clear_values[attachment_index] =
+                getImageClearValue(attachment_view != nullptr ? attachment_view->image : nullptr);
+        }
+    }
+
 } // namespace Piccolo

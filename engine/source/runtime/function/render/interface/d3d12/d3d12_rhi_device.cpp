@@ -202,6 +202,8 @@ void D3D12RHI::createSwapchainImageViews()
         image->format                  = RHI_FORMAT_R8G8B8A8_UNORM;
         image->dxgi_format             = DXGI_FORMAT_R8G8B8A8_UNORM;
         image->usage                   = RHI_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        image->clear_binding           = RHI_CLEAR_BINDING_COLOR;
+        image->optimized_clear.color   = {{0.0f, 0.0f, 0.0f, 0.0f}};
         initializeImageSubresourceStates(*image, D3D12_RESOURCE_STATE_PRESENT);
         image->source_bytes_per_pixel  = 4;
         image->resource_bytes_per_pixel = 4;
@@ -988,7 +990,7 @@ void D3D12RHI::destroyDevice()
             }
 
             auto* view = framebuffer->attachments[attachment_index];
-            if (view == nullptr || view->image == nullptr || view->image->resource == nullptr)
+            if (view == nullptr || view->image == nullptr || view->d3dImage()->resource == nullptr)
             {
                 continue;
             }
@@ -1015,7 +1017,7 @@ void D3D12RHI::destroyDevice()
                 continue;
             }
 
-            if (view->image != nullptr && view->image->resource != nullptr)
+            if (view->image != nullptr && view->d3dImage()->resource != nullptr)
             {
                 transitionImageView(command_list, view, D3D12_RESOURCE_STATE_RENDER_TARGET);
             }
@@ -1060,7 +1062,7 @@ void D3D12RHI::destroyDevice()
                     depth_read_only && depth_view->read_only_dsv_cpu_descriptor.ptr != 0 ?
                         depth_view->read_only_dsv_cpu_descriptor :
                         depth_view->cpu_descriptor;
-                if (depth_view->image != nullptr && depth_view->image->resource != nullptr)
+                if (depth_view->image != nullptr && depth_view->d3dImage()->resource != nullptr)
                 {
                     const D3D12_RESOURCE_STATES depth_state =
                         depthAttachmentState(depth_view, subpass.depth_attachment_layout, depth_read_only);
@@ -1122,24 +1124,22 @@ void D3D12RHI::destroyDevice()
                 d3d_command_buffer->attachment_load_ops_applied[attachment_index] = true;
             }
 
-            if (attachment_index >= pRenderPassBegin->clearValueCount ||
-                pRenderPassBegin->pClearValues == nullptr ||
-                render_pass->attachments[attachment_index].loadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR)
+            if (render_pass->attachments[attachment_index].loadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR)
             {
                 continue;
             }
 
-            auto* view = framebuffer->attachments[attachment_index];
+            auto* view = static_cast<D3D12RHIImageView*>(framebuffer->attachments[attachment_index]);
             if (view == nullptr || !view->has_rtv || view->cpu_descriptor.ptr == 0)
             {
                 continue;
             }
 
-            const auto& clear_color = pRenderPassBegin->pClearValues[attachment_index].color;
-            const FLOAT color[4] = {clear_color.float32[0],
-                                    clear_color.float32[1],
-                                    clear_color.float32[2],
-                                    clear_color.float32[3]};
+            const RHIClearValue clear_value = getImageClearValue(view->image);
+            const FLOAT color[4]            = {clear_value.color.float32[0],
+                                               clear_value.color.float32[1],
+                                               clear_value.color.float32[2],
+                                               clear_value.color.float32[3]};
             command_list->ClearRenderTargetView(view->cpu_descriptor, color, 0, nullptr);
         }
 
@@ -1155,15 +1155,17 @@ void D3D12RHI::destroyDevice()
             {
                 d3d_command_buffer->attachment_load_ops_applied[subpass.depth_attachment_index] = true;
             }
-            if (subpass.depth_attachment_index >= pRenderPassBegin->clearValueCount ||
-                pRenderPassBegin->pClearValues == nullptr ||
-                (render_pass->attachments[subpass.depth_attachment_index].loadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR &&
-                 render_pass->attachments[subpass.depth_attachment_index].stencilLoadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR))
+            if (render_pass->attachments[subpass.depth_attachment_index].loadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR &&
+                render_pass->attachments[subpass.depth_attachment_index].stencilLoadOp != RHI_ATTACHMENT_LOAD_OP_CLEAR)
             {
                 return;
             }
             const auto& depth_attachment = render_pass->attachments[subpass.depth_attachment_index];
-            const auto& depth_stencil = pRenderPassBegin->pClearValues[subpass.depth_attachment_index].depthStencil;
+            auto* depth_dsv_view =
+                static_cast<D3D12RHIImageView*>(framebuffer->attachments[subpass.depth_attachment_index]);
+            const RHIClearValue clear_value = getImageClearValue(depth_dsv_view != nullptr ? depth_dsv_view->image : nullptr);
+            const float depth_clear         = clear_value.depthStencil.depth;
+            const uint32_t stencil_clear    = clear_value.depthStencil.stencil;
             D3D12_CLEAR_FLAGS clear_flags = static_cast<D3D12_CLEAR_FLAGS>(0);
             if (depth_attachment.loadOp == RHI_ATTACHMENT_LOAD_OP_CLEAR)
             {
@@ -1180,8 +1182,8 @@ void D3D12RHI::destroyDevice()
             }
             command_list->ClearDepthStencilView(dsv_handle,
                                                 clear_flags,
-                                                depth_stencil.depth,
-                                                static_cast<UINT8>(depth_stencil.stencil),
+                                                depth_clear,
+                                                static_cast<UINT8>(stencil_clear),
                                                 0,
                                                 nullptr);
         }

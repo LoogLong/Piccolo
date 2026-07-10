@@ -276,18 +276,13 @@ void D3D12RHI::cmdBeginRenderPassPFN(RHICommandBuffer* commandBuffer, const RHIR
     d3d_command_buffer->active_framebuffer      = pRenderPassBegin->framebuffer;
     d3d_command_buffer->active_render_pass_begin_info = *pRenderPassBegin;
     d3d_command_buffer->active_clear_values.clear();
-    if (pRenderPassBegin->pClearValues != nullptr && pRenderPassBegin->clearValueCount > 0)
-    {
-        d3d_command_buffer->active_clear_values.assign(pRenderPassBegin->pClearValues,
-                                                       pRenderPassBegin->pClearValues + pRenderPassBegin->clearValueCount);
-        d3d_command_buffer->active_render_pass_begin_info.pClearValues =
-            d3d_command_buffer->active_clear_values.data();
-    }
-    else
-    {
-        d3d_command_buffer->active_render_pass_begin_info.clearValueCount = 0;
-        d3d_command_buffer->active_render_pass_begin_info.pClearValues    = nullptr;
-    }
+    populateFramebufferClearValues(static_cast<uint32_t>(framebuffer->attachments.size()),
+                                   reinterpret_cast<RHIImageView* const*>(framebuffer->attachments.data()),
+                                   d3d_command_buffer->active_clear_values);
+    d3d_command_buffer->active_render_pass_begin_info.clearValueCount =
+        static_cast<uint32_t>(d3d_command_buffer->active_clear_values.size());
+    d3d_command_buffer->active_render_pass_begin_info.pClearValues =
+        d3d_command_buffer->active_clear_values.empty() ? nullptr : d3d_command_buffer->active_clear_values.data();
 
     d3d_command_buffer->attachment_load_ops_applied.assign(render_pass != nullptr ?
                                                                 render_pass->attachments.size() :
@@ -388,7 +383,7 @@ void D3D12RHI::cmdEndRenderPassPFN(RHICommandBuffer* commandBuffer)
             auto* view = framebuffer->attachments[attachment_index];
             const D3D12_RESOURCE_STATES final_state =
                 subpassAttachmentState(view, render_pass->attachments[attachment_index].finalLayout);
-            if (view != nullptr && view->image != nullptr && view->image->resource != nullptr)
+            if (view != nullptr && view->image != nullptr && view->d3dImage()->resource != nullptr)
             {
                 transitionImageView(command_list, view, final_state);
             }
