@@ -776,7 +776,16 @@ namespace Piccolo
         FrameData frame_data {};
         const MeshPerframeStorageBufferObject& raster_frame =
             m_render_resource_impl->m_mesh_perframe_storage_buffer_object;
-        frame_data.proj_view_matrix_inv = current_proj_view_inv;
+        // Raygen maps top-left pixel → NDC y = -1 (no UV Y flip). Y-up backends
+        // (D3D12) need the inverse converted into that NDC space; Y-down (Vulkan)
+        // already matches.
+        Matrix4x4 proj_view_inv_for_rays = current_proj_view_inv;
+        if (m_rhi->getClipSpaceConvention() == ClipSpaceConvention::YUpNDC)
+        {
+            const Matrix4x4 y_flip(1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+            proj_view_inv_for_rays = current_proj_view_inv * y_flip;
+        }
+        frame_data.proj_view_matrix_inv = proj_view_inv_for_rays;
         frame_data.camera_position      = current_camera_position;
         frame_data.sample_index         = m_sample_index;
         frame_data.extent[0]            = extent.width;

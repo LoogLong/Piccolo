@@ -35,8 +35,10 @@ void PathTracingRayGen()
     const uint2 extent = DispatchRaysDimensions().xy;
     const float2 uv = (float2(pixel) + 0.5f) / float2(max(extent, uint2(1, 1)));
 
-    const float2 ndc_uv = float2(uv.x, 1.0f - uv.y);
-    const float4 ndc = float4(UVToNdcXY(ndc_uv), 1.0f, 1.0f);
+    // Pixel (0,0) is top-left for both backends. Map UV→NDC without a Y flip;
+    // ClipSpaceConvention is already encoded in proj_view_matrix_inv (Y-up backends
+    // adjust the inverse on the CPU — see PathTracingPass::updateFrameData).
+    const float4 ndc = float4(UVToNdcXY(uv), 1.0f, 1.0f);
     const float4 world = mul(g_frame_data.proj_view_matrix_inv, ndc);
     const float3 world_position = world.xyz / max(world.w, 0.00001f);
 
