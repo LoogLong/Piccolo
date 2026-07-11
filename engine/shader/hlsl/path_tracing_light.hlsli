@@ -48,6 +48,25 @@ void PathTracingBuildOnb(float3 n, out float3 t, out float3 b)
     b = cross(n, t);
 }
 
+// Estimate the precomputed diffuse environment ambient (plan: real-time PT
+// preview matched against deferred's IBL contribution). One-shot per primary
+// hit. Equivalent to infinite bounces of diffuse sky off the upper hemisphere
+// (a low-frequency approximation of the full bounce stack, baked into
+// g_irradiance_texture by the IBL pipeline). NOT double-counting: it adds
+// precomputed low-frequency ambient on top of the sun NEE (specific delta
+// direction) and the iterative BSDF bounces.
+float3 EstimateEnvironmentAmbient(PathTracingSurface s, float3 wo)
+{
+    // Engine cubemap convention: (x, z, y).
+    const float3 n = s.normal;
+    const float3 sample_dir = float3(n.x, n.z, n.y);
+    const float3 env = g_irradiance_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
+
+    const float3 f = F_Schlick(clamp(dot(n, wo), 0.0f, 1.0f), s.f0);
+    const float3 kd = (1.0f - f) * (1.0f - s.metallic);
+    return kd * s.base_color * env;
+}
+
 // Uniform cone sampling around `axis` (half-angle from cos_half). Returns the
 // sampled direction and the solid-angle pdf (1 / Omega_cone).
 float3 SampleCone(float2 u, float3 axis, float cos_half, out float pdf)

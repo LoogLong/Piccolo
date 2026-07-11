@@ -59,8 +59,13 @@ bool PathTracingStep(inout PathState path)
     const PathTracingSurface surface = LoadHitSurface(payload, path.origin, path.direction);
     const float3 wo = -path.direction;
 
-    // Emissive + direct lighting (NEE with shadow rays).
-    path.radiance += path.throughput * (surface.emissive + EstimateDirectLight(surface, wo, path.rng));
+    // Emissive + direct lighting (NEE w/ shadow rays + precomputed diffuse env
+    // ambient at first hit). The precomputed ambient is a low-frequency proxy
+    // for infinite diffuse sky bounces; the sun NEE handles specific delta
+    // contributions without double-counting.
+    path.radiance += path.throughput * (surface.emissive
+        + EstimateDirectLight(surface, wo, path.rng)
+        + EstimateEnvironmentAmbient(surface, wo));
 
     // Stop here if we are already at the last permitted bounce (direct-only cap).
     if ((path.bounce + 1u) >= g_frame_data.max_bounces)
