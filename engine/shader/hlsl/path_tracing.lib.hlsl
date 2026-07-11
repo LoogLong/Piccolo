@@ -59,13 +59,18 @@ bool PathTracingStep(inout PathState path)
     const PathTracingSurface surface = LoadHitSurface(payload, path.origin, path.direction);
     const float3 wo = -path.direction;
 
-    // Emissive + direct lighting (NEE w/ shadow rays + precomputed diffuse env
+    // Emissive + direct lighting (NEE w/ shadow rays + precomputed env
     // ambient at first hit). The precomputed ambient is a low-frequency proxy
     // for infinite diffuse sky bounces; the sun NEE handles specific delta
-    // contributions without double-counting.
+    // contributions without double-counting. Phase 1.3 adds a specular IBL
+    // term along the reflection direction so glossy materials see
+    // surrounding sky as well -- diffuse env covers the diffuse term, sky
+    // NEE could in principle cover specular via MIS, but per-pixel CDF
+    // importance sampling of the sky cubemap is queued in Phase 1.2 (deferred).
     path.radiance += path.throughput * (surface.emissive
         + EstimateDirectLight(surface, wo, path.rng)
-        + EstimateEnvironmentAmbient(surface, wo));
+        + EstimateEnvironmentAmbient(surface, wo)
+        + EstimateEnvironmentSpecular(surface, wo));
 
     // Stop here if we are already at the last permitted bounce (direct-only cap).
     if ((path.bounce + 1u) >= g_frame_data.max_bounces)

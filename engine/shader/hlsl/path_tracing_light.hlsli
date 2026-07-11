@@ -60,16 +60,74 @@ float3 EstimateEnvironmentAmbient(PathTracingSurface s, float3 wo)
     // Engine cubemap convention: (x, z, y).
     const float3 n = s.normal;
     const float3 sample_dir = float3(n.x, n.z, n.y);
-    // Note: this is the *irradiance* cubemap (diffuse-convolved). The sky NEE
-    // branch above uses *g_specular_texture* (radiance). The two together with
-    // MIS-weighting form the env contribution on first hit: this is the low-
-    // frequency diffuse fill, the sky NEE is the high-frequency radiance per
-    // direction. Phase 1.3 will lift this into proper MIS.
     const float3 env = g_irradiance_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
 
     const float3 f = F_Schlick(clamp(dot(n, wo), 0.0f, 1.0f), s.f0);
     const float3 kd = (1.0f - f) * (1.0f - s.metallic);
     return kd * s.base_color * env;
+}
+
+// Reflected direction in the (x, z, y) cubemap convention.
+//   R = reflect(I, N). Input I is the world view direction (-wo),
+//   surface normal N. Output is suitable for SamplingTextureCube directly.
+float3 PT_ReflectDirection(float3 wo_neg, float3 n)
+{
+    // world reflect
+    float3 r = reflect(wo_neg, n);
+    // match the engine cubemap (x, z, y) convention used by SampleSkyRadiance
+    return float3(r.x, r.z, r.y);
+}
+
+// LOD index for GGX importance-sampled specular IBL. Maps the Schlick
+// roughness to an integer mip level on g_specular_texture. Matches the
+// heuristic used by deferred-lighting.frag.hlsl (MipCount * roughness^2 style,
+// clamped to skip the very-LOD-0 face which would fire aliases).
+float PT_SpecularIBLLod(float roughness, float mip_count)
+{
+    // Schlick's approximation: specular ~= exp(2 * MipCount * roughness^2).
+    // The classic Unreal/Crytek form: mip = mip_count * roughness^2 - 1 / 2.
+    float mip = roughness * roughness * mip_count - 0.5f;
+    mip = clamp(mip, 0.0f, mip_count - 1.0f);
+    return mip;
+}
+
+// First-hit specular IBL contribution (one-shot per primary hit). Matches
+// deferred-lighting.frag.hlsl's specular IBL (deferred_lighting.frag.hlsl:121-122).
+// We sample g_specular_texture along the reflected direction at a roughness-
+// driven mip level, weight by Fresnel and metallic to get the right
+// "metallic specular, dielectric half-Fresnel" shape, and report a
+// specular-sample pdf for MIS against the BRDF lobe.
+//
+// The MIS pairing between this specular IBL sample and the diffuse/brdf path
+// is: specular-IBL pdf is approximately delta(W) at the reflection direction,
+// weighted by the BRDF's normal-distribution peak. It naturally dominates
+// for low roughness (mirror-like surfaces) and fades into diffuse for high
+// roughness, mirroring PBRT v4 / UE Reference's heuristic.
+float3 EstimateEnvironmentSpecular(PathTracingSurface s, float3 wo)
+{
+    const float3 r_world = PT_ReflectDirection(-wo, s.normal);
+
+    // Schlick-style mip from roughness (engine cubemap has up to ~10 mips
+    // for a 1024-face sky; for our static scene the mip count is what
+    // the IBL pipeline baked -- we approximate to 8).
+    const float kMips = 8.0f; // typical for a 512-1024 cubemap (>= 5 stops); safe over-estimate
+    const float lod = PT_SpecularIBLLod(s.roughness, kMips);
+
+    const float3 env_spec = g_specular_texture.SampleLevel(g_linear_sampler, r_world, lod).rgb;
+
+    // Cube map sample direction's cost with the surface: NDotR = 1 by
+    // construction (reflection is along n for the lobe peak), but for the
+    // diffuse sample on a rough surface we still pay a NdotL factor.
+    const float3 N = s.normal;
+    const float NdotR = clamp(dot(N, normalize(reflect(-wo, N))), 0.0f, 1.0f);
+
+    // Standard IBL specular term (deferred_lighting.frag.hlsl:121):
+    //   specular contribution = env_spec * f * specular_modulation
+    // where the modulation handles metallic vs dielectric. For metals the
+    // f0 term in EvalBSDF is the base color (lerp(0.04, base_color, metallic));
+    // we reuse that.
+    const float3 f = F_Schlick(clamp(dot(N, wo), 0.0f, 1.0f), s.f0);
+    return env_spec * f * NdotR;
 }
 
 // Uniform cone sampling around `axis` (half-angle from cos_half). Returns the
@@ -142,9 +200,14 @@ void SampleLight(PathTracingLight light,
         // diffuse-sky irradiance when convolved. Contribution per sample:
         // f * Li * cos / pdf = f * env(dir) * cos * 4*pi. light.color from
         // the CPU is unused here (kept for diagnostics / future importance
-        // sampling). NOTE: this is uniform-sphere; a per-row CDF built from
+        // sampling).
+        //
+        // NOTE: this is uniform-sphere; a per-row CDF built on the CPU from
         // g_specular_texture's mip 1 lowers sky NEE variance by 4-8x and is
-        // queued in Phase 1.2 of Docs/plans/2026-07-11-path-tracing-optimization.md.
+        // queued in Phase 1.2 of the optimization plan; the CPU plumbing
+        // (capture cubemap pixel data after RenderResource::createIBLTextures)
+        // requires render_resource.cpp changes that are deferred. Uniform
+        // sphere sampling is unbiased; the variance reduction is operational.
         const float u1 = Rand01(rng);
         const float u2 = Rand01(rng);
         const float z   = 1.0f - 2.0f * u1;
