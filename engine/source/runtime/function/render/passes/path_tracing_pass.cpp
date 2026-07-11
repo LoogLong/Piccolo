@@ -711,6 +711,20 @@ namespace Piccolo
             dir.param0 = std::sin(half_angle_rad);
             lights.push_back(dir);
         }
+        // Sky light (Task 4 M3 fix): outdoor/sky-box scenes need a sky entry to
+        // feed the diffuse env contribution via NEE. Until cube-side access is
+        // available on the CPU, we use a neutral representative tint for the
+        // diagnostic color field (the actual Li comes from sampling
+        // g_irradiance_texture in the shader). We always emit the sky light;
+        // for interior scenes its shadow ray terminates on the first interior
+        // wall and the sample contributes nothing, which is the correct
+        // behaviour for a source behind opaque geometry.
+        {
+            PathTracingLightGpu sky {};
+            sky.type     = kPtLightSky;
+            sky.color    = Vector3(0.5f, 0.55f, 0.65f); // neutral sky-tint; unused by SampleLight
+            lights.push_back(sky);
+        }
         infinite_light_count = static_cast<uint32_t>(lights.size());
 
         const uint32_t point_count = std::min(raster_frame.point_light_num, s_max_point_light_count);

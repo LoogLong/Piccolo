@@ -111,10 +111,13 @@ void SampleLight(PathTracingLight light,
     }
     else if (light.type == PT_LIGHT_SKY)
     {
-        // Uniform sphere sampling. pdf = 1 / (4 * pi), Li = env at direction
-        // (sample 3 unit vector from 2D uniform). For task 4 a simple uniform
-        // sphere is enough (full importance sampling with cubemap mip PDFs
-        // is deferred); noise will be tolerable for low-frequency lighting.
+        // Uniform sphere sampling. pdf = 1 / (4 * pi). We sample the diffuse
+        // irradiance cubemap directly so Li is the per-direction env radiance
+        // (which has been convolved for diffuse in IBL bake). The result:
+        // contribution = f * Li * cos / pdf = f * env(dir) * cos * 4*pi
+        // which equals the diffuse sky integral exactly when the env is mostly
+        // diffuse. light.color from the CPU is unused here but kept in the
+        // struct for diagnostics / future importance-sampled sky NEE.
         const float u1 = Rand01(rng);
         const float u2 = Rand01(rng);
         const float z   = 1.0f - 2.0f * u1;
@@ -122,9 +125,7 @@ void SampleLight(PathTracingLight light,
         const float phi = 2.0f * 3.14159265f * u2;
         wi = normalize(float3(rr * cos(phi), rr * sin(phi), z));
         pdf = 1.0f / (4.0f * 3.14159265f);
-        // Light color holds the env mean radiance (set by CPU); Li is per-sample.
-        // For our uniform sampling we emit env(dir) directly (works as radiance).
-        Li = light.color * 4.0f * 3.14159265f; // uncompute the CPU factor so env(dir) is radiance
+        Li = g_irradiance_texture.SampleLevel(g_linear_sampler, wi, 0.0f).rgb;
         dist = 1e30f; // sky at infinity
     }
 }
