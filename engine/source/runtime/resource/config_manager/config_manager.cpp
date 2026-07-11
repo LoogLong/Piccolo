@@ -137,6 +137,21 @@ namespace Piccolo
                 {
                     m_path_tracing_directional_angle_deg = toFloat(value, m_path_tracing_directional_angle_deg);
                 }
+                else if (name == "PathTracingFpsBudget")
+                {
+                    // Plan §0 minimum FPS at the chosen tier's resolution.
+                    m_path_tracing_fps_budget = toUint(value, m_path_tracing_fps_budget);
+                }
+                else if (name == "PathTracingVramBudgetMb")
+                {
+                    // Plan §0 peak VRAM budget (MB).
+                    m_path_tracing_vram_budget_mb = toUint(value, m_path_tracing_vram_budget_mb);
+                }
+                else if (name == "PathTracingConvergenceBudgetS")
+                {
+                    // Plan §0 still-camera time-to-SSIM>=0.95 budget (seconds).
+                    m_path_tracing_convergence_budget_s = toFloat(value, m_path_tracing_convergence_budget_s);
+                }
 #ifdef ENABLE_PHYSICS_DEBUG_RENDERER
                 else if (name == "JoltAssetFolder")
                 {

@@ -1043,15 +1043,28 @@ namespace Piccolo
         uint32_t max_bounces = 8u;
         uint32_t max_path_intensity = 100u;
         uint32_t samples_per_frame = 1u;
+        // Tier-1 performance budget (plan 2026-07-12 §0). Defaults match the
+        // conservative RTX 3060 floor; projects targeting 4070 should raise
+        // these via PathTracingFpsBudget / PathTracingVramBudgetMb /
+        // PathTracingConvergenceBudgetS in their *.ini.
+        uint32_t fps_budget = 30u;
+        uint32_t vram_budget_mb = 1500u;
+        float    convergence_budget_s = 1.5f;
         if (auto cfg = g_runtime_global_context.m_config_manager)
         {
             max_bounces = cfg->getPathTracingMaxBounces();
             max_path_intensity = cfg->getPathTracingMaxPathIntensity();
             samples_per_frame = cfg->getPathTracingMaxSamplesPerFrame();
+            fps_budget = cfg->getPathTracingFpsBudget();
+            vram_budget_mb = cfg->getPathTracingVramBudgetMb();
+            convergence_budget_s = cfg->getPathTracingConvergenceBudgetS();
         }
         if (max_bounces == 0u) max_bounces = 8u;
         if (max_path_intensity == 0u) max_path_intensity = 100u;
         if (samples_per_frame == 0u) samples_per_frame = 1u;
+        if (fps_budget == 0u) fps_budget = 30u;
+        if (vram_budget_mb == 0u) vram_budget_mb = 1500u;
+        if (convergence_budget_s <= 0.0f) convergence_budget_s = 1.5f;
         frame_data.max_bounces = max_bounces;
         frame_data.max_path_intensity = max_path_intensity;
         m_samples_per_frame = samples_per_frame;
@@ -1066,6 +1079,12 @@ namespace Piccolo
                      " infinite_light_count={}, max_path_intensity={}, samples_per_frame={}",
                      max_bounces, light_count, infinite_light_count,
                      max_path_intensity, samples_per_frame);
+            // Tier-1 performance budget banner (plan 2026-07-12 §0). Reading
+            // these back from the same config lets ops confirm a regression
+            // is not from a stale ini after a tier promotion.
+            LOG_INFO("PathTracing tier-1 budget: fps>={}, vram<={}MB, "
+                     "convergence<={:.2f}s to SSIM>=0.95",
+                     fps_budget, vram_budget_mb, convergence_budget_s);
         }
 
         void* mapped_data = nullptr;
