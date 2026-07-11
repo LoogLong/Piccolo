@@ -451,7 +451,15 @@ namespace Piccolo
         bindings[9].binding         = 9;
         bindings[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[9].descriptorCount = 1;
-        bindings[9].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        // t9 (g_irradiance_texture) -- was MISS | CLOSEST_HIT but is also
+        // read from the raygen via EstimateEnvironmentAmbient on every
+        // primary hit. RAYGEN_BIT_KHR is mandatory so Vulkan validation
+        // doesn't trigger "shader uses descriptor but stage isn't permitted"
+        // (D3D12's global root signature is permissive by default and masked
+        // this gap; Vulkan isn't).
+        bindings[9].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR
+                                   | RHI_SHADER_STAGE_MISS_BIT_KHR
+                                   | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[10].binding         = 10;
         bindings[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
