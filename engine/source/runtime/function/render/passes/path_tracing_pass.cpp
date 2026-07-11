@@ -415,10 +415,14 @@ namespace Piccolo
         bindings[5].descriptorCount = 1;
         bindings[5].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+        // Material/instance/texture/sampler bindings are now read from raygen
+        // (material fetch + sky sampling moved out of closest-hit into the
+        // raygen path step -- see path_tracing_core.hlsli), so they must be
+        // visible to the raygen stage as well as closest-hit/miss.
         bindings[6].binding         = 6;
         bindings[6].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[6].descriptorCount = 1;
-        bindings[6].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        bindings[6].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[7].binding         = 7;
         bindings[7].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -428,7 +432,7 @@ namespace Piccolo
         bindings[8].binding         = 8;
         bindings[8].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[8].descriptorCount = 1;
-        bindings[8].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        bindings[8].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[9].binding         = 9;
         bindings[9].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -438,17 +442,17 @@ namespace Piccolo
         bindings[10].binding         = 10;
         bindings[10].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[10].descriptorCount = 1;
-        bindings[10].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        bindings[10].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[11].binding         = 11;
         bindings[11].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         bindings[11].descriptorCount = 1024;
-        bindings[11].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        bindings[11].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[12].binding         = 12;
         bindings[12].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLER;
         bindings[12].descriptorCount = 1;
-        bindings[12].stageFlags      = RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        bindings[12].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         bindings[13].binding         = 1036;  // t1036: g_skinned_vertices
         bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -598,7 +602,12 @@ namespace Piccolo
 
         RHIRayTracingPipelineCreateInfo create_info {};
         create_info.layout                                    = m_pipeline_layout;
-        create_info.max_recursion_depth                       = 6;
+        // Iterative path loop lives in raygen; the closest-hit shader no longer
+        // recurses (no indirect TraceRay) and shadow rays use
+        // ACCEPT_FIRST_HIT_AND_END_SEARCH (not nested). All TraceRay calls
+        // originate from raygen at depth 1, so the pipeline only needs depth 1
+        // (lower driver stack overhead, less payload pressure).
+        create_info.max_recursion_depth                       = 1;
         create_info.shader_library.bytecode                   = bytecode.data();
         create_info.shader_library.bytecode_size              = bytecode.size();
         create_info.shader_library.raygen_export              = kPathTracingRayGenExport;
