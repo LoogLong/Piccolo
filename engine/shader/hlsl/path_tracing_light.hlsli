@@ -48,8 +48,8 @@ void PathTracingBuildOnb(float3 n, out float3 t, out float3 b)
     b = cross(n, t);
 }
 
-// Estimate the precomputed diffuse environment ambient (plan: real-time PT
-// preview matched against deferred's IBL contribution). One-shot per primary
+// Estimate the precomputed diffuse environment ambient (real-time PT preview
+// matched against deferred's IBL diffuse contribution). One-shot per primary
 // hit. Equivalent to infinite bounces of diffuse sky off the upper hemisphere
 // (a low-frequency approximation of the full bounce stack, baked into
 // g_irradiance_texture by the IBL pipeline). NOT double-counting: it adds
@@ -60,6 +60,11 @@ float3 EstimateEnvironmentAmbient(PathTracingSurface s, float3 wo)
     // Engine cubemap convention: (x, z, y).
     const float3 n = s.normal;
     const float3 sample_dir = float3(n.x, n.z, n.y);
+    // Note: this is the *irradiance* cubemap (diffuse-convolved). The sky NEE
+    // branch above uses *g_specular_texture* (radiance). The two together with
+    // MIS-weighting form the env contribution on first hit: this is the low-
+    // frequency diffuse fill, the sky NEE is the high-frequency radiance per
+    // direction. Phase 1.3 will lift this into proper MIS.
     const float3 env = g_irradiance_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
 
     const float3 f = F_Schlick(clamp(dot(n, wo), 0.0f, 1.0f), s.f0);
@@ -130,13 +135,16 @@ void SampleLight(PathTracingLight light,
     }
     else if (light.type == PT_LIGHT_SKY)
     {
-        // Uniform sphere sampling. pdf = 1 / (4 * pi). We sample the diffuse
-        // irradiance cubemap directly so Li is the per-direction env radiance
-        // (which has been convolved for diffuse in IBL bake). The result:
-        // contribution = f * Li * cos / pdf = f * env(dir) * cos * 4*pi
-        // which equals the diffuse sky integral exactly when the env is mostly
-        // diffuse. light.color from the CPU is unused here but kept in the
-        // struct for diagnostics / future importance-sampled sky NEE.
+        // Uniform sphere sampling. pdf = 1 / (4 * pi). We sample the
+        // un-convolved specular cubemap (g_specular_texture, same source the
+        // miss shader and SampleSkyRadiance use) so Li is the per-direction
+        // sky radiance that, integrated over the sphere, reproduces the
+        // diffuse-sky irradiance when convolved. Contribution per sample:
+        // f * Li * cos / pdf = f * env(dir) * cos * 4*pi. light.color from
+        // the CPU is unused here (kept for diagnostics / future importance
+        // sampling). NOTE: this is uniform-sphere; a per-row CDF built from
+        // g_specular_texture's mip 1 lowers sky NEE variance by 4-8x and is
+        // queued in Phase 1.2 of Docs/plans/2026-07-11-path-tracing-optimization.md.
         const float u1 = Rand01(rng);
         const float u2 = Rand01(rng);
         const float z   = 1.0f - 2.0f * u1;
@@ -144,7 +152,7 @@ void SampleLight(PathTracingLight light,
         const float phi = 2.0f * 3.14159265f * u2;
         wi = normalize(float3(rr * cos(phi), rr * sin(phi), z));
         pdf = 1.0f / (4.0f * 3.14159265f);
-        Li = g_irradiance_texture.SampleLevel(g_linear_sampler, wi, 0.0f).rgb;
+        Li = g_specular_texture.SampleLevel(g_linear_sampler, wi, 0.0f).rgb;
         dist = 1e30f; // sky at infinity
     }
 }
