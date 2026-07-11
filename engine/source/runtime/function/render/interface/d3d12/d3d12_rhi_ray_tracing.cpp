@@ -324,16 +324,23 @@ bool D3D12RHI::createRayTracingPipeline(const RHIRayTracingPipelineCreateInfo* c
         rayTracingExportOrDefault(create_info->shader_library.closest_hit_export, kDefaultClosestHitExport);
     const wchar_t* hit_group_export =
         rayTracingExportOrDefault(create_info->shader_library.hit_group_export, kDefaultHitGroupExport);
+    // Optional second miss shader (e.g. shadow-visibility miss). No default.
+    const wchar_t* shadow_miss_export = create_info->shader_library.shadow_miss_export;
 
-    D3D12_EXPORT_DESC exports[3] {};
-    exports[0].Name = raygen_export;
-    exports[1].Name = miss_export;
-    exports[2].Name = closest_hit_export;
+    D3D12_EXPORT_DESC exports[4] {};
+    uint32_t export_count = 0;
+    exports[export_count++].Name = raygen_export;
+    exports[export_count++].Name = miss_export;
+    if (shadow_miss_export != nullptr)
+    {
+        exports[export_count++].Name = shadow_miss_export;
+    }
+    exports[export_count++].Name = closest_hit_export;
 
     D3D12_DXIL_LIBRARY_DESC library_desc {};
     library_desc.DXILLibrary.pShaderBytecode = create_info->shader_library.bytecode;
     library_desc.DXILLibrary.BytecodeLength = create_info->shader_library.bytecode_size;
-    library_desc.NumExports = 3;
+    library_desc.NumExports = export_count;
     library_desc.pExports = exports;
 
     D3D12_HIT_GROUP_DESC hit_group_desc {};
@@ -413,20 +420,27 @@ bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* c
         rayTracingExportOrDefault(create_info->miss_export, kDefaultMissExport);
     const wchar_t* hit_group_export =
         rayTracingExportOrDefault(create_info->hit_group_export, kDefaultHitGroupExport);
+    const wchar_t* shadow_miss_export = create_info->shadow_miss_export;
     const void* raygen_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(raygen_export);
     const void* miss_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(miss_export);
     const void* hit_group_identifier = pipeline_impl->state_object_properties->GetShaderIdentifier(hit_group_export);
-    if (raygen_identifier == nullptr || miss_identifier == nullptr || hit_group_identifier == nullptr)
+    const void* shadow_miss_identifier = (shadow_miss_export != nullptr)
+        ? pipeline_impl->state_object_properties->GetShaderIdentifier(shadow_miss_export)
+        : nullptr;
+    if (raygen_identifier == nullptr || miss_identifier == nullptr || hit_group_identifier == nullptr ||
+        (shadow_miss_export != nullptr && shadow_miss_identifier == nullptr))
     {
         return false;
     }
 
+    const uint64_t miss_count = (shadow_miss_export != nullptr) ? 2u : 1u;
     const uint64_t record_size = alignUp(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
                                          D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
     const uint64_t miss_table_offset =
         alignUp(record_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+    const uint64_t miss_table_size = miss_count * record_size;
     const uint64_t hit_group_table_offset =
-        alignUp(miss_table_offset + record_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+        alignUp(miss_table_offset + miss_table_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
     const uint64_t table_size =
         alignUp(hit_group_table_offset + record_size, D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
     auto* shader_binding_table_impl = new D3D12RHIShaderBindingTable();
@@ -450,6 +464,12 @@ bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* c
     }
     std::memcpy(mapped_records, raygen_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
     std::memcpy(mapped_records + miss_table_offset, miss_identifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    if (miss_count == 2u)
+    {
+        std::memcpy(mapped_records + miss_table_offset + record_size,
+                    shadow_miss_identifier,
+                    D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    }
     std::memcpy(mapped_records + hit_group_table_offset,
                 hit_group_identifier,
                 D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
@@ -460,7 +480,7 @@ bool D3D12RHI::createShaderBindingTable(const RHIShaderBindingTableCreateInfo* c
     shader_binding_table_impl->raygen_start = table_start;
     shader_binding_table_impl->raygen_size = record_size;
     shader_binding_table_impl->miss_start = table_start + miss_table_offset;
-    shader_binding_table_impl->miss_size = record_size;
+    shader_binding_table_impl->miss_size = miss_table_size;
     shader_binding_table_impl->miss_stride = record_size;
     shader_binding_table_impl->hit_group_start = table_start + hit_group_table_offset;
     shader_binding_table_impl->hit_group_size = record_size;

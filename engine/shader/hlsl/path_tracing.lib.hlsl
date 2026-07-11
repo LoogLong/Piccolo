@@ -19,10 +19,50 @@ TextureCube<float4> g_specular_texture : register(t10, space0);
 Texture2D<float4> g_texture_array[PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES] : register(t11, space0);
 SamplerState g_linear_sampler : register(s12, space0);
 
-// Core integrator (PathState, payloads, surface load, path step). Included
+// Core integrator (PathState, payloads, surface load, EvalBSDF). Included
 // after the buffer declarations above so its helper functions can reference
 // them (e.g. g_frame_data, g_instances, g_materials, g_texture_array).
 #include "path_tracing_core.hlsli"
+
+// Unified lights + next-event estimation (declares g_lights at t13).
+#include "path_tracing_light.hlsli"
+
+// One bounce of the path. Returns true to continue, false to terminate.
+// Task 2: emissive + direct lighting (NEE) with shadow rays; no indirect yet
+// (Task 3 adds BSDF sampling + MIS + RR). Defined here, after path_tracing_light,
+// so EstimateDirectLight is in scope.
+bool PathTracingStep(inout PathState path)
+{
+    PathTracingHitPayload payload;
+    payload.world_normal   = float3(0.0f, 0.0f, 0.0f);
+    payload.hit_t          = 0.0f;
+    payload.texcoord       = float2(0.0f, 0.0f);
+    payload.instance_index = 0u;
+    payload.flags          = 0u;
+
+    RayDesc ray;
+    ray.Origin    = path.origin;
+    ray.Direction = path.direction;
+    ray.TMin      = 0.001f;
+    ray.TMax      = 100000.0f;
+
+    TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+
+    if ((payload.flags & PT_HIT_FLAG) == 0u)
+    {
+        // Miss: contribute the sky background and stop.
+        path.radiance += path.throughput * SampleSkyRadiance(path.direction);
+        return false;
+    }
+
+    const PathTracingSurface surface = LoadHitSurface(payload, path.origin, path.direction);
+    const float3 wo = -path.direction;
+
+    // Emissive + direct lighting (NEE with shadow rays). Indirect/BSDF/MIS/RR
+    // arrive in Task 3.
+    path.radiance += path.throughput * (surface.emissive + EstimateDirectLight(surface, wo, path.rng));
+    return false; // Task 2: single bounce (no indirect yet).
+}
 
 [shader("raygeneration")]
 void PathTracingRayGen()
@@ -154,4 +194,14 @@ void PathTracingClosestHit(inout PathTracingHitPayload payload, BuiltInTriangleI
     payload.texcoord       = texcoord;
     payload.instance_index = instance_index;
     payload.flags          = PT_HIT_FLAG;
+}
+
+[shader("miss")]
+void PathTracingShadowMiss(inout PathShadowPayload payload)
+{
+    // Shadow visibility ray reached the light (no occluder). The payload was
+    // initialized to occluded = 1 in TraceShadowRay; clear it here. On a hit
+    // the closest-hit shader is skipped (SKIP_CLOSEST_HIT_SHADER) so this miss
+    // never runs and occluded stays 1. SBT miss index 1.
+    payload.occluded = 0u;
 }

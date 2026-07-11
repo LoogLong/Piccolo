@@ -7,6 +7,7 @@
 #include "runtime/function/render/render_shader_bytecode.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -20,10 +21,20 @@ namespace Piccolo
         // These belong to the path tracing pass rather than the generic RHI interface.
         constexpr const wchar_t* kPathTracingRayGenExport     = L"PathTracingRayGen";
         constexpr const wchar_t* kPathTracingMissExport       = L"PathTracingMiss";
+        constexpr const wchar_t* kPathTracingShadowMissExport = L"PathTracingShadowMiss";
         constexpr const wchar_t* kPathTracingClosestHitExport = L"PathTracingClosestHit";
         constexpr const wchar_t* kPathTracingHitGroupExport   = L"PathTracingHitGroup";
 
         constexpr uint32_t kPathTracingMaterialTextureCount = 1024u;
+        // Must match PT_MAX_LIGHTS in path_tracing_light.hlsli.
+        constexpr uint32_t kPathTracingMaxLightCount         = 32u;
+        // Soft-sun half-angle (degrees). Task 3 makes this configurable.
+        constexpr float kPathTracingDefaultSunHalfAngleDeg   = 0.53f;
+
+        // Light types -- must match PT_LIGHT_* in path_tracing_light.hlsli.
+        constexpr uint32_t kPtLightSky         = 0u;
+        constexpr uint32_t kPtLightDirectional = 1u;
+        constexpr uint32_t kPtLightPoint       = 2u;
 
         bool matrixEquals(const Matrix4x4& lhs, const Matrix4x4& rhs)
         {
@@ -128,6 +139,7 @@ namespace Piccolo
         destroyAccumulationImage();
         destroySkinnedVertexFallbackBuffer();
         destroyFrameDataBuffers();
+        destroyLightBuffers();
 
         m_descriptor_sets.clear();
         m_static_descriptors_written.clear();
@@ -173,9 +185,9 @@ namespace Piccolo
             setupPipelineLayout();
             setupDescriptorSets();
             tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
-            if (!ensureFrameDataBuffers())
+            if (!ensureFrameDataBuffers() || !ensureLightBuffers())
             {
-                logInitializeSkipOnce("failed to create path tracing frame data buffer");
+                logInitializeSkipOnce("failed to create path tracing frame data or light buffer");
                 return;
             }
             if (!setupRayTracingPipeline() || !setupShaderBindingTable())
@@ -243,9 +255,9 @@ namespace Piccolo
         {
             setupDescriptorSets();
         }
-        if (!ensureFrameDataBuffers() || !ensureAccumulationImage())
+        if (!ensureFrameDataBuffers() || !ensureLightBuffers() || !ensureAccumulationImage())
         {
-            logDispatchFailureOnce("failed to ensure frame data or accumulation image");
+            logDispatchFailureOnce("failed to ensure frame data, light buffer, or accumulation image");
             return false;
         }
         if (!setupRayTracingPipeline() || !setupShaderBindingTable())
@@ -384,7 +396,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[14] {};
+        RHIDescriptorSetLayoutBinding bindings[15] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -454,10 +466,15 @@ namespace Piccolo
         bindings[12].descriptorCount = 1;
         bindings[12].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR | RHI_SHADER_STAGE_MISS_BIT_KHR | RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-        bindings[13].binding         = 1036;  // t1036: g_skinned_vertices
+        bindings[13].binding         = 1035;  // t1035: g_lights (unified light buffer)
         bindings[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[13].descriptorCount = 1;
-        bindings[13].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        bindings[13].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+        bindings[14].binding         = 1036;  // t1036: g_skinned_vertices
+        bindings[14].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[14].descriptorCount = 1;
+        bindings[14].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -581,6 +598,155 @@ namespace Piccolo
         m_frame_data_memories.clear();
     }
 
+    bool PathTracingPass::ensureLightBuffers()
+    {
+        if (m_rhi == nullptr)
+        {
+            return false;
+        }
+
+        const uint32_t frame_count = m_rhi->getMaxFramesInFlight();
+        if (m_light_buffers.size() == frame_count && m_light_memories.size() == frame_count)
+        {
+            return m_light_buffers[0] != nullptr && m_light_memories[0] != nullptr;
+        }
+
+        destroyLightBuffers();
+        m_light_buffers.resize(frame_count, nullptr);
+        m_light_memories.resize(frame_count, nullptr);
+
+        const size_t buffer_size = static_cast<size_t>(kPathTracingMaxLightCount) * sizeof(PathTracingLightGpu);
+        for (uint32_t frame_index = 0; frame_index < frame_count; ++frame_index)
+        {
+            m_rhi->createBuffer(buffer_size,
+                                RHI_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT | RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                m_light_buffers[frame_index],
+                                m_light_memories[frame_index]);
+            if (m_light_buffers[frame_index] == nullptr || m_light_memories[frame_index] == nullptr)
+            {
+                return false;
+            }
+
+            char debug_name[64];
+            std::snprintf(debug_name, sizeof(debug_name), "PathTracing.lights[%u]", frame_index);
+            m_rhi->setDebugObjectName(m_light_buffers[frame_index], debug_name);
+        }
+        return true;
+    }
+
+    void PathTracingPass::destroyLightBuffers()
+    {
+        if (m_rhi == nullptr)
+        {
+            m_light_buffers.clear();
+            m_light_memories.clear();
+            return;
+        }
+        for (RHIBuffer* buffer : m_light_buffers)
+        {
+            if (buffer != nullptr)
+            {
+                m_rhi->destroyBuffer(buffer);
+            }
+        }
+        for (RHIDeviceMemory* memory : m_light_memories)
+        {
+            if (memory != nullptr)
+            {
+                m_rhi->freeMemory(memory);
+            }
+        }
+        m_light_buffers.clear();
+        m_light_memories.clear();
+    }
+
+    bool PathTracingPass::buildLightBuffer(uint32_t  frame_index,
+                                           uint32_t& light_count,
+                                           uint32_t& infinite_light_count,
+                                           bool&     lights_changed)
+    {
+        light_count          = 0;
+        infinite_light_count = 0;
+        lights_changed       = false;
+
+        if (m_rhi == nullptr || m_render_resource_impl == nullptr)
+        {
+            return false;
+        }
+        if (frame_index >= m_light_buffers.size() || frame_index >= m_light_memories.size())
+        {
+            return false;
+        }
+        RHIDeviceMemory* light_memory = m_light_memories[frame_index];
+        if (light_memory == nullptr)
+        {
+            return false;
+        }
+
+        const MeshPerframeStorageBufferObject& raster_frame =
+            m_render_resource_impl->m_mesh_perframe_storage_buffer_object;
+
+        // Build the unified light list: infinite (directional) first, then points.
+        std::vector<PathTracingLightGpu> lights;
+        lights.reserve(1u + raster_frame.point_light_num);
+
+        {
+            PathTracingLightGpu dir {};
+            dir.type      = kPtLightDirectional;
+            dir.direction = raster_frame.scene_directional_light.direction;
+            dir.color     = raster_frame.scene_directional_light.color;
+            // Soft-sun half-angle (sin). Default until Task 3 makes it configurable.
+            const float half_angle_rad = kPathTracingDefaultSunHalfAngleDeg * (3.14159265358979f / 180.0f);
+            dir.param0 = std::sin(half_angle_rad);
+            lights.push_back(dir);
+        }
+        infinite_light_count = static_cast<uint32_t>(lights.size());
+
+        const uint32_t point_count = std::min(raster_frame.point_light_num, s_max_point_light_count);
+        for (uint32_t i = 0; i < point_count; ++i)
+        {
+            const RenderScenePointLight& pl = raster_frame.scene_point_lights[i];
+            PathTracingLightGpu p {};
+            p.type     = kPtLightPoint;
+            p.position = pl.position;
+            p.color    = pl.intensity;
+            p.param0   = 0.0f; // delta point light (radius 0)
+            lights.push_back(p);
+        }
+        light_count = static_cast<uint32_t>(lights.size());
+
+        // Detect changes -> reset accumulation (plan Task 2 Step 6).
+        if (m_last_lights.size() != lights.size() ||
+            std::memcmp(m_last_lights.data(),
+                        lights.data(),
+                        lights.size() * sizeof(PathTracingLightGpu)) != 0)
+        {
+            lights_changed = true;
+            m_last_lights = lights;
+        }
+
+        // Upload (pad to kPathTracingMaxLightCount with zeroed entries).
+        std::vector<PathTracingLightGpu> upload_lights(kPathTracingMaxLightCount);
+        const uint32_t copy_count = std::min(light_count, kPathTracingMaxLightCount);
+        for (uint32_t i = 0; i < copy_count; ++i)
+        {
+            upload_lights[i] = lights[i];
+        }
+
+        void* mapped_data = nullptr;
+        const size_t upload_bytes = upload_lights.size() * sizeof(PathTracingLightGpu);
+        if (!m_rhi->mapMemory(light_memory, 0, upload_bytes, 0, &mapped_data) || mapped_data == nullptr)
+        {
+            return false;
+        }
+        std::memcpy(mapped_data, upload_lights.data(), upload_bytes);
+        m_rhi->unmapMemory(light_memory);
+
+        light_count = copy_count; // cap to the buffer size the shader sees
+        return true;
+    }
+
     bool PathTracingPass::setupRayTracingPipeline()
     {
         if (m_ray_tracing_pipeline != nullptr)
@@ -612,6 +778,7 @@ namespace Piccolo
         create_info.shader_library.bytecode_size              = bytecode.size();
         create_info.shader_library.raygen_export              = kPathTracingRayGenExport;
         create_info.shader_library.miss_export                = kPathTracingMissExport;
+        create_info.shader_library.shadow_miss_export         = kPathTracingShadowMissExport;
         create_info.shader_library.closest_hit_export         = kPathTracingClosestHitExport;
         create_info.shader_library.hit_group_export           = kPathTracingHitGroupExport;
         if (!m_rhi->createRayTracingPipeline(&create_info, m_ray_tracing_pipeline) ||
@@ -639,6 +806,7 @@ namespace Piccolo
         create_info.ray_tracing_pipeline = m_ray_tracing_pipeline;
         create_info.raygen_export        = kPathTracingRayGenExport;
         create_info.miss_export          = kPathTracingMissExport;
+        create_info.shadow_miss_export   = kPathTracingShadowMissExport;
         create_info.hit_group_export     = kPathTracingHitGroupExport;
         return m_rhi->createShaderBindingTable(&create_info, m_shader_binding_table) &&
                m_shader_binding_table != nullptr;
@@ -782,9 +950,23 @@ namespace Piccolo
             }
         }
 
+        // Build the unified light buffer; reset accumulation when light params
+        // change (plan Task 2 Step 6). Done before uploading FrameData so the
+        // reset sample_index + light counts are consistent this frame.
+        uint32_t light_count          = 0;
+        uint32_t infinite_light_count = 0;
+        bool     lights_changed       = false;
+        if (!buildLightBuffer(frame_index, light_count, infinite_light_count, lights_changed))
+        {
+            return false;
+        }
+        if (lights_changed)
+        {
+            m_sample_index = 0;
+            resetting = true;
+        }
+
         FrameData frame_data {};
-        const MeshPerframeStorageBufferObject& raster_frame =
-            m_render_resource_impl->m_mesh_perframe_storage_buffer_object;
         // Raygen maps top-left pixel → NDC y = -1 (no UV Y flip). Y-up backends
         // (D3D12) need the inverse converted into that NDC space; Y-down (Vulkan)
         // already matches.
@@ -801,14 +983,8 @@ namespace Piccolo
         frame_data.extent[1]            = extent.height;
         frame_data.instance_count       = instance_count;
         frame_data.reset_accumulation   = resetting ? 1u : 0u;
-        frame_data.ambient_light        = Vector4(raster_frame.ambient_light, 0.0f);
-        frame_data.scene_directional_light = raster_frame.scene_directional_light;
-        frame_data.directional_light_proj_view = raster_frame.directional_light_proj_view;
-        frame_data.point_light_count = std::min(raster_frame.point_light_num, s_max_point_light_count);
-        for (uint32_t light_index = 0; light_index < frame_data.point_light_count; ++light_index)
-        {
-            frame_data.scene_point_lights[light_index] = raster_frame.scene_point_lights[light_index];
-        }
+        frame_data.light_count          = light_count;
+        frame_data.infinite_light_count = infinite_light_count;
 
         void* mapped_data = nullptr;
         if (!m_rhi->mapMemory(frame_data_memory, 0, sizeof(FrameData), 0, &mapped_data) ||
@@ -831,6 +1007,8 @@ namespace Piccolo
             m_accumulation_image_view == nullptr ||
             frame_index >= m_frame_data_buffers.size() ||
             m_frame_data_buffers[frame_index] == nullptr ||
+            frame_index >= m_light_buffers.size() ||
+            m_light_buffers[frame_index] == nullptr ||
             m_render_resource_impl == nullptr ||
             m_render_resource_impl->getPathTracingVertexBuffer() == nullptr ||
             m_render_resource_impl->getPathTracingIndexBuffer() == nullptr ||
@@ -954,6 +1132,11 @@ namespace Piccolo
         skinned_vertex_buffer_info.offset = 0;
         skinned_vertex_buffer_info.range  = RHI_WHOLE_SIZE;
 
+        RHIDescriptorBufferInfo light_buffer_info {};
+        light_buffer_info.buffer = m_light_buffers[frame_index];
+        light_buffer_info.offset = 0;
+        light_buffer_info.range  = RHI_WHOLE_SIZE;
+
         RHIAccelerationStructure* top_level_as = m_top_level_as;
         RHIWriteDescriptorSetAccelerationStructure acceleration_structure_info {};
         acceleration_structure_info.accelerationStructureCount = 1;
@@ -970,7 +1153,7 @@ namespace Piccolo
         specular_info.sampler     = m_linear_sampler;
 
         RHIDescriptorSet* descriptor_set = m_descriptor_sets[frame_index];
-        RHIWriteDescriptorSet writes[14] {};
+        RHIWriteDescriptorSet writes[15] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -1064,17 +1247,24 @@ namespace Piccolo
 
         writes[13].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[13].dstSet          = descriptor_set;
-        writes[13].dstBinding      = 1036;  // t1036: g_skinned_vertices
+        writes[13].dstBinding      = 1035;  // t1035: g_lights
         writes[13].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[13].descriptorCount = 1;
-        writes[13].pBufferInfo     = &skinned_vertex_buffer_info;
+        writes[13].pBufferInfo     = &light_buffer_info;
+
+        writes[14].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[14].dstSet          = descriptor_set;
+        writes[14].dstBinding      = 1036;  // t1036: g_skinned_vertices
+        writes[14].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[14].descriptorCount = 1;
+        writes[14].pBufferInfo     = &skinned_vertex_buffer_info;
 
         // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
         // t11=texture_array); dynamic descriptors every frame.
         if (m_static_descriptors_written[frame_index])
         {
             // Compact: write only dynamic bindings (skip static)
-            RHIWriteDescriptorSet dynamic_writes[9];
+            RHIWriteDescriptorSet dynamic_writes[10];
             uint32_t j = 0;
             for (uint32_t i = 0; i < std::size(writes); ++i)
             {

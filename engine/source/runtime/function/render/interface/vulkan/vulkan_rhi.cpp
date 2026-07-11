@@ -3660,22 +3660,39 @@ namespace Piccolo
         const std::string raygen_name = narrow(create_info->shader_library.raygen_export);
         const std::string miss_name   = narrow(create_info->shader_library.miss_export);
         const std::string chit_name   = narrow(create_info->shader_library.closest_hit_export);
+        const bool        has_shadow_miss = create_info->shader_library.shadow_miss_export != nullptr;
+        const std::string shadow_miss_name = has_shadow_miss
+                                                ? narrow(create_info->shader_library.shadow_miss_export)
+                                                : std::string();
 
-        VkPipelineShaderStageCreateInfo stages[3] {};
-        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[0].stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        stages[0].module = shader_module;
-        stages[0].pName  = raygen_name.c_str();
-        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[1].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
-        stages[1].module = shader_module;
-        stages[1].pName  = miss_name.c_str();
-        stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[2].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-        stages[2].module = shader_module;
-        stages[2].pName  = chit_name.c_str();
+        VkPipelineShaderStageCreateInfo stages[4] {};
+        uint32_t stage_count = 0;
+        stages[stage_count].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stage_count].stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        stages[stage_count].module = shader_module;
+        stages[stage_count].pName  = raygen_name.c_str();
+        ++stage_count;
+        stages[stage_count].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stage_count].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
+        stages[stage_count].module = shader_module;
+        stages[stage_count].pName  = miss_name.c_str();
+        ++stage_count;
+        if (has_shadow_miss)
+        {
+            stages[stage_count].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[stage_count].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
+            stages[stage_count].module = shader_module;
+            stages[stage_count].pName  = shadow_miss_name.c_str();
+            ++stage_count;
+        }
+        const uint32_t chit_stage_index = stage_count; // closest-hit stage sits after the miss stage(s)
+        stages[stage_count].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stage_count].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        stages[stage_count].module = shader_module;
+        stages[stage_count].pName  = chit_name.c_str();
+        ++stage_count;
 
-        VkRayTracingShaderGroupCreateInfoKHR groups[3] {};
+        VkRayTracingShaderGroupCreateInfoKHR groups[4] {};
         for (auto& group : groups)
         {
             group.sType              = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
@@ -3684,17 +3701,27 @@ namespace Piccolo
             group.anyHitShader       = VK_SHADER_UNUSED_KHR;
             group.intersectionShader = VK_SHADER_UNUSED_KHR;
         }
-        groups[0].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        groups[0].generalShader = 0; // raygen
-        groups[1].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        groups[1].generalShader = 1; // miss
-        groups[2].type            = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-        groups[2].closestHitShader = 2; // closest hit
+        uint32_t group_count = 0;
+        groups[group_count].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[group_count].generalShader = 0; // raygen
+        ++group_count;
+        groups[group_count].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        groups[group_count].generalShader = 1; // miss
+        ++group_count;
+        if (has_shadow_miss)
+        {
+            groups[group_count].type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            groups[group_count].generalShader = 2; // shadow miss
+            ++group_count;
+        }
+        groups[group_count].type            = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        groups[group_count].closestHitShader = chit_stage_index; // closest hit
+        ++group_count;
 
         VkRayTracingPipelineCreateInfoKHR pipeline_info {VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
-        pipeline_info.stageCount = 3;
+        pipeline_info.stageCount = stage_count;
         pipeline_info.pStages    = stages;
-        pipeline_info.groupCount = 3;
+        pipeline_info.groupCount = group_count;
         pipeline_info.pGroups    = groups;
         pipeline_info.maxPipelineRayRecursionDepth =
             (std::min)(create_info->max_recursion_depth, m_ray_tracing_pipeline_properties.maxRayRecursionDepth);
@@ -3730,7 +3757,10 @@ namespace Piccolo
         const uint32_t handle_alignment  = m_ray_tracing_pipeline_properties.shaderGroupHandleAlignment;
         const uint32_t base_alignment    = m_ray_tracing_pipeline_properties.shaderGroupBaseAlignment;
         const uint32_t handle_aligned    = static_cast<uint32_t>(alignUpSize(handle_size, handle_alignment));
-        const uint32_t group_count       = 3;
+        // Group order in the pipeline: [0]=raygen, [1]=miss, [2]=shadow_miss (optional), [last]=hit.
+        const bool     has_shadow_miss = create_info->shadow_miss_export != nullptr;
+        const uint32_t miss_count      = has_shadow_miss ? 2u : 1u;
+        const uint32_t group_count     = 1u + miss_count + 1u; // raygen + misses + hit
 
         std::vector<uint8_t> handles(static_cast<size_t>(handle_size) * group_count);
         if (_vkGetRayTracingShaderGroupHandles(
@@ -3740,12 +3770,14 @@ namespace Piccolo
             return false;
         }
 
-        // One record per region (raygen/miss/hit), each region base-aligned; raygen size must equal stride.
+        // Raygen region holds one record (size must equal stride); the miss region
+        // holds one record per miss shader; the hit region holds one record. Each
+        // region is base-aligned.
         const VkDeviceSize raygen_stride = alignUpSize(handle_aligned, base_alignment);
         const VkDeviceSize raygen_size   = raygen_stride;
         const VkDeviceSize miss_offset   = raygen_size;
         const VkDeviceSize miss_stride   = handle_aligned;
-        const VkDeviceSize miss_size     = alignUpSize(miss_stride, base_alignment);
+        const VkDeviceSize miss_size     = alignUpSize(miss_count * miss_stride, base_alignment);
         const VkDeviceSize hit_offset    = miss_offset + miss_size;
         const VkDeviceSize hit_stride    = handle_aligned;
         const VkDeviceSize hit_size      = alignUpSize(hit_stride, base_alignment);
@@ -3763,9 +3795,14 @@ namespace Piccolo
         void* mapped = nullptr;
         vkMapMemory(m_device, impl->memory, 0, total_size, 0, &mapped);
         auto* dst = static_cast<uint8_t*>(mapped);
-        std::memcpy(dst, handles.data() + 0 * handle_size, handle_size);                        // raygen
-        std::memcpy(dst + miss_offset, handles.data() + 1 * handle_size, handle_size);          // miss
-        std::memcpy(dst + hit_offset, handles.data() + 2 * handle_size, handle_size);           // hit
+        std::memcpy(dst, handles.data() + 0 * handle_size, handle_size);                        // raygen (group 0)
+        std::memcpy(dst + miss_offset, handles.data() + 1 * handle_size, handle_size);          // miss (group 1)
+        if (miss_count == 2u)
+        {
+            std::memcpy(dst + miss_offset + miss_stride, handles.data() + 2 * handle_size, handle_size); // shadow miss (group 2)
+        }
+        const uint32_t hit_group_index = 1u + miss_count; // hit group follows the misses
+        std::memcpy(dst + hit_offset, handles.data() + static_cast<size_t>(hit_group_index) * handle_size, handle_size); // hit
         vkUnmapMemory(m_device, impl->memory);
 
         const VkDeviceAddress base_address = getBufferDeviceAddress(impl->buffer);

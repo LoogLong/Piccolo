@@ -130,41 +130,37 @@ float3 SampleSkyRadiance(float3 direction)
     return g_specular_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
 }
 
-// One bounce of the path. Returns true to continue with another bounce, false
-// to terminate. Task 1 placeholder: a single flat-shaded bounce (emissive +
-// small albedo term) so the scene is visible with correct orientation. Task 2
-// adds NEE, Task 3 adds BSDF sampling + MIS + RR.
-bool PathTracingStep(inout PathState path)
+// Physical Cook-Torrance BSDF eval (single Fresnel). Does NOT reuse the shared
+// BRDF() wrapper from common.hlsli, which applies Fresnel twice for dielectrics
+// (kd = (1-f), spec = d*f*g, return kd*diffuse + (1-kd)*spec -- for metallic=0
+// that multiplies spec by f again). Here specular uses f once and diffuse uses
+// (1-f): the correct single-F form. Reuses only the D_GGX / G_SchlicksmithGGX /
+// F_Schlick primitives from common.hlsli (plan Task 3 Step 0).
+// `wo` is the view direction (toward the camera, = -ray direction).
+float3 EvalBSDF(PathTracingSurface s, float3 wo, float3 wi)
 {
-    PathTracingHitPayload payload;
-    payload.world_normal   = float3(0.0f, 0.0f, 0.0f);
-    payload.hit_t          = 0.0f;
-    payload.texcoord       = float2(0.0f, 0.0f);
-    payload.instance_index = 0u;
-    payload.flags          = 0u;
-
-    RayDesc ray;
-    ray.Origin    = path.origin;
-    ray.Direction = path.direction;
-    ray.TMin      = 0.001f;
-    ray.TMax      = 100000.0f;
-
-    TraceRay(g_scene_tlas, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
-
-    if ((payload.flags & PT_HIT_FLAG) == 0u)
+    const float3 n      = s.normal;
+    const float  dot_nv = clamp(dot(n, wo), 0.0f, 1.0f);
+    const float  dot_nl = clamp(dot(n, wi), 0.0f, 1.0f);
+    if (dot_nl <= 0.0f || dot_nv <= 0.0f)
     {
-        // Miss: contribute the sky background and stop.
-        path.radiance += path.throughput * SampleSkyRadiance(path.direction);
-        return false;
+        return float3(0.0f, 0.0f, 0.0f);
     }
 
-    const PathTracingSurface surface = LoadHitSurface(payload, path.origin, path.direction);
+    const float3 h       = normalize(wo + wi);
+    const float  dot_nh  = clamp(dot(n, h), 0.0f, 1.0f);
+    const float  dot_hl  = clamp(dot(h, wi), 0.0f, 1.0f); // Fresnel cosine
 
-    // Task 1 placeholder shading: emissive + a small constant albedo term so
-    // geometry reads without a lighting model. Real direct/indirect lighting
-    // arrives in Task 2 (NEE) and Task 3 (BSDF + MIS + RR).
-    path.radiance += path.throughput * (surface.emissive + surface.base_color * 0.1f);
-    return false;
+    const float  alpha = max(s.roughness, 0.05f);
+    const float  d     = D_GGX(dot_nh, alpha);
+    const float  g     = G_SchlicksmithGGX(dot_nl, dot_nv, alpha);
+    const float3 f     = F_Schlick(dot_hl, s.f0);
+
+    const float3 specular = d * f * g / (4.0f * dot_nl * dot_nv + 0.001f);
+    const float3 kd       = (1.0f - f) * (1.0f - s.metallic);
+    const float3 diffuse  = kd * s.base_color / PICCOLO_PI;
+    return diffuse + specular;
 }
 
 #endif
+

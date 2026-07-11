@@ -68,6 +68,17 @@ namespace Piccolo
 
     private:
 
+        // Matches the shader PathTracingLight (48 bytes: 3 registers of 16B).
+        struct PathTracingLightGpu
+        {
+            Vector3  position {};
+            float    param0 {0.0f};
+            Vector3  direction {};
+            float    param1 {0.0f};
+            Vector3  color {};
+            uint32_t type {0u};
+        };
+
         struct FrameData
 
         {
@@ -84,17 +95,14 @@ namespace Piccolo
 
             uint32_t  reset_accumulation {0};
 
-            Vector4   ambient_light {0.02f, 0.02f, 0.02f, 0.0f};
+            // Lights live in a separate StructuredBuffer<PathTracingLight>
+            // (g_lights, binding 1035); these counts index it.
 
-            RenderScenePointLight scene_point_lights[s_max_point_light_count] {};
+            uint32_t  light_count {0};
 
-            RenderSceneDirectionalLight scene_directional_light {};
+            uint32_t  infinite_light_count {0};
 
-            Matrix4x4 directional_light_proj_view {Matrix4x4::IDENTITY};
-
-            uint32_t point_light_count {0};
-
-            uint32_t _padding_light[3] {0, 0, 0};
+            uint32_t  _padding_core[2] {0, 0};
 
         };
 
@@ -113,6 +121,18 @@ namespace Piccolo
         bool ensureFrameDataBuffers();
 
         void destroyFrameDataBuffers();
+
+        // Unified light buffer (g_lights). Per-frame buffers, like FrameData, so
+        // frames in flight do not race the CPU upload. buildLightBuffer also
+        // detects light-parameter changes and signals reset (plan Task 2 Step 6).
+        bool ensureLightBuffers();
+
+        void destroyLightBuffers();
+
+        bool buildLightBuffer(uint32_t  frame_index,
+                              uint32_t& light_count,
+                              uint32_t& infinite_light_count,
+                              bool&     lights_changed);
 
         bool ensureAccumulationImage();
 
@@ -179,6 +199,13 @@ namespace Piccolo
         std::vector<RHIBuffer*>       m_frame_data_buffers;
 
         std::vector<RHIDeviceMemory*> m_frame_data_memories;
+
+        std::vector<RHIBuffer*>           m_light_buffers;
+
+        std::vector<RHIDeviceMemory*>     m_light_memories;
+
+        // Last uploaded light set; used to detect changes and reset accumulation.
+        std::vector<PathTracingLightGpu>  m_last_lights;
 
 
 

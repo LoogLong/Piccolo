@@ -9,16 +9,16 @@ struct PathTracingFrameData
 {
     row_major float4x4 proj_view_matrix_inv;
     float3 camera_position;
-    uint sample_index;
-    uint2 extent;
-    uint instance_count;
-    uint reset_accumulation;
-    float4 ambient_light;
-    PointLight scene_point_lights[M_MAX_POINT_LIGHT_COUNT];
-    DirectionalLight scene_directional_light;
-    row_major float4x4 directional_light_proj_view;
-    uint point_light_count;
-    uint3 _padding_light;
+    uint   sample_index;
+    uint2  extent;
+    uint   instance_count;
+    uint   reset_accumulation;
+    // Lights live in a separate StructuredBuffer<PathTracingLight> (g_lights);
+    // these counts index it. ambient_light / scattered point+directional fields
+    // and the dead directional_light_proj_view were removed (plan Task 2 Step 4).
+    uint   light_count;          // total lights in g_lights
+    uint   infinite_light_count; // directional + sky (the first N entries)
+    uint2  _padding_core;
 };
 
 struct PathTracingVertexData

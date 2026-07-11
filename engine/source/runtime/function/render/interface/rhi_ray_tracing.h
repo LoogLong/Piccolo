@@ -73,6 +73,9 @@ namespace Piccolo
         const wchar_t*       miss_export {nullptr};
         const wchar_t*       closest_hit_export {nullptr};
         const wchar_t*       hit_group_export {nullptr};
+        // Optional second miss shader (e.g. a shadow-visibility miss with its own
+        // payload type). When null the pipeline has a single miss shader.
+        const wchar_t*       shadow_miss_export {nullptr};
     };
 
     struct RHIRayTracingPipelineCreateInfo
@@ -88,6 +91,9 @@ namespace Piccolo
         const wchar_t*  raygen_export {nullptr};
         const wchar_t*  miss_export {nullptr};
         const wchar_t*  hit_group_export {nullptr};
+        // Optional second miss shader; must match shadow_miss_export passed to
+        // createRayTracingPipeline. When null the SBT has a single miss record.
+        const wchar_t*  shadow_miss_export {nullptr};
     };
 
     struct RHIRayTracingDispatchDesc
