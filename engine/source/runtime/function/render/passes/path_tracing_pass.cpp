@@ -347,7 +347,27 @@ namespace Piccolo
         dispatch_desc.width                = m_rhi->getSwapchainInfo().extent.width;
         dispatch_desc.height               = m_rhi->getSwapchainInfo().extent.height;
         dispatch_desc.depth                = 1;
-        m_rhi->cmdTraceRays(command_buffer, &dispatch_desc);
+
+        // Plan Task 3 Step 4 / Phase 2.1: dispatch N samples per frame so
+        // a still camera converges faster at the cost of FPS. The
+        // accumulation math in the kernel is sample_index-agnostic; we just
+        // need to re-upload the FrameData uniform with the new sample_index
+        // between iterations so the per-pixel RNG seeds differ.
+        const uint32_t samples_per_frame = std::max(1u, m_samples_per_frame);
+        for (uint32_t s = 0; s < samples_per_frame; ++s)
+        {
+            if (s > 0)
+            {
+                ++m_sample_index;
+                if (!updateFrameData(m_tlas_instance_count))
+                {
+                    m_rhi->popEvent(command_buffer);
+                    logDispatchFailureOnce("failed to update path tracing frame data (sample-loop)");
+                    return false;
+                }
+            }
+            m_rhi->cmdTraceRays(command_buffer, &dispatch_desc);
+        }
         m_rhi->popEvent(command_buffer);
 
         m_rhi->pushEvent(command_buffer, "PathTracing.postTraceBarriers", debug_color);
@@ -1022,15 +1042,19 @@ namespace Piccolo
         // least 1 (one bounce = primary ray); clamp silently.
         uint32_t max_bounces = 8u;
         uint32_t max_path_intensity = 100u;
+        uint32_t samples_per_frame = 1u;
         if (auto cfg = g_runtime_global_context.m_config_manager)
         {
             max_bounces = cfg->getPathTracingMaxBounces();
             max_path_intensity = cfg->getPathTracingMaxPathIntensity();
+            samples_per_frame = cfg->getPathTracingMaxSamplesPerFrame();
         }
         if (max_bounces == 0u) max_bounces = 8u;
         if (max_path_intensity == 0u) max_path_intensity = 100u;
+        if (samples_per_frame == 0u) samples_per_frame = 1u;
         frame_data.max_bounces = max_bounces;
         frame_data.max_path_intensity = max_path_intensity;
+        m_samples_per_frame = samples_per_frame;
 
         // Plan Task 5 diagnostics: print tunable values once so the user can
         // confirm the config was actually read. (The render_sample_index is
@@ -1039,8 +1063,9 @@ namespace Piccolo
         {
             m_diagnostics_logged = true;
             LOG_INFO("PathTracing diagnostics: max_bounces={}, light_count={},"
-                     " infinite_light_count={}, max_path_intensity={}",
-                     max_bounces, light_count, infinite_light_count, max_path_intensity);
+                     " infinite_light_count={}, max_path_intensity={}, samples_per_frame={}",
+                     max_bounces, light_count, infinite_light_count,
+                     max_path_intensity, samples_per_frame);
         }
 
         void* mapped_data = nullptr;

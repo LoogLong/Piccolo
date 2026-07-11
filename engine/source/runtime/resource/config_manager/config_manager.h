@@ -34,6 +34,11 @@ namespace Piccolo
         // path tracer degrades gracefully when no config key is present.
         uint32_t            getPathTracingMaxBounces() const { return m_path_tracing_max_bounces; }
         uint32_t            getPathTracingMaxPathIntensity() const { return m_path_tracing_max_path_intensity; }
+        // Paths traced per dispatch (plan Task 3 Step 4 / Phase 2.1 of the
+        // optimization plan). Default 1 = one sample per frame. Set to >1
+        // to compress more samples per second (FPS drops proportionally;
+        // useful for offline-quality snapshots from a still viewpoint).
+        uint32_t            getPathTracingMaxSamplesPerFrame() const { return m_path_tracing_max_samples_per_frame; }
         float               getPathTracingDirectionalAngleDeg() const { return m_path_tracing_directional_angle_deg; }
 
     private:
@@ -60,6 +65,8 @@ namespace Piccolo
         // soft-sun default in path_tracing_pass.cpp.
         uint32_t    m_path_tracing_max_bounces {8u};
         uint32_t    m_path_tracing_max_path_intensity {100u};
+        // spp per dispatch (= per frame in current sequential driver).
+        uint32_t    m_path_tracing_max_samples_per_frame {1u};
         float       m_path_tracing_directional_angle_deg {0.53f};
     };
 } // namespace Piccolo

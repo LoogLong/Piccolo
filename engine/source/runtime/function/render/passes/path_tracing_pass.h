@@ -244,6 +244,11 @@ namespace Piccolo
 
         uint32_t  m_sample_index {0};
 
+        // Cached spp/frame read from config (PathTracingMaxSamplesPerFrame).
+        // Default 1; can be raised for offline-quality snapshots (FPS
+        // drops proportionally, but a still camera converges faster).
+        uint32_t  m_samples_per_frame {1u};
+
         // Plan Task 5 diagnostics: prints path-tracing config once per process.
         bool      m_diagnostics_logged {false};
 

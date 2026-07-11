@@ -129,6 +129,10 @@ namespace Piccolo
                 {
                     m_path_tracing_max_path_intensity = toUint(value, m_path_tracing_max_path_intensity);
                 }
+                else if (name == "PathTracingMaxSamplesPerFrame")
+                {
+                    m_path_tracing_max_samples_per_frame = toUint(value, m_path_tracing_max_samples_per_frame);
+                }
                 else if (name == "PathTracingDirectionalAngleDeg")
                 {
                     m_path_tracing_directional_angle_deg = toFloat(value, m_path_tracing_directional_angle_deg);
