@@ -289,8 +289,17 @@ float3 EstimateDirectLight(PathTracingSurface s, float3 wo, inout RNG rng)
         // Delta lights (point, directional in the limit) get pdf_light = 1 or
         // 1/Omega, while the BSDF pdf for the same wi is bounded by shape
         // factors -- the MIS naturally upweights the dominant strategy.
+        //
+        // §4.4 of plans/2026-07-12-path-tracing-future.md: skip when BSDF
+        // pdf is effectively zero for this lobe pair (e.g. transmission lobe
+        // queried with a wi on the reflection side). Avoids the cost of
+        // EvalBSDF / shadow ray / MIS weight when the contribution is zero.
         uint   lobe;
         float  pdf_bsdf = BRDFPdf(s, wo, wi, lobe);
+        if (pdf_bsdf <= 1e-6f)
+        {
+            continue;
+        }
         float  w_light  = MISWeightPower(pdf, pdf_bsdf);
 
         Lo += w_light * f * Li * NdotL / pdf;
