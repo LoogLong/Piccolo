@@ -7,6 +7,45 @@
 - `RenderSceneMode=PathTracing` 需同时满足硬件 RT 能力与已构建的 path tracing shader bytecode
 - Windows 主路径部署配置默认 `RenderBackendAllowFallback=false`
 
+## 路径追踪正确光照重构（2026-07, M0–M3）
+
+`Docs/plans/2026-07-10-path-tracing-correct-lighting.md` 的实施落地。状态机：
+
+- **TASK 1 / M0 — raygen 迭代骨架**：把路径循环从 closest-hit 的递归搬到 raygen 的 `for (bounce)` 中，CHS 变薄（仅记录命中），管线递归深度 `6 -> 1`。端到端 PT（init + dispatch + render）在 D3D12 + Vulkan 上均通过。
+- **TASK 2 / M1 — 统一光源 + NEE**：用 `StructuredBuffer<PathTracingLight>` 取代了散落在 `PathTracingFrameData` 的 point/directional/ambient 字段，新增独立 `PathShadowPayload` miss shader（自带 SBT index 1），点光不再穿墙。本计划外补充已在 `rhi_ray_tracing.h`/`d3d12_rhi_ray_tracing.cpp`/`vulkan_rhi.cpp` 中扩展 `shadow_miss_export` 与第二个 miss 槽；`g_lights` register `t1035`（避开 t11..t1034 的 1024 项纹理数组）。
+- **TASK 3 / M2 — BSDF 采样 + MIS + RR + `max_bounces`**：从零实现 GGX NDF 采样 + 余弦半球的 lobe 选择 + `MISWeightPower(pdf, otherPdf)`；内核变成完整 throughput 路径积分器（hit: emissive + NEE + BSDF），RR 在 ≥3 弹时启用以避免早期偏差；`max_bounces` 提升为 `FrameData` uniform；四种 ini 文件协同添加 `PathTracingMaxBounces / PathTracingMaxPathIntensity / PathTracingDirectionalAngleDeg`；新增 `toUint` 整数解析（`ConfigManager` 此前会静默丢弃未知键）。
+- **TASK 5 — 诊断 / 文档**：PT 初始化时打印一次 `max_bounces / light_count / infinite_light_count` 以验证四 ini 协同生效。
+
+### 与 deferred 的结构性差异（验收必须知道）
+
+| 维度 | Deferred（光栅） | PT | 原因 |
+|------|------------------|----|----|
+| 法线贴图 | normal map → GBuffer 采样 | PT **不采样** normal map | 当前 `LoadHitSurface` 只采 base/mr/emissive |
+| Ambient occlusion | SSAO 注入 GBuffer | PT 不具备 AO | 同上 |
+| 高光 IBL | `g_specular_texture` 反射 LOD | PT 不采样 | 当前过采样仅取 LOD 0 作天空背景，无 RL 反射 |
+| Dielectric F0 | `0.04 * specular`（`specular` 由用户/材质控制） | `0.04` 常数 | 与 `mesh.frag.hlsl` (`0.04`) 对齐；跨 shader 不一致 (`deferred_lighting` 用 `0.08 * specular`) 已是已知问题，未在本计划修正 |
+| 阴影 | 方向光 shadow map；点光 6 面 cubemap | 逐像素 shadow ray | 物理正确 |
+
+### 已知注释 / 未做（plan §1 列出，未在此 PR）
+
+- 法线贴图 / occlusion / specular IBL：PT 完全缺失，差异是结构性而非 bug；
+- 体素 / 体渲染 / 体积散射：未做；
+- Light grid / path compaction：未做；
+- Emissive mesh 面积光：未做；`radius=0` 点光按 delta 处理，`radius>0` 球面面积光已为 M2 预留但暂未启用；
+- Substrate / 材质分层：未做。
+
+### 配置（所有 PT mode 生效）
+
+四种 ini 同步更新（缺失键会静默回退 C++ 默认值）：
+
+```ini
+PathTracingMaxBounces=8
+PathTracingMaxPathIntensity=100
+PathTracingDirectionalAngleDeg=0.53
+```
+
+渲染流水线 `RenderSceneMode=PathTracing`（两个后端均经过端到端验证，无 validation 错误，无崩溃）；具体画面与噪声收敛需在 RT 硬件上人工对比 sample_index≥100 的静止帧验收。
+
 ## D3D12 后端选择与回退（2026-06）
 
 ### 已完成

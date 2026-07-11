@@ -24,13 +24,14 @@ SamplerState g_linear_sampler : register(s12, space0);
 // them (e.g. g_frame_data, g_instances, g_materials, g_texture_array).
 #include "path_tracing_core.hlsli"
 
-// Unified lights + next-event estimation (declares g_lights at t13).
+// Unified lights + next-event estimation (declares g_lights at t1035).
+// Note: light.hlsli itself includes sampling.hlsli, so BRDFPdf /
+// MISWeightPower are available here without a second include.
 #include "path_tracing_light.hlsli"
 
-// One bounce of the path. Returns true to continue, false to terminate.
-// Task 2: emissive + direct lighting (NEE) with shadow rays; no indirect yet
-// (Task 3 adds BSDF sampling + MIS + RR). Defined here, after path_tracing_light,
-// so EstimateDirectLight is in scope.
+// One bounce of the path. Returns true to continue with another bounce, false
+// to terminate. Task 3 adds indirect (BSDF sampling + MIS) and Russian roulette
+// (plan Task 3 Step 5/6) on top of the Task 2 NEE kernel.
 bool PathTracingStep(inout PathState path)
 {
     PathTracingHitPayload payload;
@@ -58,10 +59,61 @@ bool PathTracingStep(inout PathState path)
     const PathTracingSurface surface = LoadHitSurface(payload, path.origin, path.direction);
     const float3 wo = -path.direction;
 
-    // Emissive + direct lighting (NEE with shadow rays). Indirect/BSDF/MIS/RR
-    // arrive in Task 3.
+    // Emissive + direct lighting (NEE with shadow rays).
     path.radiance += path.throughput * (surface.emissive + EstimateDirectLight(surface, wo, path.rng));
-    return false; // Task 2: single bounce (no indirect yet).
+
+    // Stop here if we are already at the last permitted bounce (direct-only cap).
+    if ((path.bounce + 1u) >= g_frame_data.max_bounces)
+    {
+        return false;
+    }
+
+    // Indirect: sample BSDF (cosine lobe for diffuse / GGX NDF for specular),
+    // accumulate throughput, and continue the path.
+    float3 wi;
+    float  pdf_bsdf;
+    uint   lobe;
+    SampleBRDF(surface, wo, path.rng, wi, pdf_bsdf, lobe);
+
+    if (pdf_bsdf <= 0.0f)
+    {
+        return false;
+    }
+    const float NdotL = dot(surface.normal, wi);
+    if (NdotL <= 0.0f)
+    {
+        return false;
+    }
+    const float3 f = EvalBSDF(surface, wo, wi);
+    if (dot(f, float3(1.0f, 1.0f, 1.0f)) <= 0.0f)
+    {
+        return false;
+    }
+
+    // Firefly clamp (plan Task 3 Step 6): cap the throughput before RR so that
+    // a bright spike is attenuated to MaxPathIntensity-weighted. Slightly
+    // biased but practical.
+    path.throughput = min(path.throughput, float3(100.0f, 100.0f, 100.0f));
+
+    // Russian roulette (plan Task 3 Step 5): only after the minimum bounces so
+    // early contributions are not biased toward termination. RR is unbiased by
+    // construction -- we always divide by the survival probability.
+    if (path.bounce >= PT_MIN_BOUNCES_BEFORE_RR)
+    {
+        const float max_th = max(path.throughput.r, max(path.throughput.g, path.throughput.b));
+        const float p      = sqrt(saturate(max_th * 0.0625f)); // ~1 at th=16, mild tail
+        if (Rand01(path.rng) >= p)
+        {
+            return false;
+        }
+        path.throughput *= 1.0f / max(p, 1e-6f);
+    }
+
+    path.throughput *= f * NdotL / pdf_bsdf;
+    path.origin       = surface.position + surface.normal * 0.001f;
+    path.direction    = normalize(wi);
+    path.bounce      += 1u;
+    return true;
 }
 
 [shader("raygeneration")]
@@ -90,10 +142,11 @@ void PathTracingRayGen()
 
     if (g_frame_data.instance_count > 0)
     {
-        // Iterative path loop. CHS no longer recurses, so all TraceRay calls
-        // originate from raygen (depth 1); the loop bound is a placeholder
-        // constant until Task 3 promotes it to g_frame_data.max_bounces.
-        for (uint bounce = 0; bounce < PT_PLACEHOLDER_MAX_BOUNCES; ++bounce)
+        // Iterative path loop. Bound is the configurable max_bounces uniform
+        // in g_frame_data (plan Task 3 Step 4). Default falls back to 4 if
+        // the CPU has not uploaded a sane value.
+        const uint kMaxBounces = max(g_frame_data.max_bounces, 1u);
+        for (uint bounce = 0; bounce < kMaxBounces; ++bounce)
         {
             path.bounce = bounce;
             if (!PathTracingStep(path))

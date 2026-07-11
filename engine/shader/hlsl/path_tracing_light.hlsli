@@ -2,6 +2,10 @@
 #define PICCOLO_PATH_TRACING_LIGHT_HLSLI
 
 #include "path_tracing_rng.hlsli"
+// sampling.hlsli only depends on path_tracing_core.hlsli (already included by
+// lib.hlsl before us), so we can pull it in here to make BRDFPdf /
+// MISWeightPower visible inside EstimateDirectLight without re-architecting.
+#include "path_tracing_sampling.hlsli"
 
 // Unified light buffer + next-event estimation. Lights are uploaded by the CPU
 // (PathTracingPass::buildLightBuffer) as a single StructuredBuffer<PathTracingLight>,
@@ -68,6 +72,8 @@ float3 SampleCone(float2 u, float3 axis, float cos_half, out float pdf)
 // contribution matches the old BRDF*color*NdotL form (plan Task 2 Step 2):
 //   directional: f * Li * cos / pdf = f * (color/Omega) * cos * Omega = f * color * cos
 //   point (delta): f * Li * cos / pdf = f * (intensity/r^2) * cos * 1
+//   sky          : f * Li * cos / pdf = f * env(dir) * cos * 4*pi
+//                 (uniform sphere sampling, 1/(4*pi) pdf, Li in radiance)
 void SampleLight(PathTracingLight light,
                  float3           shading_pos,
                  inout RNG        rng,
@@ -103,6 +109,24 @@ void SampleLight(PathTracingLight light,
         pdf = 1.0f;
         Li  = light.color / max(dist * dist, 1e-8f);
     }
+    else if (light.type == PT_LIGHT_SKY)
+    {
+        // Uniform sphere sampling. pdf = 1 / (4 * pi), Li = env at direction
+        // (sample 3 unit vector from 2D uniform). For task 4 a simple uniform
+        // sphere is enough (full importance sampling with cubemap mip PDFs
+        // is deferred); noise will be tolerable for low-frequency lighting.
+        const float u1 = Rand01(rng);
+        const float u2 = Rand01(rng);
+        const float z   = 1.0f - 2.0f * u1;
+        const float rr  = sqrt(max(1.0f - z * z, 0.0f));
+        const float phi = 2.0f * 3.14159265f * u2;
+        wi = normalize(float3(rr * cos(phi), rr * sin(phi), z));
+        pdf = 1.0f / (4.0f * 3.14159265f);
+        // Light color holds the env mean radiance (set by CPU); Li is per-sample.
+        // For our uniform sampling we emit env(dir) directly (works as radiance).
+        Li = light.color * 4.0f * 3.14159265f; // uncompute the CPU factor so env(dir) is radiance
+        dist = 1e30f; // sky at infinity
+    }
 }
 
 // Trace a visibility (shadow) ray with the independent minimal payload.
@@ -128,10 +152,9 @@ bool TraceShadowRay(float3 origin, float3 wi, float max_dist)
 }
 
 // Next-event estimation: sum direct lighting from every light at the surface.
-// Loops all lights (correct and simple for the small light count; Task 3 may
-// add power-based light picking). MIS weight is 1 here (light strategy only);
-// Task 3 adds the BSDF-strategy MIS for area lights. Uses the physical
-// single-Fresnel EvalBSDF (not the shared BRDF() wrapper).
+// Loops all lights; for each visible sample weights by power-heuristic MIS
+// (plan Task 3 Step 3). Use the BSDF pdf that matches the LO lobe that would
+// have produced the same wi (BRDFPdf from path_tracing_sampling.hlsli).
 float3 EstimateDirectLight(PathTracingSurface s, float3 wo, inout RNG rng)
 {
     float3 Lo = float3(0.0f, 0.0f, 0.0f);
@@ -159,14 +182,27 @@ float3 EstimateDirectLight(PathTracingSurface s, float3 wo, inout RNG rng)
             continue;
         }
 
-        const float max_dist = (light.type == PT_LIGHT_DIRECTIONAL) ? 1e30f : (dist - 0.001f);
+        const float max_dist = (light.type == PT_LIGHT_POINT) ? (dist - 0.001f) : 1e30f;
         if (TraceShadowRay(s.position + s.normal * 0.001f, wi, max_dist))
         {
-            continue; // occluded -- eliminates the bounce>0 light-leak bug (plan §0 #8)
+            continue; // occluded
         }
 
         const float3 f = EvalBSDF(s, wo, wi);
-        Lo += f * Li * NdotL / pdf;
+        if (dot(f, float3(1.0f, 1.0f, 1.0f)) <= 0.0f)
+        {
+            continue;
+        }
+
+        // MIS weight: light strategy vs BSDF strategy (power heuristic, beta=2).
+        // Delta lights (point, directional in the limit) get pdf_light = 1 or
+        // 1/Omega, while the BSDF pdf for the same wi is bounded by shape
+        // factors -- the MIS naturally upweights the dominant strategy.
+        uint   lobe;
+        float  pdf_bsdf = BRDFPdf(s, wo, wi, lobe);
+        float  w_light  = MISWeightPower(pdf, pdf_bsdf);
+
+        Lo += w_light * f * Li * NdotL / pdf;
     }
     return Lo;
 }

@@ -18,6 +18,9 @@ struct PathTracingFrameData
     // and the dead directional_light_proj_view were removed (plan Task 2 Step 4).
     uint   light_count;          // total lights in g_lights
     uint   infinite_light_count; // directional + sky (the first N entries)
+    // Max path bounces (replaces PT_PLACEHOLDER_MAX_BOUNCES, plan Task 3 Step 4).
+    // Default when unset: 4. Configurable via PathTracingMaxBounces.
+    uint   max_bounces;
     uint2  _padding_core;
 };
 

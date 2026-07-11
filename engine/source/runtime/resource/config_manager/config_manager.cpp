@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <string>
 #include <cctype>
+#include <cstdlib>
 
 namespace Piccolo
 {
@@ -30,6 +31,33 @@ namespace Piccolo
             }
 
             return default_value;
+        }
+
+        // Plan Task 3 Step 4: the config manager is a hardcoded if/else chain
+        // with no generic KV parsing, so unknown keys are silently dropped and
+        // there is no integer parser. Add toUint here (returns default on
+        // malformed input) so PathTracingMaxBounces / MaxPathIntensity can be
+        // added without losing the silent-drop behavior for unrelated keys.
+        uint32_t toUint(const std::string& value, uint32_t default_value)
+        {
+            if (value.empty()) return default_value;
+            // strtoul skips leading whitespace and accepts the integer until
+            // any non-digit, which is what we want for a plain numeric value.
+            char* end = nullptr;
+            errno = 0;
+            unsigned long parsed = std::strtoul(value.c_str(), &end, 10);
+            if (end == value.c_str() || errno != 0) return default_value;
+            return static_cast<uint32_t>(parsed);
+        }
+
+        float toFloat(const std::string& value, float default_value)
+        {
+            if (value.empty()) return default_value;
+            char* end = nullptr;
+            errno = 0;
+            float parsed = std::strtof(value.c_str(), &end);
+            if (end == value.c_str() || errno != 0) return default_value;
+            return parsed;
         }
     } // namespace
 
@@ -92,6 +120,18 @@ namespace Piccolo
                 else if (name == "RenderBackendAllowFallback")
                 {
                     m_render_backend_allow_fallback = toBoolWithDefault(value, true);
+                }
+                else if (name == "PathTracingMaxBounces")
+                {
+                    m_path_tracing_max_bounces = toUint(value, m_path_tracing_max_bounces);
+                }
+                else if (name == "PathTracingMaxPathIntensity")
+                {
+                    m_path_tracing_max_path_intensity = toUint(value, m_path_tracing_max_path_intensity);
+                }
+                else if (name == "PathTracingDirectionalAngleDeg")
+                {
+                    m_path_tracing_directional_angle_deg = toFloat(value, m_path_tracing_directional_angle_deg);
                 }
 #ifdef ENABLE_PHYSICS_DEBUG_RENDERER
                 else if (name == "JoltAssetFolder")

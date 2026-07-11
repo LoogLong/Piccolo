@@ -30,6 +30,12 @@ namespace Piccolo
         const std::string& getRenderSceneMode() const;
         bool               getRenderBackendAllowFallback() const;
 
+        // Path tracing tunables (plan Task 3 Step 4). Defaults are set so the
+        // path tracer degrades gracefully when no config key is present.
+        uint32_t            getPathTracingMaxBounces() const { return m_path_tracing_max_bounces; }
+        uint32_t            getPathTracingMaxPathIntensity() const { return m_path_tracing_max_path_intensity; }
+        float               getPathTracingDirectionalAngleDeg() const { return m_path_tracing_directional_angle_deg; }
+
     private:
         std::filesystem::path m_root_folder;
         std::filesystem::path m_asset_folder;
@@ -48,5 +54,12 @@ namespace Piccolo
         std::string m_render_backend {"Auto"};
         std::string m_render_scene_mode {"Raster"};
         bool        m_render_backend_allow_fallback {true};
+
+        // Defaults: 8 bounces is enough for most indoor/outdoor scenes to
+        // converge; a 0.0 angle falls back to the shader's hard-coded 0.53 deg
+        // soft-sun default in path_tracing_pass.cpp.
+        uint32_t    m_path_tracing_max_bounces {8u};
+        uint32_t    m_path_tracing_max_path_intensity {100u};
+        float       m_path_tracing_directional_angle_deg {0.53f};
     };
 } // namespace Piccolo

@@ -5,6 +5,8 @@
 #include "runtime/function/render/render_resource.h"
 #include "runtime/function/render/render_scene.h"
 #include "runtime/function/render/render_shader_bytecode.h"
+#include "runtime/resource/config_manager/config_manager.h"
+#include "runtime/function/global/global_context.h"
 
 #include <algorithm>
 #include <cmath>
@@ -696,8 +698,16 @@ namespace Piccolo
             dir.type      = kPtLightDirectional;
             dir.direction = raster_frame.scene_directional_light.direction;
             dir.color     = raster_frame.scene_directional_light.color;
-            // Soft-sun half-angle (sin). Default until Task 3 makes it configurable.
-            const float half_angle_rad = kPathTracingDefaultSunHalfAngleDeg * (3.14159265358979f / 180.0f);
+            // Soft-sun half-angle. Configurable via PathTracingDirectionalAngleDeg
+            // (plan Task 3 Step 4); falls back to the compile-time default if
+            // the key is absent / non-numeric / 0.
+            float half_angle_deg = kPathTracingDefaultSunHalfAngleDeg;
+            if (auto cfg = g_runtime_global_context.m_config_manager)
+            {
+                half_angle_deg = cfg->getPathTracingDirectionalAngleDeg();
+                if (half_angle_deg <= 0.0f) half_angle_deg = kPathTracingDefaultSunHalfAngleDeg;
+            }
+            const float half_angle_rad = half_angle_deg * (3.14159265358979f / 180.0f);
             dir.param0 = std::sin(half_angle_rad);
             lights.push_back(dir);
         }
@@ -985,6 +995,27 @@ namespace Piccolo
         frame_data.reset_accumulation   = resetting ? 1u : 0u;
         frame_data.light_count          = light_count;
         frame_data.infinite_light_count = infinite_light_count;
+
+        // Read tunable path tracing knobs from config. max_bounces must be at
+        // least 1 (one bounce = primary ray); clamp silently.
+        uint32_t max_bounces = 8u;
+        if (auto cfg = g_runtime_global_context.m_config_manager)
+        {
+            max_bounces = cfg->getPathTracingMaxBounces();
+        }
+        if (max_bounces == 0u) max_bounces = 8u;
+        frame_data.max_bounces = max_bounces;
+
+        // Plan Task 5 diagnostics: print tunable values once so the user can
+        // confirm the config was actually read. (The render_sample_index is
+        // included by the render pipeline's own log on first PT frame.)
+        if (!m_diagnostics_logged)
+        {
+            m_diagnostics_logged = true;
+            LOG_INFO("PathTracing diagnostics: max_bounces={}, light_count={},"
+                     " infinite_light_count={}",
+                     max_bounces, light_count, infinite_light_count);
+        }
 
         void* mapped_data = nullptr;
         if (!m_rhi->mapMemory(frame_data_memory, 0, sizeof(FrameData), 0, &mapped_data) ||

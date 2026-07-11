@@ -102,7 +102,10 @@ namespace Piccolo
 
             uint32_t  infinite_light_count {0};
 
-            uint32_t  _padding_core[2] {0, 0};
+            // Replaces PT_PLACEHOLDER_MAX_BOUNCES (plan Task 3 Step 4).
+            uint32_t  max_bounces {4u};
+
+            uint32_t  _padding_core {0};
 
         };
 
@@ -236,6 +239,9 @@ namespace Piccolo
         uint32_t                  m_top_level_as_generation {0};
 
         uint32_t  m_sample_index {0};
+
+        // Plan Task 5 diagnostics: prints path-tracing config once per process.
+        bool      m_diagnostics_logged {false};
 
         RHIExtent2D m_extent {0, 0};
 

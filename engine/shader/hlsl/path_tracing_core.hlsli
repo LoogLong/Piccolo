@@ -55,10 +55,6 @@ struct PathState
     RNG    rng;          // per-pixel RNG
 };
 
-// Placeholder until Task 3 promotes this to a FrameData uniform and deletes
-// the #define (see plan Task 3 Step 4).
-#define PT_PLACEHOLDER_MAX_BOUNCES 4u
-
 // Shading surface material + geometry derived from a hit.
 struct PathTracingSurface
 {
