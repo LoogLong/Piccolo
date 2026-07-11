@@ -249,6 +249,12 @@ namespace Piccolo
         // drops proportionally, but a still camera converges faster).
         uint32_t  m_samples_per_frame {1u};
 
+        // Tier-1 quality preset (plan 2026-07-12 §3) -> denoiser strength
+        // mapping. 0.85 (Performance, default) keeps the kernel output
+        // mostly intact; 0.25 (Quality) trusts the raw accumulation more.
+        // Consumed by §2.2's spatial-bilateral pass when it lands.
+        float     m_denoiser_strength {0.85f};
+
         // Plan Task 5 diagnostics: prints path-tracing config once per process.
         bool      m_diagnostics_logged {false};
 

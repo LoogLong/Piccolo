@@ -1065,6 +1065,31 @@ namespace Piccolo
         if (fps_budget == 0u) fps_budget = 30u;
         if (vram_budget_mb == 0u) vram_budget_mb = 1500u;
         if (convergence_budget_s <= 0.0f) convergence_budget_s = 1.5f;
+
+        // Tier-1 quality preset (plan 2026-07-12 §3). When the user picks a
+        // preset we override samples_per_frame with the preset's "spp"
+        // value, but only if they did not also hand-set MaxSamplesPerFrame
+        // to something other than the default 1 (we treat default 1 as
+        // "no override"). denoiser_strength is stored on m_denoiser_strength
+        // and consumed by §2.2's spatial-bilateral pass when it lands.
+        uint32_t quality_preset = 0u;
+        if (auto cfg2 = g_runtime_global_context.m_config_manager)
+        {
+            quality_preset = cfg2->getPathTracingQualityPreset();
+        }
+        uint32_t preset_spp = 1u;
+        switch (quality_preset)
+        {
+            case 0u: preset_spp = 1u;  m_denoiser_strength = 0.85f; break; // Performance
+            case 1u: preset_spp = 2u;  m_denoiser_strength = 0.60f; break; // Balanced
+            case 2u: preset_spp = 4u;  m_denoiser_strength = 0.25f; break; // Quality
+            case 3u: preset_spp = 1u;  m_denoiser_strength = 1.00f; break; // Interactive (half-rate, very strong)
+            default: preset_spp = 1u;  m_denoiser_strength = 0.85f; break;
+        }
+        if (quality_preset <= 3u)
+        {
+            samples_per_frame = preset_spp;
+        }
         frame_data.max_bounces = max_bounces;
         frame_data.max_path_intensity = max_path_intensity;
         m_samples_per_frame = samples_per_frame;
@@ -1085,6 +1110,15 @@ namespace Piccolo
             LOG_INFO("PathTracing tier-1 budget: fps>={}, vram<={}MB, "
                      "convergence<={:.2f}s to SSIM>=0.95",
                      fps_budget, vram_budget_mb, convergence_budget_s);
+            // Tier-1 quality preset (plan 2026-07-12 §3) banner: the active
+            // preset name, spp/frame and the spatial denoiser strength it
+            // maps to. Editor UI later can flip this live; for now ini is
+            // the only entry point.
+            static const char* preset_names[4] = {
+                "Performance", "Balanced", "Quality", "Interactive"};
+            const uint32_t preset_idx = (quality_preset <= 3u) ? quality_preset : 0u;
+            LOG_INFO("PathTracing tier-1 preset: {} (spp/frame={}, denoiser_strength={:.2f})",
+                     preset_names[preset_idx], samples_per_frame, m_denoiser_strength);
         }
 
         void* mapped_data = nullptr;

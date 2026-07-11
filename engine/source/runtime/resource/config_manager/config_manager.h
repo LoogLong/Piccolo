@@ -56,6 +56,13 @@ namespace Piccolo
         uint32_t getPathTracingVramBudgetMb() const { return m_path_tracing_vram_budget_mb; }
         float    getPathTracingConvergenceBudgetS() const { return m_path_tracing_convergence_budget_s; }
 
+        // Tier-1 quality preset (plan 2026-07-12 §3). 0 = Performance (default;
+        // 1 spp + strong denoiser, 60+ FPS), 1 = Balanced (2 spp + medium
+        // denoiser, 30-60 FPS), 2 = Quality (4 spp + weak denoiser, 15-30
+        // FPS), 3 = Interactive (1/2 spp + very strong denoiser, 60+ FPS for
+        // first-frame / fast-pan).
+        uint32_t getPathTracingQualityPreset() const { return m_path_tracing_quality_preset; }
+
     private:
         std::filesystem::path m_root_folder;
         std::filesystem::path m_asset_folder;
@@ -90,5 +97,8 @@ namespace Piccolo
         uint32_t    m_path_tracing_fps_budget {30u};
         uint32_t    m_path_tracing_vram_budget_mb {1500u};
         float       m_path_tracing_convergence_budget_s {1.5f};
+        // Default Performance = 1 spp + strong denoiser; matches the "1
+        // sample per frame" baseline that the rest of the renderer expects.
+        uint32_t    m_path_tracing_quality_preset {0u};
     };
 } // namespace Piccolo

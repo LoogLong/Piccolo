@@ -152,6 +152,14 @@ namespace Piccolo
                     // Plan §0 still-camera time-to-SSIM>=0.95 budget (seconds).
                     m_path_tracing_convergence_budget_s = toFloat(value, m_path_tracing_convergence_budget_s);
                 }
+                else if (name == "PathTracingQualityPreset")
+                {
+                    // Plan §3 preset index: 0 Performance, 1 Balanced,
+                    // 2 Quality, 3 Interactive. Out-of-range values fall
+                    // back to the current default silently.
+                    const uint32_t parsed = toUint(value, m_path_tracing_quality_preset);
+                    m_path_tracing_quality_preset = (parsed <= 3u) ? parsed : m_path_tracing_quality_preset;
+                }
 #ifdef ENABLE_PHYSICS_DEBUG_RENDERER
                 else if (name == "JoltAssetFolder")
                 {
