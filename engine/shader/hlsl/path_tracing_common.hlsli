@@ -21,7 +21,10 @@ struct PathTracingFrameData
     // Max path bounces (replaces PT_PLACEHOLDER_MAX_BOUNCES, plan Task 3 Step 4).
     // Default when unset: 4. Configurable via PathTracingMaxBounces.
     uint   max_bounces;
-    uint2  _padding_core;
+    // Replaces the hardcoded firefly cap previously in path_tracing.lib.hlsl:101.
+    // Configurable via PathTracingMaxPathIntensity (default 100).
+    uint   max_path_intensity;
+    uint  _padding_core;
 };
 
 struct PathTracingVertexData

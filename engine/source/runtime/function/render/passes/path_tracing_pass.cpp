@@ -1021,12 +1021,16 @@ namespace Piccolo
         // Read tunable path tracing knobs from config. max_bounces must be at
         // least 1 (one bounce = primary ray); clamp silently.
         uint32_t max_bounces = 8u;
+        uint32_t max_path_intensity = 100u;
         if (auto cfg = g_runtime_global_context.m_config_manager)
         {
             max_bounces = cfg->getPathTracingMaxBounces();
+            max_path_intensity = cfg->getPathTracingMaxPathIntensity();
         }
         if (max_bounces == 0u) max_bounces = 8u;
+        if (max_path_intensity == 0u) max_path_intensity = 100u;
         frame_data.max_bounces = max_bounces;
+        frame_data.max_path_intensity = max_path_intensity;
 
         // Plan Task 5 diagnostics: print tunable values once so the user can
         // confirm the config was actually read. (The render_sample_index is
@@ -1035,8 +1039,8 @@ namespace Piccolo
         {
             m_diagnostics_logged = true;
             LOG_INFO("PathTracing diagnostics: max_bounces={}, light_count={},"
-                     " infinite_light_count={}",
-                     max_bounces, light_count, infinite_light_count);
+                     " infinite_light_count={}, max_path_intensity={}",
+                     max_bounces, light_count, infinite_light_count, max_path_intensity);
         }
 
         void* mapped_data = nullptr;

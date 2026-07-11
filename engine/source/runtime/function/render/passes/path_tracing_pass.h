@@ -105,6 +105,10 @@ namespace Piccolo
             // Replaces PT_PLACEHOLDER_MAX_BOUNCES (plan Task 3 Step 4).
             uint32_t  max_bounces {4u};
 
+            // Firefly cap; replaces hardcoded 100 in the kernel (plan Task 3
+            // Step 6, plumbing completed in the optimization plan).
+            uint32_t  max_path_intensity {100u};
+
             uint32_t  _padding_core {0};
 
         };

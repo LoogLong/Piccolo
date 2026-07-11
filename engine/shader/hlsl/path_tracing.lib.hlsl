@@ -95,10 +95,12 @@ bool PathTracingStep(inout PathState path)
         return false;
     }
 
-    // Firefly clamp (plan Task 3 Step 6): cap the throughput before RR so that
-    // a bright spike is attenuated to MaxPathIntensity-weighted. Slightly
-    // biased but practical.
-    path.throughput = min(path.throughput, float3(100.0f, 100.0f, 100.0f));
+    // Firefly clamp (plan Task 3 Step 6): cap the throughput before RR so
+    // that a bright spike is attenuated to MaxPathIntensity-weighted. The
+    // cap is config-driven via PathTracingMaxPathIntensity (default 100,
+    // clamped to >= 1); slightly biased but practical.
+    const float max_pi = max(1.0f, (float)g_frame_data.max_path_intensity);
+    path.throughput = min(path.throughput, float3(max_pi, max_pi, max_pi));
 
     // Russian roulette (plan Task 3 Step 5): only after the minimum bounces so
     // early contributions are not biased toward termination. RR is unbiased by
