@@ -201,10 +201,10 @@ void PathTracingClosestHit(inout PathTracingHitPayload payload, BuiltInTriangleI
     // Thin closest-hit: record the hit only. NO lighting, NO shadow rays, NO
     // recursive TraceRay (the old recursive IBL / ambient / no-shadow point
     // light / indirect-TraceRay paths are removed -- plan Task 1 Step 4).
-    // Material fetch + shading happen in raygen (LoadHitSurface).
-    //
-    // ObjectToWorld3x4() / RayTCurrent() are CHS-only built-ins, so the
-    // world-space normal is computed here and packed into the payload.
+    // Material fetch for the normal map happens here (Phase 4.1) because
+    // raygen can't run ddx/ddy, so the tangent-space transform must be
+    // computed in this stage. Diffuse / spec / emissive textures still
+    // load in the raygen via LoadHitSurface.
     const uint safe_instance_count = max(g_frame_data.instance_count, 1u);
     const uint instance_index = min(InstanceIndex(), safe_instance_count - 1u);
     const PathTracingInstanceData instance_data = g_instances[instance_index];
@@ -240,21 +240,55 @@ void PathTracingClosestHit(inout PathTracingHitPayload payload, BuiltInTriangleI
     const float3 normal_os = normalize(v0.normal.xyz * barycentric.x +
                                        v1.normal.xyz * barycentric.y +
                                        v2.normal.xyz * barycentric.z);
+    // Vertex tangent (object-space; .w holds glTF handedness: +1/-1).
+    // We blend it exactly as glTF vertex tangents are defined.
+    const float4 tangent_os = normalize(v0.tangent * barycentric.x +
+                                        v1.tangent * barycentric.y +
+                                        v2.tangent * barycentric.z);
     const float2 texcoord = v0.texcoord.xy * barycentric.x +
                             v1.texcoord.xy * barycentric.y +
                             v2.texcoord.xy * barycentric.z;
 
     const float3x4 object_to_world = ObjectToWorld3x4();
-    float3 N = normalize(mul((float3x3)object_to_world, normal_os));
+    const float3x3 O2W = (float3x3)object_to_world;
+    float3 N = normalize(mul(O2W, normal_os));
 
-    // Face-forward the geometric normal toward the incoming ray.
-    float3 V = -WorldRayDirection();
-    if (dot(N, V) < 0.0f)
+    // Phase 4.1: normal-map perturb (TBN-based).
+    // Material lookup: instance_data.material_index gives us the material struct.
+    const PathTracingMaterialData material_data = g_materials[instance_data.material_index];
+    const float normal_scale = material_data.metallic_roughness_normal_occlusion.z;
+
+    // Sample the normal texture if bound. UBYTE channel decoded to [-1, 1].
+    float3 nmap = float3(0.0f, 0.0f, 1.0f);
+    if (material_data.normal_texture_index < PICCOLO_PATH_TRACING_MAX_MATERIAL_TEXTURES)
     {
-        N = -N;
+        const float3 texel = g_texture_array[material_data.normal_texture_index].SampleLevel(
+            g_linear_sampler, texcoord, 0.0f).rgb;
+        nmap = texel * 2.0f - 1.0f;
+    }
+    // Tangent-space normal scaled into tangent components only (height is Z).
+    nmap = normalize(float3(nmap.xy * normal_scale, nmap.z));
+
+    // Object-space -> world-space tangent and bitangent.
+    // tangent_os.w encodes glTF handedness: w > 0 means handedness matches
+    // (cross(N, T, w) == B), w < 0 flips the bitangent.
+    const float3 T_world = normalize(mul(O2W, tangent_os.xyz));
+    const float3 B_world = cross(N, T_world) * tangent_os.w;
+
+    // World-space normal from tangent-space normal map + tangent frame.
+    float3 N_perturbed = nmap.x * T_world
+                       + nmap.y * B_world
+                       + nmap.z * N;
+    N_perturbed = normalize(N_perturbed);
+
+    // Face-forward toward the incoming ray (use the perturbed normal).
+    float3 V = -WorldRayDirection();
+    if (dot(N_perturbed, V) < 0.0f)
+    {
+        N_perturbed = -N_perturbed;
     }
 
-    payload.world_normal   = N;
+    payload.world_normal   = N_perturbed;
     payload.hit_t          = RayTCurrent();
     payload.texcoord       = texcoord;
     payload.instance_index = instance_index;

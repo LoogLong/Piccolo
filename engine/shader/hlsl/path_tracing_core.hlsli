@@ -70,6 +70,15 @@ struct PathTracingSurface
 // Load material + textures for a hit. Geometry (normal/texcoord) comes from
 // the payload (computed in CHS); the world position is reconstructed from the
 // ray and hit_t. Only the material buffers/textures are read here.
+//
+// Note on normal maps (Phase 4.1): the geometric normal returned in
+// payload.world_normal is ALREADY perturbed by the closest-hit shader
+// (PathTracingClosestHit in path_tracing.lib.hlsl uses the vertex tangent
+// + material's normal map), so LoadHitSurface just passes it through.
+// DXR constraints prevent ddx/ddy in raygen, so the normal-map work
+// had to move into the closest-hit shader (which now re-accesses the
+// material buffer, restoring the M0-M3 invariant of "no material in
+// CHS" partially).
 PathTracingSurface LoadHitSurface(PathTracingHitPayload hit, float3 ray_origin, float3 ray_direction)
 {
     PathTracingSurface surface;
