@@ -110,10 +110,18 @@ bool PathTracingStep(inout PathState path)
     // Russian roulette (plan Task 3 Step 5): only after the minimum bounces so
     // early contributions are not biased toward termination. RR is unbiased by
     // construction -- we always divide by the survival probability.
+    //
+    // Plan 2026-07-12 §4.2: Veach 1997 §3.4 variance-based RR. Survival
+    // probability p = luminance(throughput), bounded so bright paths almost
+    // always continue and dim paths are most likely killed. The heuristic
+    // p = sqrt(max_th * 0.0625) had no formal justification and biased
+    // the survival distribution; Veach's form keeps the estimator unbiased
+    // and minimizes the variance of the contribution by terminating exactly
+    // when the continuation cost outweighs the path's expected reward.
     if (path.bounce >= PT_MIN_BOUNCES_BEFORE_RR)
     {
         const float max_th = max(path.throughput.r, max(path.throughput.g, path.throughput.b));
-        const float p      = sqrt(saturate(max_th * 0.0625f)); // ~1 at th=16, mild tail
+        const float p      = clamp(max_th, 0.05f, 1.0f);
         if (Rand01(path.rng) >= p)
         {
             return false;
