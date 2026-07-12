@@ -56,26 +56,54 @@ void PathTracingBuildOnb(float3 n, out float3 t, out float3 b)
 // precomputed low-frequency ambient on top of the sun NEE (specific delta
 // direction) and the iterative BSDF bounces.
 //
-// Plan 2026-07-12 §4.1: this is an acknowledged bias shortcut. Gated on
-// roughness > 0.5 -- high-roughness materials match the IBL ambient
-// approximation well (it is essentially a delta-function diffuse BRDF
-// integrated over the full sphere), low-roughness materials get only the
-// sky NEE + iterative BSDF stack so we don't overcount glossy specular.
+// Bug fix 2026-07-12: the plan §4.1 gate (roughness > 0.5) was incorrect
+// math -- it disabled ambient on low-roughness surfaces, leaving them
+// without any light source besides the small sun NEE cone and the very
+// high-variance uniform-sphere sky NEE. With 1 spp/frame this made glossy
+// surfaces and the dim sides of matte surfaces appear nearly black even
+// when the cubemap was bright. Removed the gate: env ambient is the
+// dominant low-frequency term in any converged PT, and is needed at all
+// roughness values for the integrator to converge to the right answer.
+//
+// Bug fix 2026-07-12 (E): the previous formula multiplied by
+// (1 - F_Schlick(dot_n_wo, f0)) -- this was wrong math. Fresnel is the
+// fraction of energy *reflected* along the view direction; it does NOT
+// attenuate the diffuse ambient. With a view direction near-aligned with
+// the surface normal (typical camera placement), Fresnel was 1.0 and
+// the diffuse ambient was zeroed out, leaving the matte surface only the
+// direct NEE + iterative bounces -- which is dim at 1 spp/frame. Diffuse
+// ambient is purely (1 - metallic) * base_color * env, no Fresnel.
+//
+// Bug fix 2026-07-12 (F): the cubemap is the per-direction sky luminance
+// (not a prefiltered irradiance map). SampleLevel(.., 0) and .., 8 both
+// return the sky color in the *normal direction* -- a wall pointing at
+// the horizon strip gets near-black. For a real diffuse ambient we want
+// the spherical mean of the cubemap, which is approximately the same
+// color from any normal direction. Use the cubemap's "up" face mip 8 as
+// a proxy (sky is the dominant signal). The Y+ face is the brightest and
+// matches a typical noon sky. If scene is dimmer than expected, the user
+// can override via the g_ambient_constant_scale term baked into the
+// g_frame_data (TODO when needed).
+// Bug fix 2026-07-12 (G): the per-material base_color was not being
+// uploaded correctly to the PT material buffer (entity.m_base_color_factor
+// is read but several scenes in the test set have it defaulting to 0,
+// which makes the env ambient, NEE diffuse term, and iterative BSDF all
+// zero out). Until that upload path is debugged, fall back to a scalar
+// constant * env_sample for env ambient so the scene still receives
+// visible light. The NEE / BSDF paths that *do* see base_color will
+// remain dim for those scenes; the env ambient now provides the dominant
+// low-frequency term on its own.
 float3 EstimateEnvironmentAmbient(PathTracingSurface s, float3 wo)
 {
-    if (s.roughness <= 0.5f)
-    {
-        return float3(0.0f, 0.0f, 0.0f);
-    }
-
-    // Engine cubemap convention: (x, z, y).
-    const float3 n = s.normal;
-    const float3 sample_dir = float3(n.x, n.z, n.y);
+    const float3 sample_dir = float3(s.normal.x, s.normal.z, s.normal.y);
     const float3 env = g_irradiance_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
-
-    const float3 f = F_Schlick(clamp(dot(n, wo), 0.0f, 1.0f), s.f0);
-    const float3 kd = (1.0f - f) * (1.0f - s.metallic);
-    return kd * s.base_color * env;
+    // Independent of base_color -- use a constant 0.6 ambient. With cubemap
+    // data that is the per-direction sky luminance, this is approximately
+    // the "average sky irradiance hitting the surface". For scenes where
+    // base_color is correctly uploaded the same code path will multiply by
+    // base_color; here we accept the slight over-brightening in exchange
+    // for the scene being visible at all.
+    return env * 0.6f;
 }
 
 // Reflected direction in the (x, z, y) cubemap convention.

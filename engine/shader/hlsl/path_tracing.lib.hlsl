@@ -64,9 +64,11 @@ bool PathTracingStep(inout PathState path)
     // for infinite diffuse sky bounces; the sun NEE handles specific delta
     // contributions without double-counting. Phase 1.3 adds a specular IBL
     // term along the reflection direction so glossy materials see
-    // surrounding sky as well -- diffuse env covers the diffuse term, sky
-    // NEE could in principle cover specular via MIS, but per-pixel CDF
-    // importance sampling of the sky cubemap is queued in Phase 1.2 (deferred).
+    // surrounding sky as well. Bug-fix 2026-07-12 removed the §4.1
+    // roughness gate on env ambient: matte surfaces with roughness > 0.5
+    // are the common case, and the gate left them with no light source
+    // besides the small sun NEE cone and the high-variance uniform-sphere
+    // sky NEE, producing a near-black image at 1 spp/frame.
     path.radiance += path.throughput * (surface.emissive
         + EstimateDirectLight(surface, wo, path.rng)
         + EstimateEnvironmentAmbient(surface, wo)
