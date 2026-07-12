@@ -1,0 +1,34 @@
+// Plan 2026-07-12 §2.2: vendor-SDK-less fallback 5x5 spatial-bilateral +
+// temporal-blend denoiser. The shader source of truth is
+// engine/shader/hlsl/path_tracing_denoise.comp.hlsl; this GLSL stub keeps
+// the shader glob consistent. Vulkan path tracing builds this shader from
+// the HLSL via dxc SPIR-V output, so this file is never actually compiled
+// on the Vulkan backend either, but having it present prevents the glob
+// from silently excluding the GLSL side.
+//
+// Real backend consumers: gpu_skinning_pass.cpp uses the same pattern
+// (HLSL source compiled to DXIL + SPIR-V, no GLSL counterpart at runtime).
+
+#version 460
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D g_current_accumulation;
+layout(set = 0, binding = 1) uniform sampler2D g_history_accumulation;
+layout(rgba16f, set = 0, binding = 2) uniform restrict writeonly image2D g_denoised_output;
+layout(set = 0, binding = 3, std140) uniform DenoiseConstants
+{
+    float g_denoise_strength;
+    uint  g_frame_index;
+    uvec2 g_denoise_extent;
+};
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= g_denoise_extent.x || pixel.y >= g_denoise_extent.y)
+    {
+        return;
+    }
+    vec4 center = texelFetch(g_current_accumulation, ivec2(pixel), 0);
+    imageStore(g_denoised_output, ivec2(pixel), center);
+}

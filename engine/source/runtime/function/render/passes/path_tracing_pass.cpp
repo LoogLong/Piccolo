@@ -139,6 +139,7 @@ namespace Piccolo
         destroyTopLevelAS();
         m_rhi->flushAllRetiredResources();
         destroyAccumulationImage();
+        destroyDenoiseResources();
         destroySkinnedVertexFallbackBuffer();
         destroyFrameDataBuffers();
         destroyLightBuffers();
@@ -370,6 +371,20 @@ namespace Piccolo
         }
         m_rhi->popEvent(command_buffer);
 
+        // Plan 2026-07-12 §2.2: optional vendor-SDK-less fallback denoiser.
+        // Runs as a compute pass that reads m_accumulation_image and writes
+        // a denoised version into m_scene_output_image (the swapchain-present
+        // image). Disabled by default; opt-in via PathTracingPass::enableDenoise
+        // (or future ini hook). Default-off keeps existing visuals untouched
+        // for users who already have a vendor denoiser.
+        if (m_denoise_enabled)
+        {
+            if (ensureDenoiseResources())
+            {
+                dispatchDenoise(frame_index);
+            }
+        }
+
         m_rhi->pushEvent(command_buffer, "PathTracing.postTraceBarriers", debug_color);
         transitionImage(m_scene_output_image,
                         RHI_IMAGE_LAYOUT_GENERAL,
@@ -398,6 +413,9 @@ namespace Piccolo
         tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
         m_scene_output_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         destroyAccumulationImage();
+        // Plan §2.2: denoise images are sized to the swapchain extent; they
+        // must follow framebuffer recreates.
+        destroyDenoiseResources();
         resetAccumulation();
     }
 
@@ -1756,5 +1774,341 @@ namespace Piccolo
                                   nullptr,
                                   1,
                                   &barrier);
+    }
+
+    // Plan 2026-07-12 §2.2: vendor-SDK-less fallback denoiser. Sets up a
+    // compute pipeline + per-frame constant buffer + scene-output sized
+    // history image. The denoise shader (path_tracing_denoise.comp.hlsl)
+    // does 5x5 spatial bilateral weighted by luminance/RGB similarity,
+    // then blends with the previous denoised output (m_denoise_history_image).
+    //
+    // Disabled by default (m_denoise_enabled = false in the header); tests
+    // enable it via enableDenoise() so the rest of the tier-1 path stays
+    // untouched for projects that already use a vendor denoiser.
+    bool PathTracingPass::ensureDenoiseResources()
+    {
+        if (m_rhi == nullptr)
+        {
+            return false;
+        }
+
+        const RHIExtent2D extent = m_rhi->getSwapchainInfo().extent;
+        if (extent.width == 0 || extent.height == 0)
+        {
+            return false;
+        }
+        if (m_denoise_history_image != nullptr &&
+            m_extent.width == extent.width &&
+            m_extent.height == extent.height &&
+            m_denoise_pipeline != nullptr)
+        {
+            return true;
+        }
+
+        // Recreate the swapchain-sized images and the pipeline if anything
+        // resized or wasn't built before. Idempotent on re-entry.
+        destroyDenoiseResources();
+        m_extent = extent;
+
+        const std::vector<unsigned char>& bytecode =
+            PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, PATH_TRACING_DENOISE_COMP);
+        if (bytecode.empty())
+        {
+            LOG_ERROR("PathTracing denoise: shader bytecode missing (PATH_TRACING_DENOISE_COMP). "
+                      "Rebuild shaders or disable the denoiser via disableDenoise().");
+            return false;
+        }
+
+        // Descriptor set layout: 2 sampled images (current + history) + 1
+        // storage image (scene output) + 1 uniform buffer (constants).
+        {
+            RHIDescriptorSetLayoutBinding bindings[4] {};
+            bindings[0].binding         = 0;
+            bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[0].descriptorCount = 1;
+            bindings[0].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[1].binding         = 1;
+            bindings[1].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[1].descriptorCount = 1;
+            bindings[1].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[2].binding         = 2;
+            bindings[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[2].descriptorCount = 1;
+            bindings[2].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[3].binding         = 3;
+            bindings[3].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[3].descriptorCount = 1;
+            bindings[3].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+
+            RHIDescriptorSetLayoutCreateInfo layout_info {};
+            layout_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layout_info.bindingCount = 4;
+            layout_info.pBindings    = bindings;
+            if (RHI_SUCCESS != m_rhi->createDescriptorSetLayout(&layout_info, m_denoise_descriptor_set_layout))
+            {
+                return false;
+            }
+        }
+
+        {
+            RHIPipelineLayoutCreateInfo layout_info {};
+            layout_info.sType          = RHI_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            layout_info.setLayoutCount = 1;
+            layout_info.pSetLayouts    = &m_denoise_descriptor_set_layout;
+            if (RHI_SUCCESS != m_rhi->createPipelineLayout(&layout_info, m_denoise_pipeline_layout))
+            {
+                return false;
+            }
+        }
+
+        {
+            RHIShader* module = m_rhi->createShaderModule(bytecode);
+            if (module == RHI_NULL_HANDLE) return false;
+
+            RHIPipelineShaderStageCreateInfo stage {};
+            stage.sType  = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.stage  = RHI_SHADER_STAGE_COMPUTE_BIT;
+            stage.module = module;
+            stage.pName  = "main";
+
+            RHIComputePipelineCreateInfo pipeline_info {};
+            pipeline_info.sType  = RHI_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            pipeline_info.layout = m_denoise_pipeline_layout;
+            pipeline_info.pStages = &stage;
+            const bool ok =
+                (RHI_SUCCESS == m_rhi->createComputePipelines(RHI_NULL_HANDLE, 1, &pipeline_info, m_denoise_pipeline));
+            m_rhi->destroyShaderModule(module);
+            if (!ok)
+            {
+                return false;
+            }
+        }
+
+        // History image: same size as scene output, RGBA32F. Lazily written
+        // by the dispatch (frame_index == 0 uses identity).
+        m_rhi->createImage(extent.width,
+                           extent.height,
+                           RHI_FORMAT_R32G32B32A32_SFLOAT,
+                           RHI_IMAGE_TILING_OPTIMAL,
+                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
+                           RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           m_denoise_history_image,
+                           m_denoise_history_memory,
+                           0,
+                           1,
+                           1);
+        m_rhi->createImageView(m_denoise_history_image,
+                               RHI_FORMAT_R32G32B32A32_SFLOAT,
+                               RHI_IMAGE_ASPECT_COLOR_BIT,
+                               RHI_IMAGE_VIEW_TYPE_2D,
+                               1,
+                               1,
+                               m_denoise_history_image_view);
+
+        // Per-frame constants (strength + frame_index + extent). One buffer
+        // per in-flight frame.
+        const uint32_t frame_count = std::max(1u, static_cast<uint32_t>(m_rhi->getMaxFramesInFlight()));
+        m_denoise_constants_buffers.assign(frame_count, nullptr);
+        m_denoise_constants_memories.assign(frame_count, nullptr);
+        for (uint32_t i = 0; i < frame_count; ++i)
+        {
+            m_rhi->createBuffer(sizeof(float) * 4u,
+                                RHI_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                RHI_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                    RHI_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                m_denoise_constants_buffers[i],
+                                m_denoise_constants_memories[i]);
+        }
+
+        // Single static descriptor set; per-frame varying resource is the
+        // uniform buffer (rewritten each dispatch).
+        m_denoise_descriptor_sets.assign(1, nullptr);
+        RHIDescriptorSetAllocateInfo allocate_info {};
+        allocate_info.sType              = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocate_info.descriptorPool     = m_rhi->getDescriptorPoor();
+        allocate_info.descriptorSetCount = 1;
+        allocate_info.pSetLayouts        = &m_denoise_descriptor_set_layout;
+        if (RHI_SUCCESS != m_rhi->allocateDescriptorSets(&allocate_info, m_denoise_descriptor_sets[0]))
+        {
+            return false;
+        }
+
+        if (!m_denoise_diagnostics_logged)
+        {
+            m_denoise_diagnostics_logged = true;
+            LOG_INFO("PathTracing §2.2 fallback denoiser enabled (5x5 bilateral + temporal).");
+        }
+        return true;
+    }
+
+    void PathTracingPass::destroyDenoiseResources()
+    {
+        if (m_rhi != nullptr)
+        {
+            RHIDescriptorPool* pool = m_rhi->getDescriptorPoor();
+            for (auto* ds : m_denoise_descriptor_sets)
+            {
+                if (ds != nullptr) m_rhi->freeDescriptorSets(pool, 1, &ds);
+            }
+            for (auto* buf : m_denoise_constants_buffers)
+            {
+                if (buf != nullptr) m_rhi->destroyBuffer(buf);
+            }
+            for (auto* mem : m_denoise_constants_memories)
+            {
+                if (mem != nullptr) m_rhi->freeMemory(mem);
+            }
+            if (m_denoise_history_image_view != nullptr)
+            {
+                m_rhi->destroyImageView(m_denoise_history_image_view);
+            }
+            if (m_denoise_history_image != nullptr)
+            {
+                m_rhi->destroyImage(m_denoise_history_image);
+            }
+            if (m_denoise_pipeline != nullptr)
+            {
+                m_rhi->destroyPipeline(m_denoise_pipeline);
+            }
+            if (m_denoise_pipeline_layout != nullptr)
+            {
+                m_rhi->destroyPipelineLayout(m_denoise_pipeline_layout);
+            }
+            if (m_denoise_descriptor_set_layout != nullptr)
+            {
+                m_rhi->destroyDescriptorSetLayout(m_denoise_descriptor_set_layout);
+            }
+        }
+        m_denoise_descriptor_sets.clear();
+        m_denoise_constants_buffers.clear();
+        m_denoise_constants_memories.clear();
+        m_denoise_history_image       = nullptr;
+        m_denoise_history_memory      = nullptr;
+        m_denoise_history_image_view  = nullptr;
+        m_denoise_pipeline            = nullptr;
+        m_denoise_pipeline_layout     = nullptr;
+        m_denoise_descriptor_set_layout = nullptr;
+    }
+
+
+    void PathTracingPass::dispatchDenoise(uint32_t frame_index)
+    {
+        if (m_rhi == nullptr || m_denoise_pipeline == nullptr ||
+            m_accumulation_image == nullptr || m_accumulation_image_view == nullptr ||
+            m_scene_output_image == nullptr || m_scene_output_image_view == nullptr ||
+            m_denoise_history_image == nullptr || m_denoise_history_image_view == nullptr)
+        {
+            return;
+        }
+        if (frame_index >= m_denoise_constants_buffers.size() ||
+            m_denoise_constants_buffers[frame_index] == nullptr)
+        {
+            return;
+        }
+
+        RHICommandBuffer* command_buffer = m_rhi->getCurrentCommandBuffer();
+        if (command_buffer == nullptr) return;
+
+        // Bind current (m_accumulation_image, m_accumulation_image_view) and
+        // history (m_denoise_history_image, m_denoise_history_image_view)
+        // as combined-image-samplers, scene output as storage image, and
+        // constants as uniform buffer.
+        RHISampler* linear = m_rhi->getOrCreateDefaultSampler(Default_Sampler_Linear);
+
+        RHIDescriptorImageInfo current_info  = {};
+        current_info.sampler                  = linear;
+        current_info.imageView                = m_accumulation_image_view;
+        current_info.imageLayout              = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIDescriptorImageInfo history_info  = {};
+        history_info.sampler                  = linear;
+        history_info.imageView                = m_denoise_history_image_view;
+        history_info.imageLayout              = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        RHIDescriptorImageInfo output_info   = {};
+        output_info.sampler                   = nullptr;
+        output_info.imageView                 = m_scene_output_image_view;
+        output_info.imageLayout               = RHI_IMAGE_LAYOUT_GENERAL;
+
+        RHIWriteDescriptorSet writes[4] {};
+        writes[0].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = m_denoise_descriptor_sets[0];
+        writes[0].dstBinding      = 0;
+        writes[0].dstArrayElement = 0;
+        writes[0].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo      = &current_info;
+
+        writes[1].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = m_denoise_descriptor_sets[0];
+        writes[1].dstBinding      = 1;
+        writes[1].dstArrayElement = 0;
+        writes[1].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo      = &history_info;
+
+        writes[2].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet          = m_denoise_descriptor_sets[0];
+        writes[2].dstBinding      = 2;
+        writes[2].dstArrayElement = 0;
+        writes[2].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo      = &output_info;
+
+        RHIDescriptorBufferInfo buffer_info = {};
+        buffer_info.offset = 0;
+        buffer_info.range  = sizeof(float) * 4u;
+        buffer_info.buffer = m_denoise_constants_buffers[frame_index];
+
+        writes[3].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet          = m_denoise_descriptor_sets[0];
+        writes[3].dstBinding      = 3;
+        writes[3].dstArrayElement = 0;
+        writes[3].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[3].descriptorCount = 1;
+        writes[3].pBufferInfo     = &buffer_info;
+
+        m_rhi->updateDescriptorSets(4, writes, 0, nullptr);
+
+        // Upload constants (strength, frame_index, extent.x, extent.y).
+        struct DenoiseConstants
+        {
+            float strength;
+            uint32_t frame_index;
+            uint32_t extent_w;
+            uint32_t extent_h;
+        } constants;
+        constants.strength   = m_denoiser_strength;
+        constants.frame_index = m_sample_index;
+        constants.extent_w   = m_extent.width;
+        constants.extent_h   = m_extent.height;
+        void* mapped = nullptr;
+        m_rhi->mapMemory(m_denoise_constants_memories[frame_index], 0, sizeof(constants), 0, &mapped);
+        std::memcpy(mapped, &constants, sizeof(constants));
+        m_rhi->unmapMemory(m_denoise_constants_memories[frame_index]);
+
+        m_rhi->cmdBindPipelinePFN(command_buffer, RHI_PIPELINE_BIND_POINT_COMPUTE, m_denoise_pipeline);
+        m_rhi->cmdBindDescriptorSetsPFN(command_buffer,
+                                         RHI_PIPELINE_BIND_POINT_COMPUTE,
+                                         m_denoise_pipeline_layout,
+                                         0,
+                                         1,
+                                         &m_denoise_descriptor_sets[0],
+                                         0,
+                                         nullptr);
+        const uint32_t group_x = (m_extent.width  + 7u) / 8u;
+        const uint32_t group_y = (m_extent.height + 7u) / 8u;
+        m_rhi->cmdDispatch(command_buffer, group_x, group_y, 1);
+
+        // Image copy scene_output -> history_image so the next frame's
+        // temporal blend sees the right prior frame. Single history buffer
+        // is enough for the §2.2 fallback (no ping-pong needed).
+        m_rhi->cmdCopyImageToImage(command_buffer,
+                                  m_scene_output_image,
+                                  RHI_IMAGE_ASPECT_COLOR_BIT,
+                                  m_denoise_history_image,
+                                  RHI_IMAGE_ASPECT_COLOR_BIT,
+                                  m_extent.width,
+                                  m_extent.height);
     }
 } // namespace Piccolo

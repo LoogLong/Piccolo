@@ -143,6 +143,18 @@ namespace Piccolo
 
         bool ensureAccumulationImage();
 
+        // Plan 2026-07-12 §2.2: vendor-SDK-less fallback denoiser wiring.
+        // The denoise compute pass consumes m_accumulation_image and writes
+        // m_denoised_image (a copy of m_scene_output_image format/size).
+        // m_denoise_history_image is the previous denoised output, used
+        // for the temporal blend. enableDenoise() / disableDenoise() flip
+        // m_denoise_enabled so the dispatch loop can branch.
+        bool ensureDenoiseResources();
+        void destroyDenoiseResources();
+        void enableDenoise() { m_denoise_enabled = true; }
+        void disableDenoise() { m_denoise_enabled = false; }
+        void dispatchDenoise(uint32_t frame_index);
+
         bool ensureSkinnedVertexFallbackBuffer();
 
         void destroySkinnedVertexFallbackBuffer();
@@ -200,6 +212,31 @@ namespace Piccolo
         RHIImageView*    m_accumulation_image_view {nullptr};
 
         RHIImageLayout   m_accumulation_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
+
+        // Plan 2026-07-12 §2.2: denoise compute pipeline + resources.
+        RHIImage*        m_denoised_image {nullptr};
+        RHIDeviceMemory* m_denoised_memory {nullptr};
+        RHIImageView*    m_denoised_image_view {nullptr};
+        RHIImageLayout   m_denoised_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
+
+        RHIImage*        m_denoise_history_image {nullptr};
+        RHIDeviceMemory* m_denoise_history_memory {nullptr};
+        RHIImageView*    m_denoise_history_image_view {nullptr};
+
+        std::vector<RHIBuffer*>       m_denoise_constants_buffers;
+        std::vector<RHIDeviceMemory*> m_denoise_constants_memories;
+
+        RHIDescriptorSetLayout* m_denoise_descriptor_set_layout {nullptr};
+        RHIPipelineLayout*      m_denoise_pipeline_layout {nullptr};
+        RHIPipeline*            m_denoise_pipeline {nullptr};
+        std::vector<RHIDescriptorSet*> m_denoise_descriptor_sets;
+        // We allocate the denoise descriptor set from the engine's global
+        // descriptor pool (RHI::getDescriptorPoor() returns it); sets are
+        // destroyed individually via destroyDescriptorSet(nullptr, set)
+        // without a pool argument, matching the existing pass pattern.
+
+        bool m_denoise_enabled {false};
+        bool m_denoise_diagnostics_logged {false};
 
 
 
