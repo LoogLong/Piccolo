@@ -114,8 +114,24 @@ float PT_SpecularIBLLod(float roughness, float mip_count)
 // weighted by the BRDF's normal-distribution peak. It naturally dominates
 // for low roughness (mirror-like surfaces) and fades into diffuse for high
 // roughness, mirroring PBRT v4 / UE Reference's heuristic.
+//
+// Plan 2026-07-12 §4.3: full MIS pdf tracking requires the BRDF Jacobian
+// of the reflection operator and is deferred. Two compensating fixes
+// land here:
+//   (a) Fade out specular IBL for roughness > 0.5 (where the lobe is so
+//       wide the cubemap sample is essentially a diffuse term already
+//       double-counted with EstimateEnvironmentAmbient + sky NEE).
+//   (b) Clamp NdotR so back-facing reflections (dot < 0) contribute zero
+//       instead of a small positive value (avoids double-sided artefacts).
 float3 EstimateEnvironmentSpecular(PathTracingSurface s, float3 wo)
 {
+    // Plan §4.3(a): fade out for rough surfaces.
+    const float rough_fade = 1.0f - smoothstep(0.4f, 0.6f, s.roughness);
+    if (rough_fade <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
     const float3 r_world = PT_ReflectDirection(-wo, s.normal);
 
     // Schlick-style mip from roughness (engine cubemap has up to ~10 mips
@@ -138,7 +154,7 @@ float3 EstimateEnvironmentSpecular(PathTracingSurface s, float3 wo)
     // f0 term in EvalBSDF is the base color (lerp(0.04, base_color, metallic));
     // we reuse that.
     const float3 f = F_Schlick(clamp(dot(N, wo), 0.0f, 1.0f), s.f0);
-    return env_spec * f * NdotR;
+    return env_spec * f * NdotR * rough_fade;
 }
 
 // Uniform cone sampling around `axis` (half-angle from cos_half). Returns the
