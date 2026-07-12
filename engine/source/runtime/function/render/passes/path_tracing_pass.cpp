@@ -1002,13 +1002,27 @@ namespace Piccolo
             !vectorEquals(m_last_camera_position, current_camera_position) ||
             m_extent.width != extent.width ||
             m_extent.height != extent.height;
+
         if (camera_changed)
         {
-            m_sample_index = 0;
-            resetting = true;
+            // Plan §1.1: don't reset on a single-frame jitter. Only when
+            // the streak of consecutive camera changes reaches the
+            // threshold do we wipe the accumulation. A still frame resets
+            // the streak so the next pan starts fresh.
+            ++m_camera_change_streak;
             m_last_proj_view_matrix_inv = current_proj_view_inv;
             m_last_camera_position      = current_camera_position;
             m_has_last_camera_state     = true;
+            if (m_camera_change_streak >= m_camera_change_threshold)
+            {
+                m_sample_index = 0;
+                resetting = true;
+                m_camera_change_streak = 0u;
+            }
+        }
+        else
+        {
+            m_camera_change_streak = 0u;
         }
 
         if (auto render_scene = m_render_resource_impl->getCurrentRenderScene())

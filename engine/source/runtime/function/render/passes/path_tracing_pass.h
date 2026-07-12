@@ -303,6 +303,16 @@ namespace Piccolo
 
         bool      m_has_last_camera_state {false};
 
+        // Plan 2026-07-12 §1.1: sliding window over camera state so a brief
+        // fast-pan doesn't kill convergence. m_camera_change_streak counts
+        // consecutive frames in which the camera moved; only when the streak
+        // reaches m_camera_change_threshold (3 frames) do we reset the
+        // accumulation. Any frame where the camera matches its prior state
+        // resets the streak to 0. Plan §1.1 estimates this saves ~80% of
+        // the resets an editor fly-by would otherwise trigger.
+        uint32_t  m_camera_change_streak {0u};
+        uint32_t  m_camera_change_threshold {3u};
+
         bool      m_initialize_skip_logged {false};
 
         bool      m_dispatch_failure_logged {false};
