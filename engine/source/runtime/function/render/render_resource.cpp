@@ -739,7 +739,24 @@ namespace Piccolo
             RenderPathTracingMaterialGPUData material_data{};
             if (source_instance.entity != nullptr)
             {
-                material_data.base_color_factor = source_instance.entity->m_base_color_factor;
+                // Plan 2026-07-12 §1.1 base_color chain audit:
+                //   src:    Piccolo::RenderEntity (declared in render_entity.h:27)
+                //           default ctor -> m_base_color_factor = {1,1,1,1}.
+                //   write:  no code path currently writes this field; the
+                //           asset pipeline (OBJ + JSON .material) has no
+                //           scalar-factor slot, so per-mesh variation is
+                //           not yet uploaded. Every PT material record
+                //           therefore sees {1,1,1,1}, which acts as a
+                //           neutral multiplier for the base-color texture
+                //           (sampled in path_tracing_core.hlsli:96-98).
+                //   read:   PathTracingMaterialData.base_color_factor.rgb
+                //           -- base diffuse color in the BSDF eval.
+                //
+                // If this ever lands < 1, the most likely cause is a future
+                // material-data source (glTF, USD, runtime spawn) that
+                // forgets to initialise the field. Log a one-shot warning.
+                const Vector4 bcf = source_instance.entity->m_base_color_factor;
+                material_data.base_color_factor = bcf;
                 material_data.emissive_factor = Vector4(source_instance.entity->m_emissive_factor, 0.0f);
                 material_data.metallic_roughness_normal_occlusion = Vector4(
                     source_instance.entity->m_metallic_factor,
@@ -748,6 +765,22 @@ namespace Piccolo
                     source_instance.entity->m_occlusion_strength
                 );
                 material_data.flags = source_instance.entity->m_double_sided ? kPathTracingMaterialFlagDoubleSided : 0u;
+
+                if (!m_base_color_factor_diag_logged)
+                {
+                    const bool all_zero   = (bcf.x == 0.0f && bcf.y == 0.0f && bcf.z == 0.0f);
+                    const bool not_white  = (bcf.x != 1.0f || bcf.y != 1.0f || bcf.z != 1.0f);
+                    if (all_zero || not_white)
+                    {
+                        LOG_WARN("PathTracing PT material base_color_factor is ({},{},{},{}); "
+                                    "expected opaque white {{1,1,1,1}} from default-initialised "
+                                    "RenderEntity (render_entity.h:27). All-zero means every diffuse "
+                                    "term will be black; non-white means asset-side variation is "
+                                    "active but not yet validated end-to-end.",
+                                    bcf.x, bcf.y, bcf.z, bcf.w);
+                    }
+                    m_base_color_factor_diag_logged = true;
+                }
             }
             const uint32_t shader_material_index = static_cast<uint32_t>(m_path_tracing_material_data.size());
             m_path_tracing_material_data.push_back(material_data);

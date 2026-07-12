@@ -295,6 +295,12 @@ namespace Piccolo
         RHI* m_gpu_resource_rhi {nullptr};
         RHI* m_path_tracing_rhi {nullptr};
 
+        // One-shot diagnostic latch: log the first PT material record's
+        // base_color_factor so a future regression that defaults to (0,0,0,0)
+        // (e.g. forgetting the in-class initialiser in render_entity.h:27)
+        // is caught at startup instead of silently producing a black scene.
+        bool m_base_color_factor_diag_logged {false};
+
         void createAndMapStorageBuffer(std::shared_ptr<RHI> rhi);
         void createDefaultMaterialTexture(std::shared_ptr<RHI> rhi);
         void releaseGlobalGPUResources(RHI* rhi);

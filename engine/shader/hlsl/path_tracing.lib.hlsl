@@ -113,13 +113,16 @@ bool PathTracingStep(inout PathState path)
     // early contributions are not biased toward termination. RR is unbiased by
     // construction -- we always divide by the survival probability.
     //
-    // Plan 2026-07-12 §4.2: Veach 1997 §3.4 variance-based RR. Survival
-    // probability p = luminance(throughput), bounded so bright paths almost
-    // always continue and dim paths are most likely killed. The heuristic
-    // p = sqrt(max_th * 0.0625) had no formal justification and biased
-    // the survival distribution; Veach's form keeps the estimator unbiased
-    // and minimizes the variance of the contribution by terminating exactly
-    // when the continuation cost outweighs the path's expected reward.
+    // Plan 2026-07-12 §1.3: this is a *variance-clamped* RR (a.k.a. bounded
+    // Russian roulette), NOT the strict Veach 1997 §3.4 variance-based form.
+    // Survival probability p = clamp(max_channel(throughput), 0.05, 1.0); the
+    // 0.05 floor prevents very dim paths from being killed so often that the
+    // surviving samples explode the per-path throughput (1/p becomes huge)
+    // and the renderer's variance blows up. The 1.0 ceiling keeps p <= 1
+    // (p > 1 would be invalid for a survival probability). The form is
+    // strictly unbiased (1/p compensation is unconditional), but it is not
+    // the optimal-variance estimator; choosing the optimal form is a
+    // separate piece of work.
     if (path.bounce >= PT_MIN_BOUNCES_BEFORE_RR)
     {
         const float max_th = max(path.throughput.r, max(path.throughput.g, path.throughput.b));

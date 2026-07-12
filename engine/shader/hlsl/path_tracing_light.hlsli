@@ -48,62 +48,44 @@ void PathTracingBuildOnb(float3 n, out float3 t, out float3 b)
     b = cross(n, t);
 }
 
-// Estimate the precomputed diffuse environment ambient (real-time PT preview
-// matched against deferred's IBL diffuse contribution). One-shot per primary
-// hit. Equivalent to infinite bounces of diffuse sky off the upper hemisphere
-// (a low-frequency approximation of the full bounce stack, baked into
-// g_irradiance_texture by the IBL pipeline). NOT double-counting: it adds
-// precomputed low-frequency ambient on top of the sun NEE (specific delta
-// direction) and the iterative BSDF bounces.
+// Estimate the precomputed diffuse environment ambient (low-frequency irradiance
+// lookup). One-shot per primary hit. Equivalent to infinite bounces of diffuse
+// sky off the upper hemisphere (a low-frequency approximation of the full
+// bounce stack baked offline into g_irradiance_texture).
 //
-// Bug fix 2026-07-12: the plan §4.1 gate (roughness > 0.5) was incorrect
-// math -- it disabled ambient on low-roughness surfaces, leaving them
-// without any light source besides the small sun NEE cone and the very
-// high-variance uniform-sphere sky NEE. With 1 spp/frame this made glossy
-// surfaces and the dim sides of matte surfaces appear nearly black even
-// when the cubemap was bright. Removed the gate: env ambient is the
-// dominant low-frequency term in any converged PT, and is needed at all
-// roughness values for the integrator to converge to the right answer.
+// Plan 2026-07-12 §1.2: this now matches the raster diffuse IBL formula used
+// in mesh.frag.hlsl:83-95 and deferred_lighting.frag.hlsl:102-103. Earlier
+// "Bug fix F/G" comments claimed g_irradiance_texture was per-direction sky
+// luminance with no prefilter; that was wrong -- the six HDR faces
+// `asset/texture/sky/skybox_irradiance_{X+,X-,Y+,Y-,Z+,Z-}.hdr` are *already*
+// the prefiltered diffuse irradiance cubemap (offline-baked hemispherical
+// convolution). mip 0 IS the cosine-weighted integral over the upper
+// hemisphere in the direction of the surface normal, which is exactly the
+// diffuse-ambient term we want. Higher mips exist because rhi->createCubeMap
+// auto-generates a mip chain (box downsamples via vulkan_util.cpp:550-618)
+// but they carry no extra IBL meaning here; sample at LOD 0.
 //
-// Bug fix 2026-07-12 (E): the previous formula multiplied by
-// (1 - F_Schlick(dot_n_wo, f0)) -- this was wrong math. Fresnel is the
-// fraction of energy *reflected* along the view direction; it does NOT
-// attenuate the diffuse ambient. With a view direction near-aligned with
-// the surface normal (typical camera placement), Fresnel was 1.0 and
-// the diffuse ambient was zeroed out, leaving the matte surface only the
-// direct NEE + iterative bounces -- which is dim at 1 spp/frame. Diffuse
-// ambient is purely (1 - metallic) * base_color * env, no Fresnel.
-//
-// Bug fix 2026-07-12 (F): the cubemap is the per-direction sky luminance
-// (not a prefiltered irradiance map). SampleLevel(.., 0) and .., 8 both
-// return the sky color in the *normal direction* -- a wall pointing at
-// the horizon strip gets near-black. For a real diffuse ambient we want
-// the spherical mean of the cubemap, which is approximately the same
-// color from any normal direction. Use the cubemap's "up" face mip 8 as
-// a proxy (sky is the dominant signal). The Y+ face is the brightest and
-// matches a typical noon sky. If scene is dimmer than expected, the user
-// can override via the g_ambient_constant_scale term baked into the
-// g_frame_data (TODO when needed).
-// Bug fix 2026-07-12 (G): the per-material base_color was not being
-// uploaded correctly to the PT material buffer (entity.m_base_color_factor
-// is read but several scenes in the test set have it defaulting to 0,
-// which makes the env ambient, NEE diffuse term, and iterative BSDF all
-// zero out). Until that upload path is debugged, fall back to a scalar
-// constant * env_sample for env ambient so the scene still receives
-// visible light. The NEE / BSDF paths that *do* see base_color will
-// remain dim for those scenes; the env ambient now provides the dominant
-// low-frequency term on its own.
+// NOT double-counting: this adds the precomputed low-frequency ambient on top
+// of the sun NEE (a specific delta direction) and the iterative BSDF
+// bounces. It uses the same ResourceSlot binding the raster pipeline does
+// (path_tracing_pass.cpp:511-527 + 1230-1235), so the PT view of the sky
+// lighting matches the raster view.
 float3 EstimateEnvironmentAmbient(PathTracingSurface s, float3 wo)
 {
-    const float3 sample_dir = float3(s.normal.x, s.normal.z, s.normal.y);
-    const float3 env = g_irradiance_texture.SampleLevel(g_linear_sampler, sample_dir, 0.0f).rgb;
-    // Independent of base_color -- use a constant 0.6 ambient. With cubemap
-    // data that is the per-direction sky luminance, this is approximately
-    // the "average sky irradiance hitting the surface". For scenes where
-    // base_color is correctly uploaded the same code path will multiply by
-    // base_color; here we accept the slight over-brightening in exchange
-    // for the scene being visible at all.
-    return env * 0.6f;
+    // Sample the raw world-space normal -- the raster diffuse lookup (mesh.frag.hlsl:83)
+    // does the same. The (x,z,y) swizzle in earlier revisions was a cargo-culted
+    // copy from skybox.frag.hlsl:14, which is the SPECULAR (background) cubemap
+    // and *does* need the swizzle because of how its six faces are arranged
+    // on disk. The irradiance faces are stored without that swizzle.
+    const float3 n_dir = s.normal;
+    const float3 irr = g_irradiance_texture.SampleLevel(g_linear_sampler, n_dir, 0.0f).rgb;
+
+    // Diffuse-ambient weighting (matches mesh.frag.hlsl:83-95, no Fresnel:
+    // F is the fraction of energy *reflected* along the view direction and
+    // does not attenuate diffuse). Metallic surfaces get zero diffuse from
+    // here (their diffuse is rolled into base_color at metallic=1 to mimic
+    // energy-conserving metals).
+    return irr * s.base_color * (1.0f - s.metallic);
 }
 
 // Reflected direction in the (x, z, y) cubemap convention.
