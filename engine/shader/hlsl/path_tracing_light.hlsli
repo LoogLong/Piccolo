@@ -55,8 +55,19 @@ void PathTracingBuildOnb(float3 n, out float3 t, out float3 b)
 // g_irradiance_texture by the IBL pipeline). NOT double-counting: it adds
 // precomputed low-frequency ambient on top of the sun NEE (specific delta
 // direction) and the iterative BSDF bounces.
+//
+// Plan 2026-07-12 §4.1: this is an acknowledged bias shortcut. Gated on
+// roughness > 0.5 -- high-roughness materials match the IBL ambient
+// approximation well (it is essentially a delta-function diffuse BRDF
+// integrated over the full sphere), low-roughness materials get only the
+// sky NEE + iterative BSDF stack so we don't overcount glossy specular.
 float3 EstimateEnvironmentAmbient(PathTracingSurface s, float3 wo)
 {
+    if (s.roughness <= 0.5f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
     // Engine cubemap convention: (x, z, y).
     const float3 n = s.normal;
     const float3 sample_dir = float3(n.x, n.z, n.y);
