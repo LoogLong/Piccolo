@@ -377,11 +377,33 @@ namespace Piccolo
         // image). Disabled by default; opt-in via PathTracingPass::enableDenoise
         // (or future ini hook). Default-off keeps existing visuals untouched
         // for users who already have a vendor denoiser.
+        //
+        // Plan §1.3 (first-frame latency): skip denoise on sample_index == 0.
+        // The denoise history is undefined, so a temporal blend would be
+        // degenerate; the spatial-only path would blur the noisy first frame
+        // into mush. Pass-through keeps the first frame visible immediately.
+        // On the very first frame after a reset we also seed the history
+        // buffer from the raw accumulation so the *second* frame's denoise
+        // has a sane temporal prior (no flicker from undefined memory).
         if (m_denoise_enabled)
         {
             if (ensureDenoiseResources())
             {
-                dispatchDenoise(frame_index);
+                if (m_sample_index == 0u)
+                {
+                    // First-frame seed: copy accumulation -> history directly.
+                    m_rhi->cmdCopyImageToImage(command_buffer,
+                                              m_accumulation_image,
+                                              RHI_IMAGE_ASPECT_COLOR_BIT,
+                                              m_denoise_history_image,
+                                              RHI_IMAGE_ASPECT_COLOR_BIT,
+                                              m_extent.width,
+                                              m_extent.height);
+                }
+                else
+                {
+                    dispatchDenoise(frame_index);
+                }
             }
         }
 
