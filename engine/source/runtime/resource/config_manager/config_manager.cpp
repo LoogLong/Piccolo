@@ -160,6 +160,12 @@ namespace Piccolo
                     const uint32_t parsed = toUint(value, m_path_tracing_quality_preset);
                     m_path_tracing_quality_preset = (parsed <= 3u) ? parsed : m_path_tracing_quality_preset;
                 }
+                else if (name == "PathTracingSunIrradianceScale")
+                {
+                    // Bug fix 2026-07-12 (B): see config_manager.h. A non-positive
+                    // value falls back to the C++ default (5.0).
+                    m_path_tracing_sun_irradiance_scale = toFloat(value, m_path_tracing_sun_irradiance_scale);
+                }
 #ifdef ENABLE_PHYSICS_DEBUG_RENDERER
                 else if (name == "JoltAssetFolder")
                 {

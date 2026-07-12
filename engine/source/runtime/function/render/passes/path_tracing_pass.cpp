@@ -765,7 +765,26 @@ namespace Piccolo
             PathTracingLightGpu dir {};
             dir.type      = kPtLightDirectional;
             dir.direction = raster_frame.scene_directional_light.direction;
-            dir.color     = raster_frame.scene_directional_light.color;
+            // Bug fix 2026-07-12 (B): the raster pipeline's directional-light
+            // color is a unit-candela value (1.0 ~= noon sun in deferred
+            // shading units). At 1 spp/frame with a 0.53 deg soft-sun cone,
+            // the NEE sample inside the cone is rare; without a scale the
+            // scene reads as nearly black. Multiply the color by
+            // PathTracingSunIrradianceScale (default 5.0, see config_manager.h)
+            // so the rare sun-aligned NEE sample carries physically meaningful
+            // energy. Raster pipeline is untouched -- only the PT light buffer
+            // sees the scaled value.
+            Vector3 sun_color = raster_frame.scene_directional_light.color;
+            float  sun_scale  = 1.0f;
+            if (auto cfg = g_runtime_global_context.m_config_manager)
+            {
+                sun_scale = cfg->getPathTracingSunIrradianceScale();
+            }
+            if (sun_scale > 0.0f)
+            {
+                sun_color = sun_color * sun_scale;
+            }
+            dir.color     = sun_color;
             // Soft-sun half-angle. Configurable via PathTracingDirectionalAngleDeg
             // (plan Task 3 Step 4); falls back to the compile-time default if
             // the key is absent / non-numeric / 0.

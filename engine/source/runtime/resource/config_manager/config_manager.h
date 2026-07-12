@@ -63,6 +63,19 @@ namespace Piccolo
         // first-frame / fast-pan).
         uint32_t getPathTracingQualityPreset() const { return m_path_tracing_quality_preset; }
 
+        // Bug fix 2026-07-12 (plan "fix B"): raster pipeline's
+        // directional_light.color is a unit-candela direction-light value
+        // tuned for deferred shading (1.0 ~= noon sun at the unit used by
+        // mesh.frag). PT at 1 spp/frame with a 0.53 deg soft-sun cone
+        // samples the sun cone extremely rarely -- the cube of unit
+        // contribution to a hit is rarely reached. Multiply the
+        // directional-light color by this scale inside the PT light buffer
+        // only (raster is untouched) so a sun that *is* sampled by NEE
+        // contributes a physically meaningful amount. Default 5.0 is a
+        // hand-tuned starting point; tune per scene by raising the value
+        // and watching the sun-lit wall brightness in the editor.
+        float getPathTracingSunIrradianceScale() const { return m_path_tracing_sun_irradiance_scale; }
+
     private:
         std::filesystem::path m_root_folder;
         std::filesystem::path m_asset_folder;
@@ -100,5 +113,7 @@ namespace Piccolo
         // Default Performance = 1 spp + strong denoiser; matches the "1
         // sample per frame" baseline that the rest of the renderer expects.
         uint32_t    m_path_tracing_quality_preset {0u};
+        // PT sun irradiance scale (see getPathTracingSunIrradianceScale doc).
+        float       m_path_tracing_sun_irradiance_scale {5.0f};
     };
 } // namespace Piccolo
