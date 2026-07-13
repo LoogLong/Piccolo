@@ -12,6 +12,7 @@
 
 #include <stdexcept>
 #include <cstring>
+#include <unordered_map>
 
 namespace Piccolo
 {
@@ -644,6 +645,20 @@ namespace Piccolo
 
         std::map<RenderMeshGPUResource*, uint32_t> geometry_indices;
 
+        // Plan 2026-07-13 §A: dedupe PT material records on the GPU upload path.
+        // Previously this loop pushed one record per collected instance (e.g. 30
+        // records for 1-1.level.json's 24 entities, because skinned + replicated
+        // copies round up the count). The texture-array descriptor was populated
+        // once via the same push-back order in path_tracing_pass.cpp. Empirically
+        // slots >= 3 read back as base_color_factor ~= 0 on the GPU even though
+        // CPU writes were (1,1,1,1), which collapsed the diffuse term and
+        // produced near-black walls in PT mode. The CPU side already dedupes
+        // by material_asset_id in render_scene.cpp:203-209; align the GPU side
+        // so material records are 1-per-unique-material (typically 4 for this
+        // scene: gold wall, white floor, robot player, plus any others).
+        std::unordered_map<RenderPBRMaterialGPUResource*, uint32_t> material_dedup;
+        material_dedup.reserve(collected_instances.size());
+
         for (uint32_t instance_index = 0; instance_index < collected_instances.size(); ++instance_index)
         {
             const RenderPathTracingCollectedInstance& source_instance = collected_instances[instance_index];
@@ -735,72 +750,103 @@ namespace Piccolo
                 m_path_tracing_geometry_data.push_back(geometry_data);
             }
 
-            // Build material record
-            RenderPathTracingMaterialGPUData material_data{};
-            if (source_instance.entity != nullptr)
+            // Resolve or create the dedup'd material record for this instance's
+            // material. Multiple instances sharing the same RenderPBRMaterialGPUResource
+            // (e.g. 17 walls all using gold.material.json) now share a single GPU
+            // material record, with the descriptor written once.
+            RenderPBRMaterialGPUResource* material_ptr = source_instance.material;
+            uint32_t      shader_material_index;
+            auto dedup_it = material_dedup.find(material_ptr);
+            if (dedup_it != material_dedup.end())
             {
-                // Plan 2026-07-12 §1.1 base_color chain audit:
-                //   src:    Piccolo::RenderEntity (declared in render_entity.h:27)
-                //           default ctor -> m_base_color_factor = {1,1,1,1}.
-                //   write:  no code path currently writes this field; the
-                //           asset pipeline (OBJ + JSON .material) has no
-                //           scalar-factor slot, so per-mesh variation is
-                //           not yet uploaded. Every PT material record
-                //           therefore sees {1,1,1,1}, which acts as a
-                //           neutral multiplier for the base-color texture
-                //           (sampled in path_tracing_core.hlsli:96-98).
-                //   read:   PathTracingMaterialData.base_color_factor.rgb
-                //           -- base diffuse color in the BSDF eval.
-                //
-                // If this ever lands < 1, the most likely cause is a future
-                // material-data source (glTF, USD, runtime spawn) that
-                // forgets to initialise the field. Log a one-shot warning.
-                const Vector4 bcf = source_instance.entity->m_base_color_factor;
-                material_data.base_color_factor = bcf;
-                material_data.emissive_factor = Vector4(source_instance.entity->m_emissive_factor, 0.0f);
-                material_data.metallic_roughness_normal_occlusion = Vector4(
-                    source_instance.entity->m_metallic_factor,
-                    source_instance.entity->m_roughness_factor,
-                    source_instance.entity->m_normal_scale,
-                    source_instance.entity->m_occlusion_strength
-                );
-                material_data.flags = source_instance.entity->m_double_sided ? kPathTracingMaterialFlagDoubleSided : 0u;
-
-                if (!m_base_color_factor_diag_logged)
-                {
-                    const bool all_zero   = (bcf.x == 0.0f && bcf.y == 0.0f && bcf.z == 0.0f);
-                    const bool not_white  = (bcf.x != 1.0f || bcf.y != 1.0f || bcf.z != 1.0f);
-                    if (all_zero || not_white)
-                    {
-                        LOG_WARN("PathTracing PT material base_color_factor is ({},{},{},{}); "
-                                    "expected opaque white {{1,1,1,1}} from default-initialised "
-                                    "RenderEntity (render_entity.h:27). All-zero means every diffuse "
-                                    "term will be black; non-white means asset-side variation is "
-                                    "active but not yet validated end-to-end.",
-                                    bcf.x, bcf.y, bcf.z, bcf.w);
-                    }
-                    m_base_color_factor_diag_logged = true;
-                }
+                shader_material_index = dedup_it->second;
             }
-            const uint32_t shader_material_index = static_cast<uint32_t>(m_path_tracing_material_data.size());
-            m_path_tracing_material_data.push_back(material_data);
+            else
+            {
+                // First time we see this material -- build the record and register.
+                shader_material_index = static_cast<uint32_t>(m_path_tracing_material_data.size());
+                material_dedup.emplace(material_ptr, shader_material_index);
 
-            // Build texture views record (material pointer resolved live during descriptor updates)
-            RenderPathTracingMaterialTextureViews texture_views{};
-            texture_views.material = source_instance.material;
-            m_path_tracing_material_texture_views.push_back(texture_views);
+                RenderPathTracingMaterialGPUData material_data{};
+                if (source_instance.entity != nullptr)
+                {
+                    // Plan 2026-07-12 §1.1 base_color chain audit:
+                    //   src:    Piccolo::RenderEntity (declared in render_entity.h:27)
+                    //           default ctor -> m_base_color_factor = {1,1,1,1}.
+                    //   write:  no code path currently writes this field; the
+                    //           asset pipeline (OBJ + JSON .material) has no
+                    //           scalar-factor slot, so per-mesh variation is
+                    //           not yet uploaded. Every PT material record
+                    //           therefore sees {1,1,1,1}, which acts as a
+                    //           neutral multiplier for the base-color texture
+                    //   read:   PathTracingMaterialData.base_color_factor.rgb
+                    //           -- base diffuse color in the BSDF eval.
+                    //
+                    // If this ever lands < 1, the most likely cause is a future
+                    // material-data source (glTF, USD, runtime spawn) that
+                    // forgets to initialise the field. Log a one-shot warning.
+                    const Vector4 bcf = source_instance.entity->m_base_color_factor;
+                    material_data.base_color_factor = bcf;
+                    material_data.emissive_factor = Vector4(source_instance.entity->m_emissive_factor, 0.0f);
+                    material_data.metallic_roughness_normal_occlusion = Vector4(
+                        source_instance.entity->m_metallic_factor,
+                        source_instance.entity->m_roughness_factor,
+                        source_instance.entity->m_normal_scale,
+                        source_instance.entity->m_occlusion_strength
+                    );
+                    material_data.flags = source_instance.entity->m_double_sided ? kPathTracingMaterialFlagDoubleSided : 0u;
 
-            // Update material texture indices (each material has 4 textures: base_color=0, metallic_roughness=1, normal=2, emissive=3)
-            const uint32_t texture_base = shader_material_index * 4u;
-            const bool     fits_in_array = (texture_base + 3u) < 1024u;
-            m_path_tracing_material_data[shader_material_index].base_color_texture_index =
-                fits_in_array ? texture_base + 0u : UINT32_MAX;
-            m_path_tracing_material_data[shader_material_index].metallic_roughness_texture_index =
-                fits_in_array ? texture_base + 1u : UINT32_MAX;
-            m_path_tracing_material_data[shader_material_index].normal_texture_index =
-                fits_in_array ? texture_base + 2u : UINT32_MAX;
-            m_path_tracing_material_data[shader_material_index].emissive_texture_index =
-                fits_in_array ? texture_base + 3u : UINT32_MAX;
+                    if (!m_base_color_factor_diag_logged)
+                    {
+                        const bool all_zero   = (bcf.x == 0.0f && bcf.y == 0.0f && bcf.z == 0.0f);
+                        const bool not_white  = (bcf.x != 1.0f || bcf.y != 1.0f || bcf.z != 1.0f);
+                        if (all_zero || not_white)
+                        {
+                            LOG_WARN("PathTracing PT material base_color_factor is ({},{},{},{}); "
+                                        "expected opaque white {{1,1,1,1}} from default-initialised "
+                                        "RenderEntity (render_entity.h:27). All-zero means every diffuse "
+                                        "term will be black; non-white means asset-side variation is "
+                                        "active but not yet validated end-to-end.",
+                                        bcf.x, bcf.y, bcf.z, bcf.w);
+                        }
+                        m_base_color_factor_diag_logged = true;
+                    }
+                }
+                m_path_tracing_material_data.push_back(material_data);
+
+                // Regression guard: every material record leaving this function
+                // must carry a sane (in-range, non-NaN) base color. If a future
+                // code path forgets to write base_color_factor, the in-class
+                // initialiser ({1,1,1,1}) would still apply but a stray write of
+                // uninitialised memory would not. This catches the failure mode
+                // empirically observed before dedup landed (PT visual: walls
+                // nearly black because some slots read base_color_factor ~= 0).
+                const Vector4 bcf = m_path_tracing_material_data.back().base_color_factor;
+                assert(bcf.x >= 0.0f && bcf.x <= 1.0f &&
+                       bcf.y >= 0.0f && bcf.y <= 1.0f &&
+                       bcf.z >= 0.0f && bcf.z <= 1.0f &&
+                       bcf.w >= 0.0f && bcf.w <= 1.0f &&
+                       "(path-tracing) base_color_factor left with an out-of-range "
+                       "or NaN value before GPU upload; the shader will read "
+                       "uninitialised buffer memory for diffuse ambient.");
+
+                // Build texture views record (material pointer resolved live during descriptor updates)
+                RenderPathTracingMaterialTextureViews texture_views{};
+                texture_views.material = material_ptr;
+                m_path_tracing_material_texture_views.push_back(texture_views);
+
+                // Update material texture indices (each material has 4 textures: base_color=0, metallic_roughness=1, normal=2, emissive=3)
+                const uint32_t texture_base = shader_material_index * 4u;
+                const bool     fits_in_array = (texture_base + 3u) < 1024u;
+                m_path_tracing_material_data[shader_material_index].base_color_texture_index =
+                    fits_in_array ? texture_base + 0u : UINT32_MAX;
+                m_path_tracing_material_data[shader_material_index].metallic_roughness_texture_index =
+                    fits_in_array ? texture_base + 1u : UINT32_MAX;
+                m_path_tracing_material_data[shader_material_index].normal_texture_index =
+                    fits_in_array ? texture_base + 2u : UINT32_MAX;
+                m_path_tracing_material_data[shader_material_index].emissive_texture_index =
+                    fits_in_array ? texture_base + 3u : UINT32_MAX;
+            }
 
             // Build instance record
             RenderPathTracingInstanceGPUData instance_data{};
