@@ -1165,6 +1165,19 @@ namespace Piccolo
         }
         frame_data.max_bounces = max_bounces;
         frame_data.max_path_intensity = max_path_intensity;
+        // Real cubemap mip count from the IBL resource (set by RenderResource::
+        // createIBLTextures). Plan 2026-07-15 Phase 5 A4. Fall back to 1 if
+        // the IBL resource has not been initialised yet (defensive: avoids
+        // divide-by-zero in PT_SpecularIBLLod on a brand-new frame).
+        if (m_render_resource_impl != nullptr)
+        {
+            frame_data.cubemap_mip_count =
+                m_render_resource_impl->m_global_render_resource._ibl_resource._specular_texture_image_miplevels;
+        }
+        if (frame_data.cubemap_mip_count == 0u)
+        {
+            frame_data.cubemap_mip_count = 1u;
+        }
         m_samples_per_frame = samples_per_frame;
 
         // Plan Task 5 diagnostics: print tunable values once so the user can
@@ -1174,9 +1187,10 @@ namespace Piccolo
         {
             m_diagnostics_logged = true;
             LOG_INFO("PathTracing diagnostics: max_bounces={}, light_count={},"
-                     " infinite_light_count={}, max_path_intensity={}, samples_per_frame={}",
+                     " infinite_light_count={}, max_path_intensity={}, samples_per_frame={},"
+                     " cubemap_mip_count={}",
                      max_bounces, light_count, infinite_light_count,
-                     max_path_intensity, samples_per_frame);
+                     max_path_intensity, samples_per_frame, frame_data.cubemap_mip_count);
             // Tier-1 performance budget banner (plan 2026-07-12 §0). Reading
             // these back from the same config lets ops confirm a regression
             // is not from a stale ini after a tier promotion.

@@ -24,6 +24,11 @@ struct PathTracingFrameData
     // Replaces the hardcoded firefly cap previously in path_tracing.lib.hlsl:101.
     // Configurable via PathTracingMaxPathIntensity (default 100).
     uint   max_path_intensity;
+    // Real mip count of g_specular_texture (the IBL specular cubemap). Drives
+    // PT_SpecularIBLLod's roughness -> mip formula so it lands on the right
+    // LOD for the actual asset instead of a hardcoded 8. Plan 2026-07-15
+    // Phase 5 A4.
+    uint   cubemap_mip_count;
     uint  _padding_core;
 };
 

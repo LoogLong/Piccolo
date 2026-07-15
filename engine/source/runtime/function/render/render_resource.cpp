@@ -1074,6 +1074,11 @@ namespace Piccolo
                                 "Global.IBL.Specular");
         rhi->setDebugObjectName(m_global_render_resource._ibl_resource._specular_texture_image_view,
                                 "Global.IBL.Specular.View");
+        // Cache the real mip count so the path tracer can drive its GGX
+        // importance-sampled specular IBL LOD formula (PT_SpecularIBLLod)
+        // from a value that matches the cubemap, not a hardcoded "kMips = 8"
+        // placeholder. Plan 2026-07-15 Phase 5 A4.
+        m_global_render_resource._ibl_resource._specular_texture_image_miplevels = specular_cubemap_miplevels;
     }
 
     RenderMeshGPUResource&

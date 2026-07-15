@@ -109,6 +109,13 @@ namespace Piccolo
             // Step 6, plumbing completed in the optimization plan).
             uint32_t  max_path_intensity {100u};
 
+            // Real mip count of the IBL specular cubemap. Drives the GGX
+            // importance-sampled specular IBL LOD formula on the GPU
+            // (PT_SpecularIBLLod) so the roughness -> mip curve lands on the
+            // right LOD for the actual cubemap, not a hardcoded "kMips = 8"
+            // placeholder. Plan 2026-07-15 Phase 5 A4.
+            uint32_t  cubemap_mip_count {1u};
+
             uint32_t  _padding_core {0};
 
         };

@@ -144,10 +144,11 @@ float3 EstimateEnvironmentSpecular(PathTracingSurface s, float3 wo)
 
     const float3 r_world = PT_ReflectDirection(-wo, s.normal);
 
-    // Schlick-style mip from roughness (engine cubemap has up to ~10 mips
-    // for a 1024-face sky; for our static scene the mip count is what
-    // the IBL pipeline baked -- we approximate to 8).
-    const float kMips = 8.0f; // typical for a 512-1024 cubemap (>= 5 stops); safe over-estimate
+    // Schlick-style mip from roughness. The cubemap's actual mip count is
+    // uploaded each frame as g_frame_data.cubemap_mip_count (Plan Phase 5
+    // A4) so this works for any 256/512/1024/2048 sky without a hardcoded
+    // constant.
+    const float kMips = (float)max(g_frame_data.cubemap_mip_count, 1u);
     const float lod = PT_SpecularIBLLod(s.roughness, kMips);
 
     const float3 env_spec = g_specular_texture.SampleLevel(g_linear_sampler, r_world, lod).rgb;

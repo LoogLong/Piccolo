@@ -96,6 +96,12 @@ namespace Piccolo
         RHIImageView* _specular_texture_image_view;
         RHISampler* _specular_texture_sampler;
         RHIAllocation* _specular_texture_image_allocation;
+        // Real mip count uploaded to the GPU for this cubemap (matches what
+        // createIBLTextures passed to createCubeMap). Read by the path tracer
+        // to drive the GGX importance-sampled specular IBL LOD formula
+        // (PT_SpecularIBLLod) instead of a hardcoded "kMips = 8" placeholder.
+        // Plan 2026-07-15 Phase 5 A4.
+        uint32_t   _specular_texture_image_miplevels {1u};
     };
 
     struct IBLResourceData
