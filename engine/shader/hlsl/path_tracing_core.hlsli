@@ -142,6 +142,22 @@ float3 SampleSkyRadiance(float3 direction)
 // (1-f): the correct single-F form. Reuses only the D_GGX / G_SchlicksmithGGX /
 // F_Schlick primitives from common.hlsli (plan Task 3 Step 0).
 // `wo` is the view direction (toward the camera, = -ray direction).
+//
+// Diffuse lobe: Disney 2014 (Burley) retro-reflection form (Phase 6 B2).
+//   f_diffuse = (28/(23*pi)) * base_color * (1-F) * (1-metallic)
+//               * (1 - (1-NdotL/2)^5) * (1 - (1-NdotV/2)^5)
+// The two (1 - (1-x/2)^5) terms are the retro-reflection / Hanrahan-Krueger
+// factor: when light and view directions are both near the surface normal
+// the diffuse is brighter (cloth / skin sheen), and at grazing angles the
+// retro factor falls to 0 so the diffuse doesn't double-count the specular
+// highlight. The (28/(23*pi)) normalization constant is required so the
+// hemisphere integral gives base_color (Lambert's (1/pi) is replaced by
+// the new constant because the retro factor shifts the integral).
+//
+// The sampling PDF (BRDFPdf) stays cos_nl/pi for the diffuse lobe -- pdf
+// is the sampling density, BRDF is the lobe value; they don't need to
+// share a shape. See Phase 5 A2 analysis note in
+// Docs/plans/2026-07-15-path-tracing-accuracy-v4.md.
 float3 EvalBSDF(PathTracingSurface s, float3 wo, float3 wi)
 {
     const float3 n      = s.normal;
@@ -162,8 +178,15 @@ float3 EvalBSDF(PathTracingSurface s, float3 wo, float3 wi)
     const float3 f     = F_Schlick(dot_hl, s.f0);
 
     const float3 specular = d * f * g / (4.0f * dot_nl * dot_nv + 0.001f);
-    const float3 kd       = (1.0f - f) * (1.0f - s.metallic);
-    const float3 diffuse  = kd * s.base_color / PICCOLO_PI;
+
+    // Diffuse lobe -- Disney 2014 retro-reflection form.
+    const float3 one_minus_F = float3(1.0f, 1.0f, 1.0f) - f;
+    const float  retro_L = 1.0f - pow(1.0f - dot_nl * 0.5f, 5.0f);
+    const float  retro_V = 1.0f - pow(1.0f - dot_nv * 0.5f, 5.0f);
+    const float3 diffuse = (28.0f / (23.0f * 3.14159265f)) * s.base_color
+                         * one_minus_F * (1.0f - s.metallic)
+                         * retro_L * retro_V;
+
     return diffuse + specular;
 }
 
