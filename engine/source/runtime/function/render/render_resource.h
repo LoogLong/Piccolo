@@ -53,6 +53,14 @@ namespace Piccolo
         uint32_t metallic_roughness_texture_index {UINT32_MAX};
         uint32_t normal_texture_index {UINT32_MAX};
         uint32_t emissive_texture_index {UINT32_MAX};
+        // Plan 2026-07-16 Phase 6 C2 (transmission). Mirrors the HLSL
+        // PathTracingMaterialData layout in path_tracing_common.hlsli.
+        // Defaults: transmission_factor=0 (opaque, current behavior);
+        // ior=1.5 (typical glass). The C++ material loader in
+        // render_resource.cpp currently sets the defaults; plumbing glTF
+        // KHR_materials_transmission through is a separate follow-up.
+        float    transmission_factor {0.0f};
+        float    ior {1.5f};
         uint32_t flags {0};
         uint32_t _padding[3] {0, 0, 0};
     };

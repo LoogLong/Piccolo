@@ -14,8 +14,9 @@
 
 // Lobe tags for one-sample MIS (informational only -- not required for MIS
 // weight computation, which uses the combined BRDFPdf).
-#define PT_LOBE_DIFFUSE   0u
-#define PT_LOBE_SPECULAR  1u
+#define PT_LOBE_DIFFUSE      0u
+#define PT_LOBE_SPECULAR     1u
+#define PT_LOBE_TRANSMISSION 2u  // Plan 2026-07-16 Phase 6 C2
 
 // Russian Roulette: skip RR until this many bounces to avoid biasing the
 // early contribution toward termination (plan Task 3 Step 5).
@@ -140,66 +141,119 @@ float G1_SchlickGGX(float NdotX, float alpha)
 }
 
 // Sample the BSDF at a surface for one-bounce continuation (indirect light).
-// One-sample MIS: the chosen lobe (diffuse vs specular) is a Bernoulli choice
-// under probability Pdiffuse. So the combined BRDF pdf that the indirect
-// continuation evaluates to is BRDFPdf(s, wo, wi, _), NOT a single lobe.
-// Returns wi, pdf (combined), lobe (for stats / future use).
+// One-sample MIS: the chosen lobe (diffuse / specular reflection / transmission)
+// is a Bernoulli choice under the per-lobe probability. The combined BSDF pdf
+// that the indirect continuation evaluates to is BRDFPdf(s, wo, wi, _), NOT
+// a single lobe. Returns wi, pdf (combined), lobe (for stats / future use).
+//
+// Plan 2026-07-16 Phase 6 C2: a transmission lobe is added when the material
+// has transmission_factor > 0. The lobe is sampled by refracting -wo around
+// the surface normal with eta = 1 / ior (air -> medium approximation). On
+// total internal reflection (TIR) the refraction direction is undefined and
+// we fall back to specular reflection -- the integrator records lobe as
+// PT_LOBE_SPECULAR and continues.
+//
+// Energy conservation note: this is a first-cut implementation. We split
+// the lobe selection via Bernoulli with Ptransmission = transmission_factor,
+// Pdiffuse = (1 - metallic) * (1 - transmission_factor), Pspecular_reflect
+// = (1 - Pdiffuse). Fresnel-weighted splitting (Schlick F at the sampled
+// direction) is deferred -- the current code over-counts the reflection
+// lobe at grazing angles for transmissive materials. A future revision
+// should compute F at the sampled half-vector and weight the lobe
+// probabilities accordingly.
 void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
                 out float3 wi, out float pdf, out uint lobe)
 {
-    // Dielectric -> mostly diffuse; metal -> mostly specular. Simple split.
-    const float Pdiffuse = saturate(1.0f - s.metallic);
+    const float Ptransmission = s.transmission_factor;
+    const float Pdiffuse      = saturate(1.0f - s.metallic) * (1.0f - Ptransmission);
 
-    if (Rand01(rng) < Pdiffuse)
+    const float r0 = Rand01(rng);
+
+    if (r0 < Ptransmission)
+    {
+        // Transmission lobe. Refract -wo around the surface normal.
+        // wi_refracted is computed by refract(-wo, n, eta).
+        const float3 wi_refracted = refract(-wo, s.normal, s.eta);
+        if (dot(wi_refracted, wi_refracted) <= 0.0f)
+        {
+            // TIR -- refract() returns (0,0,0). Fall back to a specular
+            // reflection sample so the integrator still makes progress.
+            const float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
+            wi   = reflect(-wo, h);
+            lobe = PT_LOBE_SPECULAR;
+            const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
+            const float dot_n_h  = max(dot(s.normal, h), 0.0f);
+            const float a   = max(s.roughness * s.roughness, 1e-3f);
+            const float a2  = a * a;
+            const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
+            const float D   = a2 / (3.14159265f * denom * denom);
+            const float G1_wo_h  = G1_SchlickGGX(dot_wo_h, a);
+            const float wo_dot_n = max(dot_n_h, 1e-4f);
+            pdf = (D * G1_wo_h) / (wo_dot_n * 4.0f);
+            return;
+        }
+        wi   = wi_refracted;
+        lobe = PT_LOBE_TRANSMISSION;
+        // Delta BTDF pdf (in the limit of thin-walled, delta-transmission).
+        // We use 1.0 for MIS with the other delta lobes; the per-lobe
+        // probability (Ptransmission) is folded into the combined pdf by
+        // BRDFPdf (Bernoulli mixture).
+        pdf = 1.0f;
+        return;
+    }
+
+    if (r0 < Ptransmission + Pdiffuse)
     {
         lobe = PT_LOBE_DIFFUSE;
         wi   = SampleCosineHemisphere(Rand2D(rng), s.normal, pdf);
+        return;
     }
-    else
-    {
-        lobe = PT_LOBE_SPECULAR;
-        // Heitz 2018 VNDF: half-vector visible-normal sample in surface frame.
-        float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
-        wi = reflect(-wo, h);
 
-        // pdf for the chosen wi is computed via BRDFPdf below; do not compute
-        // it here, that would duplicate the lobe formula.
-        const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
-        const float dot_n_h  = max(dot(s.normal, h), 0.0f);
-        const float a   = max(s.roughness * s.roughness, 1e-3f);
-        const float a2  = a * a;
-        const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
-        const float D   = a2 / (3.14159265f * denom * denom);
-        const float pdf_h = D * dot_n_h;
-        // The old code returned pdf_h / (4 * dot_wo_h); with the new VNDF
-        // sampler we should return the VNDF pdf at wi, which is computed by
-        // BRDFPdf below. Compute it once here so the caller has a usable pdf.
-        const float G1_wo_h  = G1_SchlickGGX(dot_wo_h, a);
-        const float wo_dot_n = max(dot_n_h, 1e-4f);  // dot(wo, N) >= 0 by construction
-        pdf = (D * G1_wo_h) / (wo_dot_n * 4.0f);
-        // (Caller may ignore this pdf and call BRDFPdf itself for the
-        //  combined-lobe pdf used in MIS -- both forms agree here.)
-    }
+    // Specular reflection lobe.
+    lobe = PT_LOBE_SPECULAR;
+    const float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
+    wi = reflect(-wo, h);
+
+    // VNDF-consistent pdf for the chosen wi (matches BRDFPdf.specular).
+    const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
+    const float dot_n_h  = max(dot(s.normal, h), 0.0f);
+    const float a   = max(s.roughness * s.roughness, 1e-3f);
+    const float a2  = a * a;
+    const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
+    const float D   = a2 / (3.14159265f * denom * denom);
+    const float G1_wo_h  = G1_SchlickGGX(dot_wo_h, a);
+    const float wo_dot_n = max(dot_n_h, 1e-4f);
+    pdf = (D * G1_wo_h) / (wo_dot_n * 4.0f);
 }
 
 // Combined BSDF pdf for a given incident direction `wi` (under the lobe
 // mixture used by SampleBRDF). This is what NEE passes to MISWeightPower
 // against pdf_light. lobe is set to whichever lobe dominates (informational).
+//
+// Plan 2026-07-16 Phase 6 C2: three-lobe Bernoulli mixture
+//   pdf = Ptransmission * pdf_transmission + Pdiffuse * pdf_d + Pspecular * pdf_s
+// where pdf_transmission = 1 (delta, sampled at the refracted direction),
+// pdf_d = cos(n, wi) / pi on the reflection hemisphere (0 otherwise),
+// pdf_s = the VNDF-consistent BRDF lobe pdf (Plan Phase 6 C1) for wi on
+// the reflection hemisphere (0 otherwise -- the reflection lobe cannot
+// sample a refracted direction).
+//
+// For refracted wi (dot(n, wi) < 0), pdf_d = pdf_s = 0 and the combined
+// pdf collapses to Ptransmission. This matches the sampling strategy
+// density so MIS remains unbiased.
 float BRDFPdf(PathTracingSurface s, float3 wo, float3 wi, out uint lobe)
 {
     lobe = PT_LOBE_DIFFUSE;
-    const float dot_n_l = dot(s.normal, wi);
     const float dot_n_v = dot(s.normal, wo);
-    if (dot_n_l <= 0.0f || dot_n_v <= 0.0f) { return 0.0f; }
+    if (dot_n_v <= 0.0f) { return 0.0f; }
 
-    const float3 h = normalize(wo + wi);
-    const float dot_n_h = dot(s.normal, h);
-    const float dot_v_h = dot(wo, h);
-    if (dot_n_h <= 0.0f) { return 0.0f; }
+    const float Ptransmission = s.transmission_factor;
+    const float Pdiffuse_full = saturate(1.0f - s.metallic) * (1.0f - Ptransmission);
+    const float Pspec_full    = 1.0f - Ptransmission - Pdiffuse_full;
 
-    const float Pdiffuse = saturate(1.0f - s.metallic);
+    const float dot_n_l = dot(s.normal, wi);
 
-    // Diffuse lobe (cosine-weighted hemisphere).
+    // Diffuse lobe density (only valid on the reflection hemisphere).
     // Diffuse lobe density. SampleCosineHemisphere draws wi with density
     // cos(theta) / pi; that IS the pdf of the chosen direction under the
     // diffuse lobe. EvalBSDF's (1-F)(1-metallic) factor is a *weight* on
@@ -213,9 +267,9 @@ float BRDFPdf(PathTracingSurface s, float3 wo, float3 wi, out uint lobe)
     // to satisfy the rendering equation. Adding the factor introduces
     // a per-channel bias for colored F0 materials (F is per-channel RGB
     // but pdf is a scalar). Reverted.
-    const float pdf_d = dot_n_l / 3.14159265f;
+    const float pdf_d = max(dot_n_l, 0.0f) / 3.14159265f;
 
-    // Specular lobe (Plan 2026-07-16 Phase 6 C1).
+    // Specular reflection lobe (Plan 2026-07-16 Phase 6 C1).
     // SampleBRDF uses the Heitz VNDF sampler for the specular lobe, so the
     // correct combined-lobe pdf at wi is the VNDF pdf at wi (not the plain
     // NDF pdf). The VNDF density on the unit sphere is
@@ -224,16 +278,43 @@ float BRDFPdf(PathTracingSurface s, float3 wo, float3 wi, out uint lobe)
     // converts it to the BRDF-lobe pdf
     //   pdf_BRDF(wi | wo) = D(h) * G1(wo, h) / (dot(n, wo) * 4)
     // using dot(wo, h) = dot(wi, h) for the half-vector.
-    const float a   = max(s.roughness * s.roughness, 1e-3f);
-    const float a2  = a * a;
-    const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
-    const float D   = a2 / (3.14159265f * denom * denom);
-    const float G1_wo_h = G1_SchlickGGX(dot_v_h, a);
-    const float wo_dot_n = max(dot_n_v, 1e-4f);
-    const float pdf_s = (D * G1_wo_h) / (wo_dot_n * 4.0f);
+    //
+    // The reflection lobe can only sample wi with dot(n, wi) > 0. For
+    // refracted wi we zero pdf_s so the combined pdf collapses to the
+    // transmission lobe only.
+    float pdf_s = 0.0f;
+    if (dot_n_l > 0.0f)
+    {
+        const float3 h = normalize(wo + wi);
+        const float dot_n_h = dot(s.normal, h);
+        const float dot_v_h = dot(wo, h);
+        if (dot_n_h > 0.0f && dot_v_h > 0.0f)
+        {
+            const float a   = max(s.roughness * s.roughness, 1e-3f);
+            const float a2  = a * a;
+            const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
+            const float D   = a2 / (3.14159265f * denom * denom);
+            const float G1_wo_h = G1_SchlickGGX(dot_v_h, a);
+            const float wo_dot_n = max(dot_n_v, 1e-4f);
+            pdf_s = (D * G1_wo_h) / (wo_dot_n * 4.0f);
+        }
+    }
 
-    if (pdf_s > pdf_d) lobe = PT_LOBE_SPECULAR;
-    return Pdiffuse * pdf_d + (1.0f - Pdiffuse) * pdf_s;
+    // Combined Bernoulli-mixture pdf. For refracted wi, only the
+    // transmission term contributes; for reflected wi, the diffuse and/or
+    // specular terms contribute.
+    const float pdf_combined = Ptransmission * 1.0f + Pdiffuse_full * pdf_d + Pspec_full * pdf_s;
+
+    // Dominant lobe for diagnostics (telemetry, future use).
+    if (dot_n_l < 0.0f)
+    {
+        lobe = PT_LOBE_TRANSMISSION;
+    }
+    else if (pdf_s > pdf_d)
+    {
+        lobe = PT_LOBE_SPECULAR;
+    }
+    return pdf_combined;
 }
 
 // Veach power-heuristic MIS weight (beta = 2, UE / PBRT standard).

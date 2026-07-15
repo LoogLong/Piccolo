@@ -126,8 +126,15 @@ bool PathTracingStep(inout PathState path)
     {
         return false;
     }
+    // Plan 2026-07-16 Phase 6 C2: a sampled transmission lobe (delta
+    // refraction) gives wi with dot(n, wi) < 0 by construction -- it
+    // continues into the medium, not away from the surface. Skip the
+    // reflection-hemisphere NdotL gate for that lobe; EvalBSDF handles
+    // the transmission case below by returning the BTDF value at the
+    // refracted direction.
     const float NdotL = dot(surface.normal, wi);
-    if (NdotL <= 0.0f)
+    const bool   is_transmission_lobe = (lobe == PT_LOBE_TRANSMISSION);
+    if (!is_transmission_lobe && NdotL <= 0.0f)
     {
         return false;
     }
@@ -172,7 +179,14 @@ bool PathTracingStep(inout PathState path)
         path.throughput *= 1.0f / max(p, 1e-6f);
     }
 
-    path.throughput *= f * NdotL / pdf_bsdf;
+    // Plan 2026-07-16 Phase 6 C2: the cos(theta) factor in the throughput
+    // is |dot(n, wi)| -- positive for both reflection (wi above surface)
+    // and transmission (wi below surface, the refracted ray). The NdotL
+    // variable holds dot(n, wi) which is positive for reflection and
+    // negative for transmission; take abs() so the throughput update is
+    // physically correct on the transmission lobe.
+    const float cos_theta = abs(NdotL);
+    path.throughput *= f * cos_theta / pdf_bsdf;
     path.origin       = surface.position + surface.normal * 0.001f;
     path.direction    = normalize(wi);
     path.bounce      += 1u;

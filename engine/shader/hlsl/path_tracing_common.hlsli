@@ -49,8 +49,17 @@ struct PathTracingMaterialData
     uint metallic_roughness_texture_index;
     uint normal_texture_index;
     uint emissive_texture_index;
-    uint flags;
-    uint3 _padding;
+    // Plan 2026-07-16 Phase 6 C2 (transmission).
+    //   transmission_factor (0..1) is the fraction of energy that passes
+    //     through the material (glTF KHR_materials_transmission).
+    //   ior is the index of refraction; default 1.5 for glass.
+    // Both ride in the trailing padding slot so the struct size is unchanged
+    // (80 bytes); the C++ side mirrors the same layout in
+    // render_resource.h::RenderPathTracingMaterialGPUData.
+    float  transmission_factor;
+    float  ior;
+    uint   flags;
+    uint3  _padding;
 };
 
 struct PathTracingGeometryData

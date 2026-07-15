@@ -65,6 +65,13 @@ struct PathTracingSurface
     float  metallic;
     float  roughness;
     float3 f0;
+    // Plan 2026-07-16 Phase 6 C2: transmission (glTF KHR_materials_transmission).
+    //   transmission_factor: 0 = opaque, 1 = fully transmissive (glass).
+    //   eta: 1 / ior (air -> medium). Default 1/1.5 = 0.667 for glass.
+    //      (ior stored on material; we pre-divide here so the inner-loop
+    //      code doesn't need to know about ior sign conventions.)
+    float  transmission_factor;
+    float  eta;
 };
 
 // Load material + textures for a hit. Geometry (normal/texcoord) comes from
@@ -121,6 +128,12 @@ PathTracingSurface LoadHitSurface(PathTracingHitPayload hit, float3 ray_origin, 
     surface.emissive   = emissive;
     // Dielectric F0 is unified to 0.04 for the path tracer (matches mesh).
     surface.f0         = lerp(0.04f, base_color, metallic);
+
+    // Plan 2026-07-16 Phase 6 C2: transmission. Default zero (opaque) is
+    // preserved so the existing material loaders that never populate the
+    // transmission fields keep producing the current behavior.
+    surface.transmission_factor = clamp(material_data.transmission_factor, 0.0f, 1.0f);
+    surface.eta = (material_data.ior > 1.0f) ? (1.0f / material_data.ior) : 1.0f;
     return surface;
 }
 
@@ -162,8 +175,31 @@ float3 EvalBSDF(PathTracingSurface s, float3 wo, float3 wi)
 {
     const float3 n      = s.normal;
     const float  dot_nv = clamp(dot(n, wo), 0.0f, 1.0f);
-    const float  dot_nl = clamp(dot(n, wi), 0.0f, 1.0f);
-    if (dot_nl <= 0.0f || dot_nv <= 0.0f)
+    // Plan 2026-07-16 Phase 6 C2: a sampled transmission lobe gives wi on
+    // the refraction side (dot(n, wi) < 0). Don't reject those up-front;
+    // fall through to the BTDF branch below instead.
+    const float  dot_nl_raw = dot(n, wi);
+    const float  dot_nl = dot_nl_raw;
+
+    // Transmission lobe: thin-walled delta BTDF (no roughness on the
+    // transmission side, no Beer-Lambert absorption in this first cut).
+    // Standard refraction BTDF with the eta^2 Jacobian factor:
+    //   f_t(wi, wo) = base_color * |wo.n| / (|wi.n|^2 * eta^2)
+    // When evaluated at a non-refracted wi (i.e. on the wrong side of
+    // the normal for the transmitted direction), this is not the right
+    // formula; we leave the rest of the BRDF path for the reflection
+    // case.
+    if (dot_nl < 0.0f)
+    {
+        if (s.transmission_factor <= 0.0f)
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+        const float NdotL_abs = -dot_nl;
+        return s.base_color * dot_nv /
+               max(NdotL_abs * NdotL_abs * s.eta * s.eta, 1e-7f);
+    }
+    if (dot_nv <= 0.0f)
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
