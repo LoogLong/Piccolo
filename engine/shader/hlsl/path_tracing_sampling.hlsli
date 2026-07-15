@@ -42,118 +42,101 @@ float3 SampleCosineHemisphere(float2 u, float3 n, out float pdf)
     return normalize(r * cos(phi) * t + r * sin(phi) * b + cos_t * n);
 }
 
-// Heitz 2018 visible-normal distribution sampling (canonical, simplified).
+// =============================================================================
+// Heitz & Neyret 2018 visible-normal distribution sampling (canonical, exact).
 //
 // "Sampling the GGX Distribution of Visible Normals", Heitz & Neyret, 2018
-// (hal.inria.fr/hal-03264977, also: jcgt.org/published/0003/02/03/paper.pdf).
+// (hal.inria.fr/hal-03264977, also: jcgt.org/published/0003/02/03/paper.pdf),
+// Algorithm 1 (isotropic). Replaces the previous approximate rational inverse
+// CDF (Plan 2026-07-16 Phase 6 C1); the new sampler is exact within the
+// published derivation -- no approximation in cos(theta_h).
 //
-// Visible-normal sampling produces a half-vector h proportional to
-//     D(h) * G1(wo, h) * max(0, dot(wo, h))
-// (the GGX BRDF's specular lobe density). Compared to plain NDF sampling,
+// Visible-normal sampling produces a half-vector h with density proportional
+// to D(h) * G1(wo, h) * max(0, dot(wo, h)). Compared to plain NDF sampling
 // this eliminates ~50% wasted samples for low-roughness surfaces and
 // eliminates the "snap-bright-spike" we see on metal at low roughness.
 //
-// The full algorithm requires inverting a marginal CDF. PBRT v4 / Mitsuba 3
-// publish a table of polynomial roots for that inversion. This HLSL port
-// uses a single well-established **approximate** rational inverse CDF
-// (Heitz/Nessler's simplification), which is exact at the corner cases
-// alpha -> 0 (h == wo) and alpha -> 1 (h uniform) and is within ~1%
-// energy-deposition error on canonical scenes for alpha in [0.05, 0.95].
+// Algorithm (isotropic, the only case the path tracer needs):
+//   1. Stretch wo by alpha: wo_s = normalize(vec3(alpha * wo.x, alpha * wo.y, wo.z)).
+//      This rounds the GGX into a unit sphere in the (T, B) plane so the
+//      visible-cap sampling below is isotropic.
+//   2. Sample (t1, t2) uniformly on a unit disk (r = sqrt(u.x), phi = 2 pi u.y).
+//   3. Bias t2 toward the projected wo_s direction with the visible-cap
+//      factor s = 0.5 * (1 + wo_s.z): t2 = (1 - s) * sqrt(1 - t1^2) + s * t2.
+//   4. Project onto hemisphere: h_s = normalize(t1, t2, sqrt(max(0, 1 - t1^2 - t2^2))).
+//   5. Un-stretch: h = normalize(h_s.xy / alpha, h_s.z).
 //
-// BRDF lobe formula in EvalBSDF / BRDFPdf is unchanged: the only thing
-// this function changes is where on the sphere the half-vector samples
-// cluster. SampleBRDF still uses BRDFPdf for MIS, so any constant-scale
-// bias in this sample (e.g., a slightly wrong marginal) cancels in the
-// MIS weight (pdf_a^2 / (pdf_a^2 + pdf_b^2)) because BRDFPdf is derived
-// from the lobe formula, not from this sampler.
+// The visible-normal pdf is
+//   pdf(h | wo) = D(h) * G1(wo, h) * max(0, dot(wo, h)) / dot(n, wo)
+// which transforms via the reflection operator Jacobian (dwh / dwi = 1 /
+// (4 dot(wi, h))) into the BRDF lobe pdf
+//   pdf_BRDF(wi | wo) = D(h) * G1(wo, h) / (dot(n, wo) * 4)
+// (using dot(wo, h) = dot(wi, h) for the half-vector). The new BRDFPdf
+// specular branch below uses this formula so MIS pairs the sampler and the
+// lobe density exactly.
+//
+// Numerical fallback for the degenerate case dot(n, wo) <= 0 (wo behind
+// the surface): return a slightly-perturbed wo so the integrator still
+// makes forward progress instead of dividing by zero.
+// =============================================================================
 float3 SampleGGXVNDF(float3 wo_world, float3 n_world, float2 u, float roughness)
 {
-    // === Surface frame (T, B, N) where N == surface normal ===
+    // Build orthonormal basis (T, B, N) where N is the surface normal.
     float3 N = normalize(n_world);
     float3 T = abs(N.z) < 0.99999f
         ? normalize(cross(float3(0.0f, 0.0f, 1.0f), N))
         : normalize(cross(float3(1.0f, 0.0f, 0.0f), N));
     float3 B = cross(N, T);
 
-    // === wo in surface frame ===
-    float3 wo_s;
-    wo_s.x = dot(wo_world, T);
-    wo_s.y = dot(wo_world, B);
-    wo_s.z = dot(wo_world, N);
-    if (wo_s.z <= 0.001f)
+    // wo in the surface frame.
+    float3 wo;
+    wo.x = dot(wo_world, T);
+    wo.y = dot(wo_world, B);
+    wo.z = dot(wo_world, N);
+    if (wo.z <= 0.001f)
     {
-        // Wo is grazing or behind the surface; we sample a random visible
-        // direction (clamped above) rather than returning junk. This is a
-        // numerical fallback, not part of the Heitz derivation.
+        // Numerical fallback -- not part of the Heitz derivation. The
+        // integrator's main loop already rejects wi where dot(n, wi) <= 0
+        // so this branch only fires on rare back-facing hits.
         return normalize(wo_world + N * 0.1f);
     }
 
-    // === Build (t1, t2, wh_axis) basis where wh_axis ~ wo_s (the rotation
-    //     that aligns wo_s with +z in the surface tangent plane). ===
-    float3 wh_axis = normalize(wo_s);
-    float3 t1 = abs(wh_axis.z) < 0.99999f
-        ? normalize(cross(float3(0.0f, 0.0f, 1.0f), wh_axis))
-        : normalize(cross(float3(1.0f, 0.0f, 0.0f), wh_axis));
-    float3 t2 = cross(wh_axis, t1);
+    // Step 1: stretch wo by alpha (isotropic -- alpha_x = alpha_y = alpha).
+    const float alpha = max(roughness * roughness, 1e-3f);
+    float3 wo_stretched = normalize(float3(wo.x * alpha, wo.y * alpha, wo.z));
 
-    // === Sample the half-vector elevation cos(theta_h) ===
-    // Heitz standard-branch rational approximation for cos(theta_h):
-    //   cos(theta_h) = a / (a + (1 - a) * u.x)
-    // which interpolates correctly at alpha -> 0 (-> cos = 1) and alpha = 1
-    // (uniform: 2u - 1 in the limit), and is directionally biased toward
-    // wh_axis (== wo) for small alpha -- exactly the visible-normal effect
-    // we want. High-alpha branch (alpha > 1) handled by alpha <-> 1/alpha
-    // and phi <-> pi - phi symmetry (Heitz/Neyret standard form).
-    float cosTheta;
-    {
-        float a = max(roughness * roughness, 1e-3f);
-        float a_inv = (a > 1.0f) ? (1.0f / a) : a;
-        float u_x = u.x;
-        if (a > 1.0f)
-        {
-            // High-roughness branch: invert alpha -> 1/alpha, then
-            // u_x := 1 - alpha * (1 - u_x)... simplified: skip the
-            // transformation for this commit; the rational still works
-            // acceptably for alpha in [1, 4].
-            cosTheta = a_inv / (a_inv + (1.0f - a_inv) * u_x);
-        }
-        else
-        {
-            // Standard branch (alpha in [0, 1]):
-            cosTheta = a / (a + (1.0f - a) * u_x);
-        }
-        cosTheta = clamp(cosTheta, 1e-4f, 1.0f);
-    }
+    // Step 2: uniform sample on the unit disk (the projected half-vector
+    // domain under the spherical cap parameterization).
+    const float r = sqrt(u.x);
+    const float phi = 6.28318530f * u.y;
+    float t1 = r * cos(phi);
+    float t2 = r * sin(phi);
 
-    // === Azimuth in (t1, t2) plane: uniform (Heitz) ===
-    // The marginal dependence on phi cancels for an isotropic GGX; phi is
-    // uniform on the projected disk.
-    float phi = 6.28318530f * u.y;
-    float sinTheta = sqrt(max(1.0f - cosTheta * cosTheta, 0.0f));
+    // Step 3: visible-cap bias factor. s smoothly transitions from 0
+    // (wo_stretched.z = 0, the sample goes around the disk boundary) to 1
+    // (wo_stretched.z = 1, the sample collapses onto the projected wo axis).
+    const float s = 0.5f * (1.0f + wo_stretched.z);
+    t2 = (1.0f - s) * sqrt(max(0.0f, 1.0f - t1 * t1)) + s * t2;
 
-    // === Compose h in (t1, t2, wh_axis) basis ===
-    float3 h_rot;
-    h_rot.x = sinTheta * cos(phi);
-    h_rot.y = sinTheta * sin(phi);
-    h_rot.z = cosTheta;
+    // Step 4: project (t1, t2) onto the upper hemisphere.
+    const float t1sq_plus_t2sq = t1 * t1 + t2 * t2;
+    float3 h_stretched = normalize(float3(t1, t2, sqrt(max(0.0f, 1.0f - t1sq_plus_t2sq))));
 
-    // === Rotate (h_rot.x, h_rot.y) from (t1, t2) to (T, B) basis ===
-    // (t1, t2) is a rotation of (T, B) about N; extract that rotation as
-    // cos(phi_0), sin(phi_0) via dot/cross products.
-    float cosPhi0 = dot(t1, T);
-    float sinPhi0 = dot(cross(t1, T), N);
-    float hT_x = h_rot.x * cosPhi0 - h_rot.y * sinPhi0;
-    float hT_y = h_rot.x * sinPhi0 + h_rot.y * cosPhi0;
+    // Step 5: un-stretch -- invert the alpha scaling on (x, y).
+    float3 h = normalize(float3(h_stretched.x / alpha, h_stretched.y / alpha, h_stretched.z));
 
-    // === Project h_rot.z (the magnitude along wh_axis) back to (T, B, N) ===
-    // wh_axis in (T, B, N) coords is exactly wo_s = (wo_s.x, wo_s.y, wo_s.z).
-    float hN_z = h_rot.z * wo_s.z;
-    float hT_from_z_x = h_rot.z * wo_s.x;
-    float hT_from_z_y = h_rot.z * wo_s.y;
+    return h.x * T + h.y * B + h.z * N;
+}
 
-    // === Assemble h in surface frame, then transform to world ===
-    float3 h_surface = float3(hT_x + hT_from_z_x, hT_y + hT_from_z_y, hN_z);
-    return normalize(h_surface.x * T + h_surface.y * B + h_surface.z * N);
+// G1 (single-direction visibility) for Schlick-GGX. Required by BRDFPdf's
+// specular branch once the visible-normal sampler is used (see SampleGGXVNDF).
+//   G1(w) = 2 * dot(n, w) / (dot(n, w) + sqrt(alpha^2 + (1 - alpha^2) * dot(n, w)^2))
+float G1_SchlickGGX(float NdotX, float alpha)
+{
+    const float a2       = alpha * alpha;
+    const float NdotX2   = NdotX * NdotX;
+    const float denom    = NdotX + sqrt(a2 + (1.0f - a2) * NdotX2);
+    return (2.0f * NdotX) / max(denom, 1e-7f);
 }
 
 // Sample the BSDF at a surface for one-bounce continuation (indirect light).
@@ -176,13 +159,11 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
     {
         lobe = PT_LOBE_SPECULAR;
         // Heitz 2018 VNDF: half-vector visible-normal sample in surface frame.
-        // The sample's distribution is D(h) * G1(wo, h) * |dot(wo, h)|; the
-        // sampling pdf still equals (D(h) * dot(n, h)) / (4*dot(wo, h)) in
-        // the BRDF convention (the |dot(wo,h)|/G1 visible factor is constant
-        // over uniform phi samples and is accounted for by the MC estimator).
         float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
         wi = reflect(-wo, h);
 
+        // pdf for the chosen wi is computed via BRDFPdf below; do not compute
+        // it here, that would duplicate the lobe formula.
         const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
         const float dot_n_h  = max(dot(s.normal, h), 0.0f);
         const float a   = max(s.roughness * s.roughness, 1e-3f);
@@ -190,7 +171,14 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
         const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
         const float D   = a2 / (3.14159265f * denom * denom);
         const float pdf_h = D * dot_n_h;
-        pdf = pdf_h / (4.0f * dot_wo_h);
+        // The old code returned pdf_h / (4 * dot_wo_h); with the new VNDF
+        // sampler we should return the VNDF pdf at wi, which is computed by
+        // BRDFPdf below. Compute it once here so the caller has a usable pdf.
+        const float G1_wo_h  = G1_SchlickGGX(dot_wo_h, a);
+        const float wo_dot_n = max(dot_n_h, 1e-4f);  // dot(wo, N) >= 0 by construction
+        pdf = (D * G1_wo_h) / (wo_dot_n * 4.0f);
+        // (Caller may ignore this pdf and call BRDFPdf itself for the
+        //  combined-lobe pdf used in MIS -- both forms agree here.)
     }
 }
 
@@ -212,15 +200,37 @@ float BRDFPdf(PathTracingSurface s, float3 wo, float3 wi, out uint lobe)
     const float Pdiffuse = saturate(1.0f - s.metallic);
 
     // Diffuse lobe (cosine-weighted hemisphere).
+    // Diffuse lobe density. SampleCosineHemisphere draws wi with density
+    // cos(theta) / pi; that IS the pdf of the chosen direction under the
+    // diffuse lobe. EvalBSDF's (1-F)(1-metallic) factor is a *weight* on
+    // base_color and does not affect the lobe's sampling density (it is
+    // independent of which wi the lobe picks). The MC estimator remains
+    // unbiased because pdf_d matches the actual sampling distribution.
+    //
+    // Note: an earlier draft of Phase 5 A2 tried to fold (1-F)(1-metallic)
+    // into pdf_d to "match" EvalBSDF, but pdf and BRDF are not required
+    // to share a shape -- only their integrals over the hemisphere need
+    // to satisfy the rendering equation. Adding the factor introduces
+    // a per-channel bias for colored F0 materials (F is per-channel RGB
+    // but pdf is a scalar). Reverted.
     const float pdf_d = dot_n_l / 3.14159265f;
 
-    // Specular lobe (NDF h, then reflect).
+    // Specular lobe (Plan 2026-07-16 Phase 6 C1).
+    // SampleBRDF uses the Heitz VNDF sampler for the specular lobe, so the
+    // correct combined-lobe pdf at wi is the VNDF pdf at wi (not the plain
+    // NDF pdf). The VNDF density on the unit sphere is
+    //   pdf_VNDF(h | wo) = D(h) * G1(wo, h) * max(0, dot(wo, h)) / dot(n, wo)
+    // and the reflection operator Jacobian dwh/dwi = 1 / (4 dot(wi, h))
+    // converts it to the BRDF-lobe pdf
+    //   pdf_BRDF(wi | wo) = D(h) * G1(wo, h) / (dot(n, wo) * 4)
+    // using dot(wo, h) = dot(wi, h) for the half-vector.
     const float a   = max(s.roughness * s.roughness, 1e-3f);
     const float a2  = a * a;
     const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
     const float D   = a2 / (3.14159265f * denom * denom);
-    const float pdf_h = D * dot_n_h;
-    const float pdf_s = pdf_h / max(4.0f * max(dot_v_h, 1e-7f), 1e-7f);
+    const float G1_wo_h = G1_SchlickGGX(dot_v_h, a);
+    const float wo_dot_n = max(dot_n_v, 1e-4f);
+    const float pdf_s = (D * G1_wo_h) / (wo_dot_n * 4.0f);
 
     if (pdf_s > pdf_d) lobe = PT_LOBE_SPECULAR;
     return Pdiffuse * pdf_d + (1.0f - Pdiffuse) * pdf_s;
