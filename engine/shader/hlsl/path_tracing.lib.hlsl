@@ -71,8 +71,43 @@ bool PathTracingStep(inout PathState path)
     // sky NEE, producing a near-black image at 1 spp/frame.
     path.radiance += path.throughput * (surface.emissive
         + EstimateDirectLight(surface, wo, path.rng)
-        + EstimateEnvironmentAmbient(surface, wo)
-        + EstimateEnvironmentSpecular(surface, wo));
+        + EstimateEnvironmentAmbient(surface, wo));
+
+    // First-hit specular IBL.
+    //   Mirror case (roughness < 0.05): delta-sample the cubemap along the
+    //   reflection direction and MIS-pair with the BSDF specular lobe. This
+    //   fixes the energy double-count against sky NEE + env ambient + the
+    //   rough-spec term for glossy surfaces. The previous "fixed term"
+    //   EstimateEnvironmentSpecular was the source of triple-counting in
+    //   HDR sky scenes (Plan 2026-07-15 Phase 5 A5).
+    //   Rough case (roughness >= 0.05): fall back to the rough_spec term
+    //   (faded by rough_fade for roughness > 0.4 so high-roughness energy
+    //   flows through EstimateEnvironmentAmbient + sky NEE instead).
+    float3 spec_wi  = float3(0.0f, 0.0f, 0.0f);
+    float3 spec_Li  = float3(0.0f, 0.0f, 0.0f);
+    float3 spec_f   = float3(0.0f, 0.0f, 0.0f);
+    float  spec_pdf = 0.0f;
+    if (SampleEnvironmentSpecularDelta(surface, wo, spec_wi, spec_Li, spec_f, spec_pdf))
+    {
+        const float NdotL_spec = max(dot(surface.normal, spec_wi), 0.0f);
+        if (NdotL_spec > 0.0f && spec_pdf > 0.0f)
+        {
+            uint   lobe_unused;
+            const float pdf_bsdf = BRDFPdf(surface, wo, spec_wi, lobe_unused);
+            const float weight   = MISWeightPower(spec_pdf, pdf_bsdf);
+            // For a delta sample the f*cos/pdf factor collapses to F*NdotL
+            // (the BRDF's D and G terms cancel against the delta pdf); the
+            // mirror MIS result is identical in expectation to the old fixed
+            // form, but the energy accounting is now correct relative to the
+            // BSDF lobe (so we do not double-count against sky NEE etc.).
+            path.radiance += path.throughput
+                * (weight * spec_Li * spec_f * NdotL_spec / spec_pdf);
+        }
+    }
+    else
+    {
+        path.radiance += path.throughput * EstimateEnvironmentSpecular(surface, wo);
+    }
 
     // Stop here if we are already at the last permitted bounce (direct-only cap).
     if ((path.bounce + 1u) >= g_frame_data.max_bounces)

@@ -200,6 +200,68 @@ float3 EstimateEnvironmentSpecular(PathTracingSurface s, float3 wo)
     return env_spec * f * NdotR * rough_fade;
 }
 
+// =============================================================================
+// SampleEnvironmentSpecularDelta -- mirror-only first-hit specular IBL
+// (Plan 2026-07-15 Phase 5 A5).
+//
+// For surfaces with roughness < kMirrorCutoffRoughness (0.05), the GGX
+// specular lobe is narrow enough to treat as a delta at the perfect-reflection
+// direction. We sample the cubemap along wi = reflect(-wo, n), at a roughness-
+// driven LOD, and pair the contribution with the BSDF lobe via the power
+// heuristic to avoid double-counting against EstimateEnvironmentSpecular
+// (rough case) and sky NEE + EstimateEnvironmentAmbient (low-frequency sky).
+//
+// Returns true and fills wi/Li/f/pdf when this path applies; returns false
+// for roughness >= kMirrorCutoffRoughness so the caller falls back to
+// EstimateEnvironmentSpecular (the rough case, faded by rough_fade for
+// roughness > 0.4). Returns false for back-facing reflections (dot(n,wi)<=0)
+// so we never add a negative contribution.
+//
+// pdf_light is 1.0 (delta in continuous solid angle). pdf_bsdf at the
+// reflection direction is the GGX specular lobe pdf (a^2 / (4 pi NdotV) for
+// mirror incidence, falling to 0 as roughness -> 0). For roughness in the
+// mirror regime the BSDF pdf is small so the MIS weight naturally favours
+// this sample (which is the right answer -- a mirror reflection's energy
+// should come from the cubemap, not the BSDF lobe).
+// =============================================================================
+static const float kMirrorCutoffRoughness = 0.05f;
+
+bool SampleEnvironmentSpecularDelta(
+    PathTracingSurface s, float3 wo,
+    out float3 wi, out float3 Li, out float3 f, out float pdf)
+{
+    wi  = float3(0.0f, 0.0f, 0.0f);
+    Li  = float3(0.0f, 0.0f, 0.0f);
+    f   = float3(0.0f, 0.0f, 0.0f);
+    pdf = 0.0f;
+
+    if (s.roughness >= kMirrorCutoffRoughness)
+    {
+        // Rough case -- caller falls back to EstimateEnvironmentSpecular.
+        return false;
+    }
+
+    const float3 N     = s.normal;
+    const float3 wi_ref = reflect(-wo, N);
+    const float NdotL  = dot(N, wi_ref);
+    if (NdotL <= 0.0f)
+    {
+        // Reflection went below the horizon; no specular IBL.
+        return false;
+    }
+
+    const float NdotV = max(dot(N, wo), 0.0f);
+    const float3 r_world_swizzled = float3(wi_ref.x, wi_ref.z, wi_ref.y);
+    const float kMips = (float)max(g_frame_data.cubemap_mip_count, 1u);
+    const float lod   = PT_SpecularIBLLod(s.roughness, kMips);
+
+    Li = g_specular_texture.SampleLevel(g_linear_sampler, r_world_swizzled, lod).rgb;
+    f  = F_Schlick(NdotV, s.f0);
+    wi = wi_ref;
+    pdf = 1.0f;  // delta in solid angle -- power_heuristic handles cross-fade.
+    return true;
+}
+
 // Uniform cone sampling around `axis` (half-angle from cos_half). Returns the
 // sampled direction and the solid-angle pdf (1 / Omega_cone).
 float3 SampleCone(float2 u, float3 axis, float cos_half, out float pdf)
