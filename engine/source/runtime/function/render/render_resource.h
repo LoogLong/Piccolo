@@ -102,6 +102,21 @@ namespace Piccolo
         // (PT_SpecularIBLLod) instead of a hardcoded "kMips = 8" placeholder.
         // Plan 2026-07-15 Phase 5 A4.
         uint32_t   _specular_texture_image_miplevels {1u};
+
+        // Sky row-margin CDF textures for path-tracer sky NEE importance
+        // sampling. Built CPU-side at createIBLTextures time from the same
+        // HDR specular pixels uploaded above. Plan 2026-07-15 Phase 5 A1.
+        //   _sky_row_marginal_image : 2D R32_SFLOAT, shape (6*N, 1)
+        //   _sky_row_cdf_image      : 2D R32_SFLOAT, shape (6*N, N)
+        // Both consumed by path_tracing_light.hlsli's
+        // SampleLight(PT_LIGHT_SKY, ...).
+        RHIImage*      _sky_row_marginal_image {nullptr};
+        RHIImageView*  _sky_row_marginal_image_view {nullptr};
+        RHIAllocation* _sky_row_marginal_image_allocation {nullptr};
+        RHIImage*      _sky_row_cdf_image {nullptr};
+        RHIImageView*  _sky_row_cdf_image_view {nullptr};
+        RHIAllocation* _sky_row_cdf_image_allocation {nullptr};
+        uint32_t       _sky_cdf_bin_count {32u};
     };
 
     struct IBLResourceData

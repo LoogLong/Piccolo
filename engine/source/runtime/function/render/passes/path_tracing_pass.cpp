@@ -458,7 +458,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[15] {};
+        RHIDescriptorSetLayoutBinding bindings[17] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -545,6 +545,20 @@ namespace Piccolo
         bindings[14].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[14].descriptorCount = 1;
         bindings[14].stageFlags      = RHI_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+        // Plan 2026-07-15 Phase 5 A1: sky NEE importance-sampling CDF
+        // textures. Both are R32_SFLOAT 2D images used as 1D / (6*N x N)
+        // on the GPU; bound to raygen because SampleLight(PT_LIGHT_SKY, ...)
+        // is invoked from EstimateDirectLight inside the raygen path loop.
+        bindings[15].binding         = 1037;  // t1037: g_sky_row_marginal
+        bindings[15].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[15].descriptorCount = 1;
+        bindings[15].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+        bindings[16].binding         = 1038;  // t1038: g_sky_row_cdf
+        bindings[16].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        bindings[16].descriptorCount = 1;
+        bindings[16].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1301,6 +1315,26 @@ namespace Piccolo
             return false;
         }
 
+        // Plan 2026-07-15 Phase 5 A1: cache the sky NEE CDF texture views.
+        // These are populated by RenderResource::createIBLTextures at IBL
+        // load time; if the IBL resource is not yet ready (e.g. very first
+        // frame before level load), the views stay null and the writes
+        // below fall back to a default material texture so the descriptor
+        // set is always valid. The GPU code detects the all-zero marginal
+        // and falls back to the previous uniform-sphere sampling.
+        RHIImageView* sky_marginal_view =
+            m_render_resource_impl->m_global_render_resource._ibl_resource._sky_row_marginal_image_view;
+        RHIImageView* sky_cdf_view =
+            m_render_resource_impl->m_global_render_resource._ibl_resource._sky_row_cdf_image_view;
+        if (sky_marginal_view == nullptr)
+        {
+            sky_marginal_view = default_material_texture_view;
+        }
+        if (sky_cdf_view == nullptr)
+        {
+            sky_cdf_view = default_material_texture_view;
+        }
+
         RHIBuffer* skinned_vertex_buffer = m_render_resource_impl->getSkinnedVertexBuffer();
         if (skinned_vertex_buffer == nullptr)
         {
@@ -1375,7 +1409,7 @@ namespace Piccolo
         specular_info.sampler     = m_linear_sampler;
 
         RHIDescriptorSet* descriptor_set = m_descriptor_sets[frame_index];
-        RHIWriteDescriptorSet writes[15] {};
+        RHIWriteDescriptorSet writes[17] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -1480,6 +1514,35 @@ namespace Piccolo
         writes[14].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[14].descriptorCount = 1;
         writes[14].pBufferInfo     = &skinned_vertex_buffer_info;
+
+        // Plan 2026-07-15 Phase 5 A1: sky NEE CDF textures. These are
+        // static across the program's lifetime (the cubemap does not
+        // change after IBL load), so they ride the "static descriptors"
+        // path and are written once via the first branch of the
+        // m_static_descriptors_written check below.
+        RHIDescriptorImageInfo sky_marginal_info {};
+        sky_marginal_info.imageView   = sky_marginal_view;
+        sky_marginal_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        sky_marginal_info.sampler     = nullptr;
+
+        RHIDescriptorImageInfo sky_cdf_info {};
+        sky_cdf_info.imageView   = sky_cdf_view;
+        sky_cdf_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        sky_cdf_info.sampler     = nullptr;
+
+        writes[15].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[15].dstSet          = descriptor_set;
+        writes[15].dstBinding      = 1037;  // t1037: g_sky_row_marginal
+        writes[15].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[15].descriptorCount = 1;
+        writes[15].pImageInfo      = &sky_marginal_info;
+
+        writes[16].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[16].dstSet          = descriptor_set;
+        writes[16].dstBinding      = 1038;  // t1038: g_sky_row_cdf
+        writes[16].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        writes[16].descriptorCount = 1;
+        writes[16].pImageInfo      = &sky_cdf_info;
 
         // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
         // t11=texture_array); dynamic descriptors every frame.

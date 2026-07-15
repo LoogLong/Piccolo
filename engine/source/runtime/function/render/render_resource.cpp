@@ -1,5 +1,6 @@
 #include "runtime/function/render/render_resource.h"
 
+#include "runtime/function/render/render_resource_sky_cdf.h"
 #include "runtime/function/render/render_camera.h"
 #include "runtime/function/render/render_helper.h"
 
@@ -224,6 +225,12 @@ namespace Piccolo
         release_vma_image(ibl._specular_texture_image,
                           ibl._specular_texture_image_view,
                           ibl._specular_texture_image_allocation);
+        release_vma_image(ibl._sky_row_marginal_image,
+                          ibl._sky_row_marginal_image_view,
+                          ibl._sky_row_marginal_image_allocation);
+        release_vma_image(ibl._sky_row_cdf_image,
+                          ibl._sky_row_cdf_image_view,
+                          ibl._sky_row_cdf_image_allocation);
 
         ColorGradingResource& color_grading = m_global_render_resource._color_grading_resource;
         release_vma_image(color_grading._color_grading_LUT_texture_image,
@@ -1079,6 +1086,53 @@ namespace Piccolo
         // from a value that matches the cubemap, not a hardcoded "kMips = 8"
         // placeholder. Plan 2026-07-15 Phase 5 A4.
         m_global_render_resource._ibl_resource._specular_texture_image_miplevels = specular_cubemap_miplevels;
+
+        // Plan 2026-07-15 Phase 5 A1: build the sky row-margin CDF for sky
+        // NEE importance sampling and upload as two R32_SFLOAT 2D images
+        // (used as 1D / (6*N x N) on the GPU). The work is one-shot at IBL
+        // load time; the textures are static for the rest of the program's
+        // lifetime. See render_resource_sky_cdf.h for the format / math.
+        constexpr uint32_t kPathTracingSkyCdfBinCount = 32u;
+        SkyCdfData sky_cdf;
+        buildSkyCdfFromSpecularMaps(specular_maps, kPathTracingSkyCdfBinCount, sky_cdf);
+
+        // Marginal: 1 row of (6*N) floats. The pixel data is tightly packed
+        // RGBA, but with R32_SFLOAT the GPU sees 1 float per texel -- the
+        // first 6*N texels of the 1x(6*N) texture hold the marginal.
+        std::vector<float> marginal_pixels(sky_cdf.marginal.begin(), sky_cdf.marginal.end());
+
+        // Row CDF: (6*N) rows of N floats. Same packing story.
+        std::vector<float> row_cdf_pixels(sky_cdf.row_cdf.begin(), sky_cdf.row_cdf.end());
+
+        rhi->createGlobalImage(
+            m_global_render_resource._ibl_resource._sky_row_marginal_image,
+            m_global_render_resource._ibl_resource._sky_row_marginal_image_view,
+            m_global_render_resource._ibl_resource._sky_row_marginal_image_allocation,
+            static_cast<uint32_t>(marginal_pixels.size()),
+            1u,
+            marginal_pixels.data(),
+            RHI_FORMAT_R32_SFLOAT,
+            1u);
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._sky_row_marginal_image,
+                                "Global.IBL.SkyCDF.Marginal");
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._sky_row_marginal_image_view,
+                                "Global.IBL.SkyCDF.Marginal.View");
+
+        rhi->createGlobalImage(
+            m_global_render_resource._ibl_resource._sky_row_cdf_image,
+            m_global_render_resource._ibl_resource._sky_row_cdf_image_view,
+            m_global_render_resource._ibl_resource._sky_row_cdf_image_allocation,
+            kPathTracingSkyCdfBinCount,
+            static_cast<uint32_t>(row_cdf_pixels.size() / kPathTracingSkyCdfBinCount),
+            row_cdf_pixels.data(),
+            RHI_FORMAT_R32_SFLOAT,
+            1u);
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._sky_row_cdf_image,
+                                "Global.IBL.SkyCDF.RowCDF");
+        rhi->setDebugObjectName(m_global_render_resource._ibl_resource._sky_row_cdf_image_view,
+                                "Global.IBL.SkyCDF.RowCDF.View");
+
+        m_global_render_resource._ibl_resource._sky_cdf_bin_count = kPathTracingSkyCdfBinCount;
     }
 
     RenderMeshGPUResource&

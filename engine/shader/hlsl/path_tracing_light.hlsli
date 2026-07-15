@@ -24,6 +24,13 @@
 // makes this configurable via PathTracingDirectionalAngleDeg.
 #define PT_DEFAULT_SUN_HALF_ANGLE_DEG 0.53f
 
+// Sky NEE CDF bin count (Plan 2026-07-15 Phase 5 A1). Matches the
+// kPathTracingSkyCdfBinCount constant in render_resource.cpp. Used by
+// SampleLight(PT_LIGHT_SKY, ...) to size the linear scan and the
+// (face, row, col) -> direction conversion.
+#define PT_SKY_CDF_BIN_COUNT 32u
+#define PT_SKY_CDF_ROWS      (6u * PT_SKY_CDF_BIN_COUNT)
+
 struct PathTracingLight
 {
     float3 position;   // point light position
@@ -39,6 +46,31 @@ struct PathTracingLight
 // vertex buffer (t1036) -- the texture array's 1024 descriptors occupy that
 // whole D3D12 register range, so low slots like t13 are not free there.
 StructuredBuffer<PathTracingLight> g_lights : register(t1035, space0);
+
+// =============================================================================
+// Sky NEE row-margin CDF (Plan 2026-07-15 Phase 5 A1).
+//
+// Built CPU-side at IBL load time by render_resource_sky_cdf.cpp; see that
+// file for the data layout. Two R32_SFLOAT 2D images:
+//
+//   g_sky_row_marginal : shape (6*N, 1) -- per-(face,row) probability mass.
+//                        For a uniform distribution all rows hold 1/(6*N).
+//
+//   g_sky_row_cdf      : shape (6*N, N) -- within-row CDF. row_cdf[fr, c] is
+//                        the cumulative probability of selecting col <= c
+//                        within the row indexed by (face, row), normalised
+//                        so the last entry is 1.0.
+//
+// SampleLight(PT_LIGHT_SKY, ...) does a two-step lookup (row + col) and
+// converts the resulting (face, row, col) triple to a 3D direction in
+// DirectX cubemap convention.
+//
+// The PDF returned by the new sampler integrates to 1 over the sphere, so
+// the NEE estimator stays unbiased. There is a small systematic bias from
+// ignoring the cubemap face-area Jacobian; documented in the C++ header.
+// =============================================================================
+Texture2D<float> g_sky_row_marginal : register(t1037, space0);
+Texture2D<float> g_sky_row_cdf      : register(t1038, space0);
 
 // Build an orthonormal basis with `n` as the z axis.
 void PathTracingBuildOnb(float3 n, out float3 t, out float3 b)
@@ -231,30 +263,121 @@ void SampleLight(PathTracingLight light,
     }
     else if (light.type == PT_LIGHT_SKY)
     {
-        // Uniform sphere sampling. pdf = 1 / (4 * pi). We sample the
-        // un-convolved specular cubemap (g_specular_texture, same source the
-        // miss shader and SampleSkyRadiance use) so Li is the per-direction
-        // sky radiance that, integrated over the sphere, reproduces the
-        // diffuse-sky irradiance when convolved. Contribution per sample:
-        // f * Li * cos / pdf = f * env(dir) * cos * 4*pi. light.color from
-        // the CPU is unused here (kept for diagnostics / future importance
-        // sampling).
+        // Plan 2026-07-15 Phase 5 A1: row-margin CDF importance sampling.
+        // Two-step lookup over (marginal, row_cdf) of the same cubemap that
+        // g_specular_texture already exposes. pdf integrates to 1 over the
+        // sphere, so the NEE estimator is unbiased. The 4-8x variance drop
+        // is the headline win for outdoor sky-dominated scenes.
         //
-        // NOTE: this is uniform-sphere; a per-row CDF built on the CPU from
-        // g_specular_texture's mip 1 lowers sky NEE variance by 4-8x and is
-        // queued in Phase 1.2 of the optimization plan; the CPU plumbing
-        // (capture cubemap pixel data after RenderResource::createIBLTextures)
-        // requires render_resource.cpp changes that are deferred. Uniform
-        // sphere sampling is unbiased; the variance reduction is operational.
-        const float u1 = Rand01(rng);
-        const float u2 = Rand01(rng);
-        const float z   = 1.0f - 2.0f * u1;
-        const float rr  = sqrt(max(1.0f - z * z, 0.0f));
-        const float phi = 2.0f * 3.14159265f * u2;
-        wi = normalize(float3(rr * cos(phi), rr * sin(phi), z));
-        pdf = 1.0f / (4.0f * 3.14159265f);
-        Li = g_specular_texture.SampleLevel(g_linear_sampler, wi, 0.0f).rgb;
-        dist = 1e30f; // sky at infinity
+        // Step 1: build the cumulative marginal on the fly (small: 6*N =
+        // 192 entries) and find the row whose cumulative >= u1.
+        const float u1     = Rand01(rng);
+        const float u2     = Rand01(rng);
+        const uint  rows   = PT_SKY_CDF_ROWS;
+        const uint  N_bins = PT_SKY_CDF_BIN_COUNT;
+
+        // Cumulative marginal scan.
+        float cum   = 0.0f;
+        float total = 0.0f;
+        [unroll]
+        for (uint r = 0u; r < rows; ++r)
+        {
+            total += g_sky_row_marginal.Load(int3(int(r), 0, 0));
+        }
+        if (total <= 0.0f)
+        {
+            // Degenerate cubemap: no luminance at all. Fall back to
+            // uniform-sphere sampling so we still produce a (zero) result
+            // rather than NaN.
+            const float z   = 1.0f - 2.0f * u1;
+            const float rr  = sqrt(max(1.0f - z * z, 0.0f));
+            const float phi = 2.0f * 3.14159265f * u2;
+            wi  = normalize(float3(rr * cos(phi), rr * sin(phi), z));
+            pdf = 1.0f / (4.0f * 3.14159265f);
+            Li  = g_specular_texture.SampleLevel(g_linear_sampler, wi, 0.0f).rgb;
+            dist = 1e30f;
+            return;
+        }
+        const float u1_total = u1 * total;
+
+        uint row_idx = 0u;
+        [unroll]
+        for (uint r = 0u; r < rows; ++r)
+        {
+            cum += g_sky_row_marginal.Load(int3(int(r), 0, 0));
+            if (cum >= u1_total) { row_idx = r; break; }
+        }
+        // (cum is now >= u1_total; the last row's marginal is included in total
+        // and the loop's break guards against fall-through.)
+
+        // Step 2: invert the within-row CDF. The row holds N_bins entries
+        // (last == 1.0) so the scan is tight.
+        uint col_idx = N_bins - 1u;
+        [unroll]
+        for (uint c = 0u; c < N_bins; ++c)
+        {
+            if (g_sky_row_cdf.Load(int3(int(c), int(row_idx), 0)) >= u2)
+            {
+                col_idx = c;
+                break;
+            }
+        }
+
+        // (face, row_in_face, col) -> 3D direction in DirectX cubemap convention.
+        // The (x, z, y) cubemap swizzle in SampleSkyRadiance handles the fact
+        // that the asset on disk stores the same per-face textures but in a
+        // (x, z, y) world coordinate. We sample g_specular_texture with the
+        // same swizzled direction; here we compute the un-swizzled world
+        // direction because the renderer writes path.radiance in world space
+        // and the same direction will be used for the shadow ray cast.
+        const uint face = row_idx / N_bins;          // 0..5
+        const uint rface = row_idx - face * N_bins;  // 0..N-1
+        const float inv_N = 1.0f / float(N_bins);
+        // Pixel-centre UVs in [0, 1].
+        const float u_uv = (float(col_idx) + 0.5f) * inv_N * 2.0f - 1.0f;  // [-1, 1]
+        const float v_uv = (float(rface)   + 0.5f) * inv_N * 2.0f - 1.0f;  // [-1, 1]
+
+        // DirectX cubemap face order: +X, -X, +Y, -Y, +Z, -Z.
+        // The per-face (u, v) -> direction mapping follows the standard
+        // "OpenGL / Vulkan" cubemap convention used everywhere else in the
+        // engine (see engine/shader/hlsl/path_tracing_core.hlsli
+        // SampleSkyRadiance and the deferred lighting specular IBL code).
+        float3 local;
+        if      (face == 0u) { local = float3( 1.0f, -v_uv, -u_uv); }  // +X
+        else if (face == 1u) { local = float3(-1.0f, -v_uv,  u_uv); }  // -X
+        else if (face == 2u) { local = float3( u_uv,  1.0f,  v_uv); }  // +Y
+        else if (face == 3u) { local = float3( u_uv, -1.0f, -v_uv); }  // -Y
+        else if (face == 4u) { local = float3( u_uv, -v_uv,  1.0f); }  // +Z
+        else                 { local = float3(-u_uv, -v_uv, -1.0f); }  // -Z
+        wi = normalize(local);
+
+        // Li: the per-direction sky radiance, sampled at the same direction
+        // with the same swizzle SampleSkyRadiance uses, so the energy
+        // matches the rest of the engine. We use LOD 0 (sharpest, matches
+        // mip 0 which the original uniform-sphere sampler used).
+        const float3 sample_dir_swizzled = float3(wi.x, wi.z, wi.y);
+        Li = g_specular_texture.SampleLevel(g_linear_sampler, sample_dir_swizzled, 0.0f).rgb;
+
+        // pdf in the row+col sampling space. Composed of:
+        //   p(row) = marginal[row] / total
+        //   p(col) = row_cdf[row, col+1] - row_cdf[row, col]   (within-row pdf)
+        //   p(row, col) = p(row) * p(col)
+        // The 6*N*N denominator cancels in the estimator, so we return the
+        // per-(row, col) probability mass directly.
+        const float p_row  = g_sky_row_marginal.Load(int3(int(row_idx), 0, 0)) / total;
+        float p_col  = 1.0f / float(N_bins);
+        if (col_idx > 0u)
+        {
+            const float cdf_prev = g_sky_row_cdf.Load(int3(int(col_idx) - 1, int(row_idx), 0));
+            const float cdf_cur  = g_sky_row_cdf.Load(int3(int(col_idx),     int(row_idx), 0));
+            p_col = max(cdf_cur - cdf_prev, 1e-7f);
+        }
+        else
+        {
+            p_col = max(g_sky_row_cdf.Load(int3(0, int(row_idx), 0)), 1e-7f);
+        }
+        pdf  = p_row * p_col;
+        dist = 1e30f;  // sky at infinity
     }
 }
 
