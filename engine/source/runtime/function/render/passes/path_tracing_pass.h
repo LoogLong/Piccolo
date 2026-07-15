@@ -302,6 +302,11 @@ namespace Piccolo
         // Plan Task 5 diagnostics: prints path-tracing config once per process.
         bool      m_diagnostics_logged {false};
 
+        // Plan 2026-07-16 Phase 6 B3: warn-once flag for scene-light overflow.
+        // Reset whenever the light set changes so a new scene with > 256
+        // lights re-emits the warning instead of staying silent.
+        bool      m_light_overflow_warned {false};
+
         RHIExtent2D m_extent {0, 0};
 
         Matrix4x4 m_last_proj_view_matrix_inv {Matrix4x4::IDENTITY};

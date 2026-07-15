@@ -29,7 +29,14 @@ namespace Piccolo
 
         constexpr uint32_t kPathTracingMaterialTextureCount = 1024u;
         // Must match PT_MAX_LIGHTS in path_tracing_light.hlsli.
-        constexpr uint32_t kPathTracingMaxLightCount         = 32u;
+        // Plan 2026-07-16 Phase 6 B3: bumped from 32 to 256 to match the
+        // GPU's PT_MAX_LIGHTS and the practical cap of typical point-light
+        // / spot-light scenes. Previously a scene with > 32 lights was
+        // silently truncated at upload time -- the extra lights were
+        // dropped without a warning. The buildLightBuffer path now emits
+        // a LOG_WARN if it hits this cap; further growth would require a
+        // dynamic buffer + descriptor-set rewrite.
+        constexpr uint32_t kPathTracingMaxLightCount         = 256u;
         // Soft-sun half-angle (degrees). Task 3 makes this configurable.
         constexpr float kPathTracingDefaultSunHalfAngleDeg   = 0.53f;
 
@@ -841,6 +848,20 @@ namespace Piccolo
         }
         light_count = static_cast<uint32_t>(lights.size());
 
+        // Plan 2026-07-16 Phase 6 B3: warn (once per scene change) when the
+        // scene exceeds the GPU-side PT_MAX_LIGHTS cap so a previously-
+        // silent truncation is at least visible. Before this change, scenes
+        // with > 32 lights had their excess lights dropped without any log.
+        if (light_count > kPathTracingMaxLightCount && !m_light_overflow_warned)
+        {
+            LOG_WARN("PathTracing: scene has {} lights but GPU PT_MAX_LIGHTS={}; "
+                     "excess lights will be silently truncated. Raise the cap "
+                     "(see Docs/plans/2026-07-15-phase-5-execution.md) if you "
+                     "need more.",
+                     light_count, kPathTracingMaxLightCount);
+            m_light_overflow_warned = true;
+        }
+
         // Detect changes -> reset accumulation (plan Task 2 Step 6).
         if (m_last_lights.size() != lights.size() ||
             std::memcmp(m_last_lights.data(),
@@ -849,6 +870,10 @@ namespace Piccolo
         {
             lights_changed = true;
             m_last_lights = lights;
+            // Plan 2026-07-16 Phase 6 B3: re-arm the overflow warning so a
+            // new scene with > 256 lights re-emits it instead of staying
+            // silent for the rest of the process.
+            m_light_overflow_warned = false;
         }
 
         // Upload (pad to kPathTracingMaxLightCount with zeroed entries).

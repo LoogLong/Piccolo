@@ -13,8 +13,11 @@
 // that used to live in PathTracingFrameData (plan Task 2 Step 1/4).
 
 // Maximum lights in the unified buffer. Must match the CPU constant
-// kPathTracingMaxLightCount in path_tracing_pass.cpp.
-#define PT_MAX_LIGHTS 32u
+// kPathTracingMaxLightCount in path_tracing_pass.cpp. Plan 2026-07-16
+// Phase 6 B3: bumped 32 -> 256 to match the practical cap of typical
+// point-light scenes; the CPU emits a LOG_WARN if the scene exceeds
+// this cap (no longer silently truncated).
+#define PT_MAX_LIGHTS 256u
 
 #define PT_LIGHT_SKY         0u
 #define PT_LIGHT_DIRECTIONAL 1u
