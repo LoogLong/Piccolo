@@ -102,12 +102,15 @@ bool PathTracingStep(inout PathState path)
         return false;
     }
 
-    // Firefly clamp (plan Task 3 Step 6): cap the throughput before RR so
-    // that a bright spike is attenuated to MaxPathIntensity-weighted. The
-    // cap is config-driven via PathTracingMaxPathIntensity (default 100,
-    // clamped to >= 1); slightly biased but practical.
+    // Firefly clamp (plan 2026-07-15 Phase 5 A3): apply to radiance, not
+    // throughput. Throughput is the cumulative product of f * cos / pdf and
+    // is normally <= 1, so clamping it almost never fires; the real fireflies
+    // appear in radiance (a path that hits a bright emissive or accumulates
+    // many high-intensity NEE contributions across bounces). Cap immediately
+    // after every radiance contribution so the per-path contribution stays
+    // bounded before RR / next bounce.
     const float max_pi = max(1.0f, (float)g_frame_data.max_path_intensity);
-    path.throughput = min(path.throughput, float3(max_pi, max_pi, max_pi));
+    path.radiance = min(path.radiance, float3(max_pi, max_pi, max_pi));
 
     // Russian roulette (plan Task 3 Step 5): only after the minimum bounces so
     // early contributions are not biased toward termination. RR is unbiased by
