@@ -146,6 +146,7 @@ namespace Piccolo
         destroyTopLevelAS();
         m_rhi->flushAllRetiredResources();
         destroyAccumulationImage();
+        destroyAovImages();
         destroyDenoiseResources();
         destroySkinnedVertexFallbackBuffer();
         destroyFrameDataBuffers();
@@ -265,7 +266,7 @@ namespace Piccolo
         {
             setupDescriptorSets();
         }
-        if (!ensureFrameDataBuffers() || !ensureLightBuffers() || !ensureAccumulationImage())
+        if (!ensureFrameDataBuffers() || !ensureLightBuffers() || !ensureAccumulationImage() || !ensureAovImages())
         {
             logDispatchFailureOnce("failed to ensure frame data, light buffer, or accumulation image");
             return false;
@@ -319,6 +320,31 @@ namespace Piccolo
                             RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                             RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
             m_accumulation_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+        }
+
+        // Plan 2026-07-16 Phase 6 B4: transition AOV images to GENERAL so the
+        // raygen can write them as storage images.
+        if (m_aov_albedo_image_layout != RHI_IMAGE_LAYOUT_GENERAL)
+        {
+            transitionImage(m_aov_albedo_image,
+                            m_aov_albedo_image_layout,
+                            RHI_IMAGE_LAYOUT_GENERAL,
+                            0,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+            m_aov_albedo_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+        }
+        if (m_aov_normal_depth_image_layout != RHI_IMAGE_LAYOUT_GENERAL)
+        {
+            transitionImage(m_aov_normal_depth_image,
+                            m_aov_normal_depth_image_layout,
+                            RHI_IMAGE_LAYOUT_GENERAL,
+                            0,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+            m_aov_normal_depth_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
         }
 
         m_rhi->popEvent(command_buffer);
@@ -442,6 +468,7 @@ namespace Piccolo
         tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
         m_scene_output_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         destroyAccumulationImage();
+        destroyAovImages();
         // Plan §2.2: denoise images are sized to the swapchain extent; they
         // must follow framebuffer recreates.
         destroyDenoiseResources();
@@ -465,7 +492,7 @@ namespace Piccolo
             return;
         }
 
-        RHIDescriptorSetLayoutBinding bindings[17] {};
+        RHIDescriptorSetLayoutBinding bindings[19] {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         bindings[0].descriptorCount = 1;
@@ -566,6 +593,19 @@ namespace Piccolo
         bindings[16].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         bindings[16].descriptorCount = 1;
         bindings[16].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+        // Plan 2026-07-16 Phase 6 B4: AOV outputs (u-registers, STORAGE_IMAGE)
+        // for the A-SVGF-style denoise. Stage is RAYGEN_BIT_KHR because the
+        // raygen writes the AOVs from the first-bounce surface data.
+        bindings[17].binding         = 1039;  // u1039: g_aov_albedo
+        bindings[17].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[17].descriptorCount = 1;
+        bindings[17].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+        bindings[18].binding         = 1040;  // u1040: g_aov_normal_depth
+        bindings[18].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[18].descriptorCount = 1;
+        bindings[18].stageFlags      = RHI_SHADER_STAGE_RAYGEN_BIT_KHR;
 
         RHIDescriptorSetLayoutCreateInfo create_info {};
         create_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1049,6 +1089,118 @@ namespace Piccolo
         return m_accumulation_image != nullptr && m_accumulation_image_view != nullptr;
     }
 
+    // Plan 2026-07-16 Phase 6 B4: AOV output images for the A-SVGF-style
+    // denoise. Both are RGBA16F and sized to the swapchain. Lazily created
+    // alongside the accumulation image so resize handling is automatic.
+    bool PathTracingPass::ensureAovImages()
+    {
+        if (m_rhi == nullptr)
+        {
+            return false;
+        }
+        const RHIExtent2D extent = m_rhi->getSwapchainInfo().extent;
+        if (m_aov_albedo_image != nullptr &&
+            m_aov_normal_depth_image != nullptr &&
+            m_extent.width == extent.width &&
+            m_extent.height == extent.height)
+        {
+            return true;
+        }
+        destroyAovImages();
+        if (extent.width == 0 || extent.height == 0)
+        {
+            return false;
+        }
+
+        m_rhi->createImage(extent.width,
+                           extent.height,
+                           RHI_FORMAT_R16G16B16A16_SFLOAT,
+                           RHI_IMAGE_TILING_OPTIMAL,
+                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
+                           RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           m_aov_albedo_image,
+                           m_aov_albedo_memory,
+                           0,
+                           1,
+                           1);
+        m_rhi->createImageView(m_aov_albedo_image,
+                               RHI_FORMAT_R16G16B16A16_SFLOAT,
+                               RHI_IMAGE_ASPECT_COLOR_BIT,
+                               RHI_IMAGE_VIEW_TYPE_2D,
+                               1,
+                               1,
+                               m_aov_albedo_image_view);
+        m_aov_albedo_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
+        m_rhi->setDebugObjectName(m_aov_albedo_image, "PathTracing.aov_albedo");
+        m_rhi->setDebugObjectName(m_aov_albedo_image_view, "PathTracing.aov_albedo_view");
+
+        m_rhi->createImage(extent.width,
+                           extent.height,
+                           RHI_FORMAT_R16G16B16A16_SFLOAT,
+                           RHI_IMAGE_TILING_OPTIMAL,
+                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
+                           RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           m_aov_normal_depth_image,
+                           m_aov_normal_depth_memory,
+                           0,
+                           1,
+                           1);
+        m_rhi->createImageView(m_aov_normal_depth_image,
+                               RHI_FORMAT_R16G16B16A16_SFLOAT,
+                               RHI_IMAGE_ASPECT_COLOR_BIT,
+                               RHI_IMAGE_VIEW_TYPE_2D,
+                               1,
+                               1,
+                               m_aov_normal_depth_image_view);
+        m_aov_normal_depth_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
+        m_rhi->setDebugObjectName(m_aov_normal_depth_image, "PathTracing.aov_normal_depth");
+        m_rhi->setDebugObjectName(m_aov_normal_depth_image_view, "PathTracing.aov_normal_depth_view");
+        return m_aov_albedo_image != nullptr && m_aov_albedo_image_view != nullptr &&
+               m_aov_normal_depth_image != nullptr && m_aov_normal_depth_image_view != nullptr;
+    }
+
+    void PathTracingPass::destroyAovImages()
+    {
+        if (m_rhi == nullptr)
+        {
+            m_aov_albedo_image = nullptr;
+            m_aov_albedo_image_view = nullptr;
+            m_aov_normal_depth_image = nullptr;
+            m_aov_normal_depth_image_view = nullptr;
+            return;
+        }
+        if (m_aov_albedo_image_view != nullptr)
+        {
+            m_rhi->destroyImageView(m_aov_albedo_image_view);
+            m_aov_albedo_image_view = nullptr;
+        }
+        if (m_aov_albedo_image != nullptr)
+        {
+            m_rhi->destroyImage(m_aov_albedo_image);
+            m_aov_albedo_image = nullptr;
+        }
+        if (m_aov_albedo_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_aov_albedo_memory);
+            m_aov_albedo_memory = nullptr;
+        }
+        if (m_aov_normal_depth_image_view != nullptr)
+        {
+            m_rhi->destroyImageView(m_aov_normal_depth_image_view);
+            m_aov_normal_depth_image_view = nullptr;
+        }
+        if (m_aov_normal_depth_image != nullptr)
+        {
+            m_rhi->destroyImage(m_aov_normal_depth_image);
+            m_aov_normal_depth_image = nullptr;
+        }
+        if (m_aov_normal_depth_memory != nullptr)
+        {
+            m_rhi->freeMemory(m_aov_normal_depth_memory);
+            m_aov_normal_depth_memory = nullptr;
+        }
+    }
+
     bool PathTracingPass::updateFrameData(uint32_t instance_count)
     {
         if (m_rhi == nullptr || m_render_resource_impl == nullptr || m_frame_data_memories.empty())
@@ -1266,6 +1418,8 @@ namespace Piccolo
             m_top_level_as == nullptr ||
             m_scene_output_image_view == nullptr ||
             m_accumulation_image_view == nullptr ||
+            m_aov_albedo_image_view == nullptr ||
+            m_aov_normal_depth_image_view == nullptr ||
             frame_index >= m_frame_data_buffers.size() ||
             m_frame_data_buffers[frame_index] == nullptr ||
             frame_index >= m_light_buffers.size() ||
@@ -1434,7 +1588,7 @@ namespace Piccolo
         specular_info.sampler     = m_linear_sampler;
 
         RHIDescriptorSet* descriptor_set = m_descriptor_sets[frame_index];
-        RHIWriteDescriptorSet writes[17] {};
+        RHIWriteDescriptorSet writes[19] {};
         writes[0].sType                      = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet                     = descriptor_set;
         writes[0].dstBinding                 = 0;
@@ -1568,6 +1722,32 @@ namespace Piccolo
         writes[16].descriptorType  = RHI_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         writes[16].descriptorCount = 1;
         writes[16].pImageInfo      = &sky_cdf_info;
+
+        // Plan 2026-07-16 Phase 6 B4: AOV outputs (u-registers). These are
+        // static across frames (the AOV images don't get re-allocated), so
+        // they ride the static-descriptor-write path on first dispatch and
+        // are skipped thereafter.
+        RHIDescriptorImageInfo aov_albedo_info {};
+        aov_albedo_info.imageView   = m_aov_albedo_image_view;
+        aov_albedo_info.imageLayout = RHI_IMAGE_LAYOUT_GENERAL;
+
+        RHIDescriptorImageInfo aov_normal_depth_info {};
+        aov_normal_depth_info.imageView   = m_aov_normal_depth_image_view;
+        aov_normal_depth_info.imageLayout = RHI_IMAGE_LAYOUT_GENERAL;
+
+        writes[17].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[17].dstSet          = descriptor_set;
+        writes[17].dstBinding      = 1039;  // u1039: g_aov_albedo
+        writes[17].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[17].descriptorCount = 1;
+        writes[17].pImageInfo      = &aov_albedo_info;
+
+        writes[18].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[18].dstSet          = descriptor_set;
+        writes[18].dstBinding      = 1040;  // u1040: g_aov_normal_depth
+        writes[18].descriptorType  = RHI_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[18].descriptorCount = 1;
+        writes[18].pImageInfo      = &aov_normal_depth_info;
 
         // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
         // t11=texture_array); dynamic descriptors every frame.
@@ -1977,9 +2157,10 @@ namespace Piccolo
         }
 
         // Descriptor set layout: 2 sampled images (current + history) + 1
-        // storage image (scene output) + 1 uniform buffer (constants).
+        // storage image (scene output) + 1 uniform buffer (constants) + 2
+        // AOV sampled images (albedo + normal/depth, Plan 2026-07-16 B4).
         {
-            RHIDescriptorSetLayoutBinding bindings[4] {};
+            RHIDescriptorSetLayoutBinding bindings[6] {};
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[0].descriptorCount = 1;
@@ -1996,10 +2177,19 @@ namespace Piccolo
             bindings[3].descriptorType  = RHI_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[3].descriptorCount = 1;
             bindings[3].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            // Plan 2026-07-16 Phase 6 B4: AOV inputs.
+            bindings[4].binding         = 4;
+            bindings[4].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[4].descriptorCount = 1;
+            bindings[4].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
+            bindings[5].binding         = 5;
+            bindings[5].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[5].descriptorCount = 1;
+            bindings[5].stageFlags      = RHI_SHADER_STAGE_COMPUTE_BIT;
 
             RHIDescriptorSetLayoutCreateInfo layout_info {};
             layout_info.sType        = RHI_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            layout_info.bindingCount = 4;
+            layout_info.bindingCount = 6;
             layout_info.pBindings    = bindings;
             if (RHI_SUCCESS != m_rhi->createDescriptorSetLayout(&layout_info, m_denoise_descriptor_set_layout))
             {
@@ -2187,7 +2377,7 @@ namespace Piccolo
         output_info.imageView                 = m_scene_output_image_view;
         output_info.imageLayout               = RHI_IMAGE_LAYOUT_GENERAL;
 
-        RHIWriteDescriptorSet writes[4] {};
+        RHIWriteDescriptorSet writes[6] {};
         writes[0].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet          = m_denoise_descriptor_sets[0];
         writes[0].dstBinding      = 0;
@@ -2225,7 +2415,40 @@ namespace Piccolo
         writes[3].descriptorCount = 1;
         writes[3].pBufferInfo     = &buffer_info;
 
-        m_rhi->updateDescriptorSets(4, writes, 0, nullptr);
+        // Plan 2026-07-16 Phase 6 B4: AOV inputs to the denoise. Both
+        // are sampled with a combined image sampler (the texture was
+        // created with USAGE_SAMPLED_BIT). Sampler comes from the IBL
+        // resource so the path tracing pass reuses the engine's standard
+        // linear sampler.
+        RHIDescriptorImageInfo aov_albedo_info {};
+        aov_albedo_info.imageView   = m_aov_albedo_image_view;
+        aov_albedo_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        aov_albedo_info.sampler     = m_render_resource_impl != nullptr
+                                        ? m_render_resource_impl->m_global_render_resource._ibl_resource._irradiance_texture_sampler
+                                        : nullptr;
+
+        RHIDescriptorImageInfo aov_nd_info {};
+        aov_nd_info.imageView   = m_aov_normal_depth_image_view;
+        aov_nd_info.imageLayout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        aov_nd_info.sampler     = aov_albedo_info.sampler;
+
+        writes[4].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet          = m_denoise_descriptor_sets[0];
+        writes[4].dstBinding      = 4;
+        writes[4].dstArrayElement = 0;
+        writes[4].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].descriptorCount = 1;
+        writes[4].pImageInfo      = &aov_albedo_info;
+
+        writes[5].sType           = RHI_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet          = m_denoise_descriptor_sets[0];
+        writes[5].dstBinding      = 5;
+        writes[5].dstArrayElement = 0;
+        writes[5].descriptorType  = RHI_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[5].descriptorCount = 1;
+        writes[5].pImageInfo      = &aov_nd_info;
+
+        m_rhi->updateDescriptorSets(6, writes, 0, nullptr);
 
         // Upload constants (strength, frame_index, extent.x, extent.y).
         struct DenoiseConstants

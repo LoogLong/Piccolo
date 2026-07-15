@@ -150,6 +150,12 @@ namespace Piccolo
 
         bool ensureAccumulationImage();
 
+        // Plan 2026-07-16 Phase 6 B4: AOV output images for the A-SVGF
+        // denoise (albedo + packed normal/depth). Lazily created / resized
+        // alongside the accumulation image.
+        bool ensureAovImages();
+        void destroyAovImages();
+
         // Plan 2026-07-12 §2.2: vendor-SDK-less fallback denoiser wiring.
         // The denoise compute pass consumes m_accumulation_image and writes
         // m_denoised_image (a copy of m_scene_output_image format/size).
@@ -219,6 +225,25 @@ namespace Piccolo
         RHIImageView*    m_accumulation_image_view {nullptr};
 
         RHIImageLayout   m_accumulation_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
+
+        // Plan 2026-07-16 Phase 6 B4: AOV outputs for the A-SVGF-style denoise.
+        //   m_aov_albedo_image : RGBA16F, RGB = primary-hit base_color,
+        //                                   A   = primary-hit metallic mask.
+        //   m_aov_normal_depth : RGBA16F, RGB = face-forward world normal
+        //                                   packed to [0,1] from [-1,1],
+        //                                   A   = linear view-space z.
+        // Both are written once per pixel from the first bounce of
+        // path_tracing.lib.hlsl and consumed by the denoise shader as
+        // range-weight features (see path_tracing_denoise.comp.hlsl).
+        RHIImage*        m_aov_albedo_image {nullptr};
+        RHIDeviceMemory* m_aov_albedo_memory {nullptr};
+        RHIImageView*    m_aov_albedo_image_view {nullptr};
+        RHIImageLayout   m_aov_albedo_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
+
+        RHIImage*        m_aov_normal_depth_image {nullptr};
+        RHIDeviceMemory* m_aov_normal_depth_memory {nullptr};
+        RHIImageView*    m_aov_normal_depth_image_view {nullptr};
+        RHIImageLayout   m_aov_normal_depth_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
 
         // Plan 2026-07-12 §2.2: denoise compute pipeline + resources.
         RHIImage*        m_denoised_image {nullptr};

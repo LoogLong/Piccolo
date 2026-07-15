@@ -6,6 +6,25 @@ RaytracingAccelerationStructure g_scene_tlas : register(t0, space0);
 RWTexture2D<float4> g_scene_output : register(u1, space0);
 ConstantBuffer<PathTracingFrameData> g_frame_data : register(b2, space0);
 RWTexture2D<float4> g_accumulation : register(u3, space0);
+// Plan 2026-07-16 Phase 6 B4: AOV outputs for the A-SVGF-style denoise.
+//   g_aov_albedo      (u1039) -- RGBA16F, RGB = primary-hit base_color,
+//                                         A   = primary-hit metallic mask
+//                                         (denoise uses A as a feature
+//                                          weight: metallic surfaces
+//                                          benefit from looser chroma
+//                                          range because the specular
+//                                          reflection dominates the
+//                                          visible radiance).
+//   g_aov_normal_depth (u1040) -- RGBA16F, RGB = face-forward world normal
+//                                         packed to [0, 1] from [-1, 1],
+//                                         A   = linear view-space z.
+// Both AOVs are written once per pixel at the end of the raygen from the
+// first-bounce surface data (no temporal accumulation -- the primary hit
+// is deterministic given the primary ray direction). Registers sit past
+// t1038 (sky CDF) so they don't collide with the existing texture-array
+// slot range or any other binding.
+RWTexture2D<float4> g_aov_albedo       : register(u1039, space0);
+RWTexture2D<float4> g_aov_normal_depth : register(u1040, space0);
 StructuredBuffer<PathTracingVertexData> g_vertices : register(t4, space0);
 StructuredBuffer<uint> g_indices : register(t5, space0);
 StructuredBuffer<PathTracingMaterialData> g_materials : register(t6, space0);
@@ -58,6 +77,23 @@ bool PathTracingStep(inout PathState path)
 
     const PathTracingSurface surface = LoadHitSurface(payload, path.origin, path.direction);
     const float3 wo = -path.direction;
+
+    // Plan 2026-07-16 Phase 6 B4: capture first-bounce AOVs for the A-SVGF
+    // denoise. The first hit is deterministic given the primary ray
+    // direction (no random variation across samples), so we write the AOVs
+    // once per pixel here without temporal accumulation. On miss we leave
+    // the AOVs zeroed -- the denoise shader treats zero depth as "no
+    // geometry, fall back to luminance-only range-weight".
+    if (path.bounce == 0u)
+    {
+        const uint2  pixel_id    = DispatchRaysIndex().xy;
+        const float3 world_pos   = path.origin + payload.hit_t * path.direction;
+        const float3 view_dir    = world_pos - g_frame_data.camera_position;
+        const float  view_z      = length(view_dir);
+        const float3 normal_packed = surface.normal * 0.5f + 0.5f;
+        g_aov_albedo[pixel_id]       = float4(surface.base_color, surface.metallic);
+        g_aov_normal_depth[pixel_id] = float4(normal_packed, view_z);
+    }
 
     // Emissive + direct lighting (NEE w/ shadow rays + precomputed env
     // ambient at first hit). The precomputed ambient is a low-frequency proxy
