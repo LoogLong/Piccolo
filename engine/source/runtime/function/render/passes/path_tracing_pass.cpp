@@ -301,12 +301,47 @@ namespace Piccolo
         m_rhi->pushEvent(command_buffer, "PathTracing.dispatch", debug_color);
 
         m_rhi->pushEvent(command_buffer, "PathTracing.layoutTransitions", debug_color);
+        // Review 2026-07-17 (post-denoise E_INVALIDARG spam): the src
+        // access + stages must match whatever produced the current
+        // layout. After v3's dispatchDenoise(), m_scene_output_image_layout
+        // can be RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL (the copy that
+        // seeds the denoise history), not the SHADER_READ_ONLY_OPTIMAL
+        // the old code assumed. Pick the right access mask + stages per
+        // layout value. The unconditional SHADER_READ + FRAGMENT_SHADER
+        // pair in the previous code raised D3D12 validation errors
+        // (0x80070057 E_INVALIDARG) every frame on a path tracing scene
+        // with denoise enabled.
+        uint32_t scene_src_access;
+        uint32_t scene_src_stages;
+        if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            // dispatchDenoise() ends with scene_output in TRANSFER_SRC
+            // (cmdCopyImageToImage reads from it).
+            scene_src_access = RHI_ACCESS_TRANSFER_READ_BIT;
+            scene_src_stages = RHI_PIPELINE_STAGE_TRANSFER_BIT;
+        }
+        else if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_UNDEFINED)
+        {
+            // First frame after resize / resetAccumulation; src has no
+            // prior writers.
+            scene_src_access = 0;
+            scene_src_stages = RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        }
+        else
+        {
+            // RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL (the previous
+            // frame's postTraceBarriers state -- default when denoise
+            // disabled) -- fragment shader / color attachment read it.
+            scene_src_access = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+            scene_src_stages = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                              | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
         transitionImage(m_scene_output_image,
                         m_scene_output_image_layout,
                         RHI_IMAGE_LAYOUT_GENERAL,
-                        RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT,
+                        scene_src_access,
                         RHI_ACCESS_SHADER_WRITE_BIT,
-                        RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        scene_src_stages,
                         RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
         m_scene_output_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
 
