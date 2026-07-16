@@ -53,9 +53,11 @@ struct PathTracingMaterialData
     //   transmission_factor (0..1) is the fraction of energy that passes
     //     through the material (glTF KHR_materials_transmission).
     //   ior is the index of refraction; default 1.5 for glass.
-    // Both ride in the trailing padding slot so the struct size is unchanged
-    // (80 bytes); the C++ side mirrors the same layout in
-    // render_resource.h::RenderPathTracingMaterialGPUData.
+    // The struct grew from 80 to 88 bytes by adding two floats; the
+    // trailing uint3 _padding (12 bytes) was retained so the C++ struct
+    // (render_resource.h::RenderPathTracingMaterialGPUData) can keep its
+    // 4-byte alignment with no implicit padding. The 4-byte aligned total
+    // of 88 matches the C++ sizeof on MSVC.
     float  transmission_factor;
     float  ior;
     uint   flags;

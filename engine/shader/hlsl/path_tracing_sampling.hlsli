@@ -178,6 +178,12 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
         {
             // TIR -- refract() returns (0,0,0). Fall back to a specular
             // reflection sample so the integrator still makes progress.
+            // Review 2026-07-16: the wo_dot_n denominator must be
+            // dot(n, wo), not dot(n, h). The reflection Jacobian
+            // dwh/dwi = 1/(4 wi.h) cancels the |wo.h| in the VNDF
+            // density leaving 1/dot(n,wo) in the BRDF lobe pdf; using
+            // dot(n, h) here would have been an off-by-one against
+            // BRDFPdf's formula and biased the MIS weight.
             const float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
             wi   = reflect(-wo, h);
             lobe = PT_LOBE_SPECULAR;
@@ -188,7 +194,7 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
             const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
             const float D   = a2 / (3.14159265f * denom * denom);
             const float G1_wo_h  = G1_SchlickGGX(dot_wo_h, a);
-            const float wo_dot_n = max(dot_n_h, 1e-4f);
+            const float wo_dot_n = max(dot(wo, s.normal), 1e-4f);
             pdf = (D * G1_wo_h) / (wo_dot_n * 4.0f);
             return;
         }
@@ -210,11 +216,15 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
     }
 
     // Specular reflection lobe.
+    // Review 2026-07-16: the wo_dot_n denominator must be dot(n, wo),
+    // not dot(n, h). The reflection Jacobian dwh/dwi = 1/(4 wi.h) cancels
+    // the |wo.h| in the VNDF density leaving 1/dot(n,wo) in the BRDF
+    // lobe pdf; using dot(n, h) here was an off-by-one against BRDFPdf's
+    // formula and biased the MIS weight by dot(n,wo)/dot(n,h).
     lobe = PT_LOBE_SPECULAR;
     const float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
     wi = reflect(-wo, h);
 
-    // VNDF-consistent pdf for the chosen wi (matches BRDFPdf.specular).
     const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
     const float dot_n_h  = max(dot(s.normal, h), 0.0f);
     const float a   = max(s.roughness * s.roughness, 1e-3f);
@@ -222,7 +232,7 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
     const float denom = dot_n_h * dot_n_h * (a2 - 1.0f) + 1.0f;
     const float D   = a2 / (3.14159265f * denom * denom);
     const float G1_wo_h  = G1_SchlickGGX(dot_wo_h, a);
-    const float wo_dot_n = max(dot_n_h, 1e-4f);
+    const float wo_dot_n = max(dot(wo, s.normal), 1e-4f);
     pdf = (D * G1_wo_h) / (wo_dot_n * 4.0f);
 }
 

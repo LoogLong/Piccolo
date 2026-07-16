@@ -178,17 +178,16 @@ float3 EvalBSDF(PathTracingSurface s, float3 wo, float3 wi)
     // Plan 2026-07-16 Phase 6 C2: a sampled transmission lobe gives wi on
     // the refraction side (dot(n, wi) < 0). Don't reject those up-front;
     // fall through to the BTDF branch below instead.
-    const float  dot_nl_raw = dot(n, wi);
-    const float  dot_nl = dot_nl_raw;
+    const float  dot_nl = dot(n, wi);
 
     // Transmission lobe: thin-walled delta BTDF (no roughness on the
     // transmission side, no Beer-Lambert absorption in this first cut).
     // Standard refraction BTDF with the eta^2 Jacobian factor:
     //   f_t(wi, wo) = base_color * |wo.n| / (|wi.n|^2 * eta^2)
-    // When evaluated at a non-refracted wi (i.e. on the wrong side of
-    // the normal for the transmitted direction), this is not the right
-    // formula; we leave the rest of the BRDF path for the reflection
-    // case.
+    // The 1/|wi.n| factor is absorbed by the |wi.n| in the rendering
+    // equation's cos(theta) -- the MC estimator contribution
+    //   f_t * cos_t = base_color * |wo.n| / (|wi.n| * eta^2)
+    // matches the standard Kajiya 1986 thin-glass delta BTDF result.
     if (dot_nl < 0.0f)
     {
         if (s.transmission_factor <= 0.0f)

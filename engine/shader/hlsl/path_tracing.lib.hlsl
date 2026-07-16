@@ -71,6 +71,22 @@ bool PathTracingStep(inout PathState path)
     if ((payload.flags & PT_HIT_FLAG) == 0u)
     {
         // Miss: contribute the sky background and stop.
+        // Plan 2026-07-16 Phase 6 B4 (review fix): the AOVs for this
+        // pixel stay at their initial (UNDEFINED-layout) value if we don't
+        // write anything on miss. Storage images created from UNDEFINED
+        // layout have undefined contents on D3D12 and Vulkan, so the
+        // denoise shader's range-weights (pow(dot(n1,n2), 100), etc.)
+        // would consume garbage. Write a deterministic "no geometry"
+        // sentinel here so sky pixels get a clean zero AOV. The denoise
+        // shader gates the depth range-weight on `center_depth > 1e-3f`
+        // so depth=0 already short-circuits the depth term; the normal
+        // (0,0,1) and (0,0,0,0) albedo are conservative fallbacks.
+        if (path.bounce == 0u)
+        {
+            const uint2 pixel_id = DispatchRaysIndex().xy;
+            g_aov_albedo[pixel_id]       = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            g_aov_normal_depth[pixel_id] = float4(0.5f, 0.5f, 1.0f, 0.0f);
+        }
         path.radiance += path.throughput * SampleSkyRadiance(path.direction);
         return false;
     }
