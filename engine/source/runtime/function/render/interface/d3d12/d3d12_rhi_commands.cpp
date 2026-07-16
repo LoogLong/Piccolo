@@ -2412,7 +2412,28 @@ void D3D12RHI::submitRendering(std::function<void()> passUpdateAfterRecreateSwap
 
         if (present_result == DXGI_ERROR_DEVICE_REMOVED || present_result == DXGI_ERROR_DEVICE_RESET)
         {
-            LOG_ERROR("D3D12 submitRendering detected device loss during Present (HRESULT=0x{:08X}, removed_reason=0x{:08X})",
+            // Review 2026-07-17: the previous code returned here without
+            // setting the device-lost flag. The downstream render paths
+            // (path tracing, raster) would then keep trying to use the
+            // dead device -- every mapMemory / cmdDraw would fail
+            // silently, leaving the viewport black and the user with no
+            // clear recovery story. Mark the flag so:
+            //   1. RenderPipeline::pathTracingRender's
+            //      `if (render_rhi->isDeviceLost())` branch logs the
+            //      path-tracing abort once.
+            //   2. Subsequent prepareBeforePass can skip re-issuing
+            //      commands that would only fail again.
+            // A full device recreate would be the proper recovery but
+            // would require re-creating every RHI resource (pools,
+            // pipelines, descriptors, samplers, images). Out of scope
+            // for this fix; the log tells the user to restart the
+            // editor or switch to the Vulkan backend.
+            markDeviceLost();
+            LOG_ERROR("D3D12 submitRendering detected device loss during Present "
+                      "(HRESULT=0x{:08X}, removed_reason=0x{:08X}). The D3D12 device "
+                      "is gone -- no further rendering is possible until the editor "
+                      "is restarted. To continue work, switch to the Vulkan backend "
+                      "in PiccoloEditor.ini (RenderBackend=Vulkan) and restart.",
                       static_cast<unsigned int>(present_result),
                       static_cast<unsigned int>(removed_reason));
             return;
