@@ -1833,11 +1833,20 @@ namespace Piccolo
         writes[18].pImageInfo      = &aov_normal_depth_info;
 
         // Write static descriptors once (u1=scene_output, t9=irradiance, t10=specular, s12=sampler,
-        // t11=texture_array); dynamic descriptors every frame.
+// t11=texture_array); dynamic descriptors every frame.
         if (m_static_descriptors_written[frame_index])
         {
-            // Compact: write only dynamic bindings (skip static)
-            RHIWriteDescriptorSet dynamic_writes[10];
+            // Compact: write only dynamic bindings (skip static).
+            // Sizing: writes has 19 entries, we skip 5 (indices 1, 9, 10,
+            // 11, 12), so dynamic_writes must hold up to 14 entries.
+            // Previous code used [10] which was a pre-AOV hardcoded
+            // sizing -- once the writes array grew past 15 entries the
+            // `dynamic_writes[j++] = writes[i]` line overflowed at j=10
+            // and corrupted the stack, manifesting as an infinite loop
+            // (j / i values clobbered) or a hang. Size matches the
+            // upstream `writes` array to keep this in sync automatically
+            // if writes grows again.
+            RHIWriteDescriptorSet dynamic_writes[std::size(writes)];
             uint32_t j = 0;
             for (uint32_t i = 0; i < std::size(writes); ++i)
             {
