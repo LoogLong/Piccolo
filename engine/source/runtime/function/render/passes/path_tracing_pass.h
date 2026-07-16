@@ -279,7 +279,14 @@ namespace Piccolo
         // destroyed individually via destroyDescriptorSet(nullptr, set)
         // without a pool argument, matching the existing pass pattern.
 
-        bool m_denoise_enabled {false};
+        // Plan 2026-07-16 Phase 6 B4: denoise default ON. The fallback
+        // 5x5 bilateral + temporal blend (extended in the review with
+        // AOV-based A-SVGF range weights) is the only practical way to
+        // get usable 1-4 spp path-tracing output; without it the scene
+        // is dominated by Monte Carlo grain (see issue with the
+        // upper-left wall noise in the test scene). Path tracing at 1
+        // spp without denoise is essentially a wireframe stress test.
+        bool m_denoise_enabled {true};
         bool m_denoise_diagnostics_logged {false};
 
 
