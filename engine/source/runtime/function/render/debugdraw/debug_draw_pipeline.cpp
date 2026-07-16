@@ -1,5 +1,6 @@
 #include "debug_draw_pipeline.h"
 #include "runtime/function/render/render_shader_bytecode.h"
+#include "runtime/core/base/macro.h"
 
 #include <fstream>
 #include <cstdio>
@@ -177,6 +178,24 @@ namespace Piccolo
             m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEBUGDRAW_VERT));
         RHIShader* frag_shader_module =
             m_rhi->createShaderModule(PICCOLO_RENDER_SHADER_BYTECODE(m_rhi, DEBUGDRAW_FRAG));
+
+        // Review 2026-07-17: createShaderModule now returns nullptr
+        // (instead of throwing) when DXC was not installed at build time
+        // and the D3D12 bytecode headers are empty. Skip pipeline
+        // creation in that case -- the raster pass already early-returns
+        // when m_render_pipelines is empty, so debug primitives will
+        // simply not render rather than crashing the editor.
+        if (vert_shader_module == nullptr || frag_shader_module == nullptr)
+        {
+            LOG_WARN("DebugDraw: shader module unavailable (DXC "
+                        "not installed at build time). Skipping pipeline "
+                        "creation; debug primitives will not render.");
+            if (vert_shader_module != nullptr)
+                m_rhi->destroyShaderModule(vert_shader_module);
+            if (frag_shader_module != nullptr)
+                m_rhi->destroyShaderModule(frag_shader_module);
+            return;
+        }
 
         RHIPipelineShaderStageCreateInfo vert_pipeline_shader_stage_create_info{};
         vert_pipeline_shader_stage_create_info.sType = RHI_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

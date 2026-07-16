@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cwchar>
@@ -348,10 +349,39 @@ RHIShader* D3D12RHI::createShaderModule(const std::vector<unsigned char>& shader
 #ifdef _WIN32
     if (shader->bytecode_storage.empty())
     {
+        // Review 2026-07-17: this used to throw std::runtime_error. That
+        // crashed the editor whenever a pipeline (e.g. DebugDraw's line /
+        // point / triangle variants) was recreated after device loss on a
+        // machine that never had DXC installed -- the gen.h shader
+        // bytecode macros all expand to emptyD3D12ShaderBytecode() in
+        // that case, but the user's pipeline was previously succeeding
+        // in windowed mode and only crashing on fullscreen because the
+        // fullscreen swapchain-recreate path also re-runs pipeline
+        // setup. Throwing on a missing optional subsystem (DXC) is a
+        // poor recovery story for the user.
+        //
+        // New behavior: log a one-shot warning explaining the situation
+        // and return nullptr. Callers that need the shader module must
+        // check for nullptr and skip pipeline creation; the raster path
+        // already has its own early-return for missing debug pipelines
+        // via m_render_pipelines being empty, so a single nullptr here
+        // cascades cleanly.
+        static std::atomic<bool> warned_once {false};
+        bool expected = false;
+        if (warned_once.compare_exchange_strong(expected, true))
+        {
+            LOG_WARN("D3D12 shader bytecode is empty -- DXC was not "
+                        "installed at build time, so all D3D12 shaders "
+                        "(including the path tracer) are unavailable. "
+                        "Install dxc.exe and rebuild the generated DXIL "
+                        "headers (cmake --build build --target "
+                        "PiccoloShaderCompile) to enable D3D12 rendering. "
+                        "Falling back to raster-only / no-op pipelines.");
+        }
         delete shader;
-        throw std::runtime_error("D3D12 shader bytecode is empty. Install dxc.exe and rebuild generated DXIL headers.");
+        return nullptr;
     }
-    shader->bytecode.pShaderBytecode = shader->bytecode_storage.empty() ? nullptr : shader->bytecode_storage.data();
+    shader->bytecode.pShaderBytecode = shader->bytecode_storage.data();
     shader->bytecode.BytecodeLength  = shader->bytecode_storage.size();
 #endif
     return shader;
