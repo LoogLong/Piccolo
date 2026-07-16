@@ -543,6 +543,27 @@ namespace Piccolo
         // must follow framebuffer recreates.
         destroyDenoiseResources();
         resetAccumulation();
+
+        // Review 2026-07-17 (fullscreen black viewport root cause):
+        // The images above were destroyed, but the per-frame descriptor
+        // set still carries bindings to the OLD image views. The
+        // subsequent dispatch() calls ensureAccumulationImage /
+        // ensureAovImages which re-create the images with new pointers,
+        // but the dynamic-write path in updateDescriptorSet checks
+        // m_static_descriptors_written[frame_index] -- when that's true
+        // (because the previous frame already wrote everything) the
+        // "compact dynamic" branch (path_tracing_pass.cpp:1837-1848)
+        // skips the static bindings and reuses the dead image view
+        // pointers from the descriptor set, so cmdTraceRays writes to
+        // freed memory. The D3D12 runtime either silently discards
+        // the writes (giving us a black viewport because scene_output
+        // is never updated) or TDRs the device; the raster path
+        // doesn't hit this because it uses a different descriptor set.
+        //
+        // Reset the static-descriptor-written latch so the next
+        // updateDescriptorSet() call writes all 19 entries from
+        // scratch with the new (post-recreate) view pointers.
+        invalidateStaticDescriptors();
     }
 
     void PathTracingPass::resetAccumulation()
