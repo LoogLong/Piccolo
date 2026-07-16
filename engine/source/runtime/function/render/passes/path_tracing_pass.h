@@ -249,11 +249,23 @@ namespace Piccolo
         RHIImage*        m_denoised_image {nullptr};
         RHIDeviceMemory* m_denoised_memory {nullptr};
         RHIImageView*    m_denoised_image_view {nullptr};
-        RHIImageLayout   m_denoised_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
+        // Review 2026-07-17 S8: m_denoised_image_layout was a dead
+        // field -- never read or written. The denoise shader writes to
+        // m_denoised_image (= m_scene_output_image) via the u2 binding,
+        // and m_scene_output_image_layout already tracks the post-denoise
+        // layout. Removed.
 
         RHIImage*        m_denoise_history_image {nullptr};
         RHIDeviceMemory* m_denoise_history_memory {nullptr};
         RHIImageView*    m_denoise_history_image_view {nullptr};
+        // Review 2026-07-17 B1': layout tracker for m_denoise_history_image.
+        // Required because dispatch() first-frame path needs to transition
+        // UNDEFINED -> TRANSFER_DST before the first cmdCopyImageToImage
+        // (Vulkan validation reports VUID-VkImageMemoryBarrier-oldLayout
+        // -00020 if the src layout is not UNDEFINED), and dispatchDenoise
+        // needs to know whether to transition TRANSFER_DST -> SHADER_READ_ONLY
+        // (next-frame use) or leave it.
+        RHIImageLayout   m_denoise_history_image_layout {RHI_IMAGE_LAYOUT_UNDEFINED};
 
         std::vector<RHIBuffer*>       m_denoise_constants_buffers;
         std::vector<RHIDeviceMemory*> m_denoise_constants_memories;

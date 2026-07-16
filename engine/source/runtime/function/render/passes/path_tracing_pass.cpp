@@ -439,7 +439,37 @@ namespace Piccolo
             {
                 if (m_sample_index == 0u)
                 {
-                    // First-frame seed: copy accumulation -> history directly.
+                    // Review 2026-07-17 B1': Vulkan requires explicit
+                    // layout transitions before/after image copies.
+                    // accumulation: GENERAL (just-written by raygen)
+                    // -> TRANSFER_SRC for the copy.
+                    if (m_accumulation_image_layout != RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+                    {
+                        transitionImage(m_accumulation_image,
+                                        m_accumulation_image_layout,
+                                        RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                        RHI_ACCESS_SHADER_WRITE_BIT,
+                                        RHI_ACCESS_TRANSFER_READ_BIT,
+                                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                        RHI_PIPELINE_STAGE_TRANSFER_BIT);
+                        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                    }
+                    // history: UNDEFINED -> TRANSFER_DST for the copy.
+                    // src access 0 / TOP_OF_PIPE stage is the legal way
+                    // to leave UNDEFINED on Vulkan. After this transition
+                    // history is in TRANSFER_DST.
+                    if (m_denoise_history_image_layout != RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    {
+                        transitionImage(m_denoise_history_image,
+                                        m_denoise_history_image_layout,
+                                        RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        0,
+                                        RHI_ACCESS_TRANSFER_WRITE_BIT,
+                                        RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                        RHI_PIPELINE_STAGE_TRANSFER_BIT);
+                        m_denoise_history_image_layout = RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    }
+
                     m_rhi->cmdCopyImageToImage(command_buffer,
                                               m_accumulation_image,
                                               RHI_IMAGE_ASPECT_COLOR_BIT,
@@ -447,6 +477,23 @@ namespace Piccolo
                                               RHI_IMAGE_ASPECT_COLOR_BIT,
                                               m_extent.width,
                                               m_extent.height);
+
+                    // accumulation stays in scope -- next frame's raygen
+                    // needs it back in GENERAL. Transition now.
+                    if (m_accumulation_image_layout != RHI_IMAGE_LAYOUT_GENERAL)
+                    {
+                        transitionImage(m_accumulation_image,
+                                        m_accumulation_image_layout,
+                                        RHI_IMAGE_LAYOUT_GENERAL,
+                                        RHI_ACCESS_TRANSFER_READ_BIT,
+                                        RHI_ACCESS_SHADER_WRITE_BIT,
+                                        RHI_PIPELINE_STAGE_TRANSFER_BIT,
+                                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR);
+                        m_accumulation_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
+                    }
+                    // history stays in TRANSFER_DST; dispatchDenoise()
+                    // will transition to SHADER_READ_ONLY before the
+                    // next frame's denoise read.
                 }
                 else
                 {
@@ -456,12 +503,20 @@ namespace Piccolo
         }
 
         m_rhi->pushEvent(command_buffer, "PathTracing.postTraceBarriers", debug_color);
+        // Review 2026-07-17 B1': the previous code hard-coded the source
+        // layout as RHI_IMAGE_LAYOUT_GENERAL. That was wrong when
+        // dispatchDenoise left scene_output in TRANSFER_SRC_OPTIMAL
+        // (after the cmdCopyImageToImage step). Use the tracked layout
+        // field instead and broaden the source stage set to cover the
+        // compute + transfer sources.
         transitionImage(m_scene_output_image,
-                        RHI_IMAGE_LAYOUT_GENERAL,
+                        m_scene_output_image_layout,
                         RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        RHI_ACCESS_SHADER_WRITE_BIT,
+                        RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_TRANSFER_READ_BIT,
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT,
-                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                          | RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                          | RHI_PIPELINE_STAGE_TRANSFER_BIT,
                         RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
         m_scene_output_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -2360,6 +2415,10 @@ namespace Piccolo
         m_denoise_history_image       = nullptr;
         m_denoise_history_memory      = nullptr;
         m_denoise_history_image_view  = nullptr;
+        // Review 2026-07-17 B1': reset the layout tracker so the next
+        // ensureDenoiseResources() starts from UNDEFINED and the first
+        // transition uses src=0 access (UNDEFINED -> ...).
+        m_denoise_history_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         m_denoise_pipeline            = nullptr;
         m_denoise_pipeline_layout     = nullptr;
         m_denoise_descriptor_set_layout = nullptr;
@@ -2409,6 +2468,51 @@ namespace Piccolo
                             RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                             RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             m_aov_normal_depth_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        // Review 2026-07-17 B1' (Vulkan barriers):
+        //   accumulation : GENERAL (raygen wrote) -> SHADER_READ_ONLY_OPTIMAL
+        //                   (denoise sampled reads t0).
+        if (m_accumulation_image_layout != RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            transitionImage(m_accumulation_image,
+                            m_accumulation_image_layout,
+                            RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_ACCESS_SHADER_READ_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            m_accumulation_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        //   history      : TRANSFER_DST (last frame's cmdCopyImageToImage
+        //                   wrote) -> SHADER_READ_ONLY_OPTIMAL (denoise
+        //                   sampled reads t1).
+        if (m_denoise_history_image_layout != RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            transitionImage(m_denoise_history_image,
+                            m_denoise_history_image_layout,
+                            RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            RHI_ACCESS_TRANSFER_WRITE_BIT,
+                            RHI_ACCESS_SHADER_READ_BIT,
+                            RHI_PIPELINE_STAGE_TRANSFER_BIT,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            m_denoise_history_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        //   scene_output : GENERAL (raygen wrote) -> GENERAL (denoise
+        //                   writes as storage image u2). Same layout but
+        //                   Vulkan still needs an explicit barrier to
+        //                   synchronize the write->read dependency.
+        if (m_scene_output_image_layout != RHI_IMAGE_LAYOUT_GENERAL)
+        {
+            transitionImage(m_scene_output_image,
+                            m_scene_output_image_layout,
+                            RHI_IMAGE_LAYOUT_GENERAL,
+                            RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_TRANSFER_READ_BIT,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
+                              | RHI_PIPELINE_STAGE_TRANSFER_BIT,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            m_scene_output_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
         }
 
         RHICommandBuffer* command_buffer = m_rhi->getCurrentCommandBuffer();
@@ -2541,6 +2645,30 @@ namespace Piccolo
         // Image copy scene_output -> history_image so the next frame's
         // temporal blend sees the right prior frame. Single history buffer
         // is enough for the §2.2 fallback (no ping-pong needed).
+        // Review 2026-07-17 B1': the copy requires both images in
+        // TRANSFER layouts, and we transition them after.
+        if (m_scene_output_image_layout != RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            transitionImage(m_scene_output_image,
+                            m_scene_output_image_layout,
+                            RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_ACCESS_TRANSFER_READ_BIT,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            RHI_PIPELINE_STAGE_TRANSFER_BIT);
+            m_scene_output_image_layout = RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        }
+        if (m_denoise_history_image_layout != RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        {
+            transitionImage(m_denoise_history_image,
+                            m_denoise_history_image_layout,
+                            RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            RHI_ACCESS_SHADER_READ_BIT,
+                            RHI_ACCESS_TRANSFER_WRITE_BIT,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            RHI_PIPELINE_STAGE_TRANSFER_BIT);
+            m_denoise_history_image_layout = RHI_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        }
         m_rhi->cmdCopyImageToImage(command_buffer,
                                   m_scene_output_image,
                                   RHI_IMAGE_ASPECT_COLOR_BIT,
@@ -2548,5 +2676,8 @@ namespace Piccolo
                                   RHI_IMAGE_ASPECT_COLOR_BIT,
                                   m_extent.width,
                                   m_extent.height);
+        // No transition needed after cmdCopyImageToImage -- the next
+        // dispatchDenoise entry will transition history back to
+        // SHADER_READ_ONLY_OPTIMAL before the next frame's read.
     }
 } // namespace Piccolo
