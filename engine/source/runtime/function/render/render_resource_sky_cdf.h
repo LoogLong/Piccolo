@@ -18,26 +18,31 @@ namespace Piccolo
     // uploaded to g_specular_texture (mip 0, the pre-blurred mip chain
     // generated on the GPU supplies the LODs sampled by the path tracer).
     //
-    // Two textures are uploaded (both R32_SFLOAT 2D images, used as 1D /
-    // (6*N x N) respectively on the GPU):
+    // Two textures are uploaded (both R32_SFLOAT 2D images):
     //
     //   _sky_row_marginal_image  -- shape (6*N, 1)
     //     Per-(face,row) probability. Sampling step 1: pick (face, row) from
     //     the cumulative marginal via linear scan.
     //
-    //   _sky_row_cdf_image       -- shape (6*N, N)
-    //     Within-row CDF. Sampling step 2: pick the column in the row by
-    //     inverting the row's CDF via linear scan.
+    //   _sky_row_cdf_image       -- shape (N, 6*N)
+    //     Within-row CDF. Width=N (one per col bin per face), height=6*N
+    //     (one per (face, row_in_face) pair). Sampling step 2: pick the
+    //     column in the row by inverting the row's CDF via linear scan.
+    //     Review 2026-07-16 R4 corrected the previous (6*N, N) comment
+    //     which had width and height swapped.
     //
     // The combined pdf returned from path_tracing_light.hlsli's
     // SampleLight(PT_LIGHT_SKY, ...) is the product of the two densities
-    // (so the integral over the sphere is 1, as required for an unbiased
-    // estimator). A small systematic bias is introduced by ignoring the
-    // cubemap face-area Jacobian (the per-bin solid angle varies with
-    // position on a face), but the bias is bounded by the relative area
-    // variation across a single face which is < 20% even at the
-    // face-corners of an N=32 grid; we accept this for the first cut in
-    // exchange for skipping a per-bin precomputed Jacobian texture.
+    // (so the integral over the sphere is 1 in the limit of uniform bin
+    // solid angle, but a small bias is introduced by ignoring the
+    // cubemap face-area Jacobian; see review 2026-07-16 R5). Review
+    // 2026-07-16 R5 also softens the "unbiased" claim below: this is
+    // a small-bias NEE estimator, not a strictly unbiased one, because
+    // the per-bin solid angle varies with position on a face. The bias
+    // is bounded by the relative area variation across a single face
+    // which is < 20% even at the face-corners of an N=32 grid; we
+    // accept this for the first cut in exchange for skipping a per-bin
+    // precomputed Jacobian texture.
     // =============================================================================
 
     struct SkyCdfData

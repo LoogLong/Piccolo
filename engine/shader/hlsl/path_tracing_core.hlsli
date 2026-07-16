@@ -132,8 +132,17 @@ PathTracingSurface LoadHitSurface(PathTracingHitPayload hit, float3 ray_origin, 
     // Plan 2026-07-16 Phase 6 C2: transmission. Default zero (opaque) is
     // preserved so the existing material loaders that never populate the
     // transmission fields keep producing the current behavior.
+    // Review 2026-07-16 B2: clamp ior to the legal range
+    // [1.0, 2.5] (air 1.0 to oil film 2.5). The previous fallback
+    // `(ior > 1.0) ? 1/ior : 1.0` silently truncated any ior <= 1.0
+    // (e.g. a future "water" material with ior=0.75 going medium->air)
+    // to eta=1.0, which is a different physical model. Clamping to
+    // [1.0, 2.5] gives a sensible fallback for out-of-range CPU
+    // values; the real fix is to plumb ior through the glTF
+    // KHR_materials_volume extension (R1 in the review).
     surface.transmission_factor = clamp(material_data.transmission_factor, 0.0f, 1.0f);
-    surface.eta = (material_data.ior > 1.0f) ? (1.0f / material_data.ior) : 1.0f;
+    const float ior_clamped = clamp(material_data.ior, 1.0f, 2.5f);
+    surface.eta = 1.0f / ior_clamped;
     return surface;
 }
 

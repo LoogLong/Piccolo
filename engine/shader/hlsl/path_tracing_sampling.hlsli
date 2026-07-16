@@ -187,7 +187,12 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
             const float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
             wi   = reflect(-wo, h);
             lobe = PT_LOBE_SPECULAR;
-            const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
+            // Review 2026-07-16 B4: clamp dot(wo, h) from below instead
+            // of abs(). The Heitz VNDF algorithm guarantees h is in
+            // the upper hemisphere (dot(n, h) > 0) AND visible from wo
+            // (dot(wo, h) > 0) for a valid sample; abs() would mask a
+            // numerical bug that pushes h into wo's other hemisphere.
+            const float dot_wo_h = max(dot(wo, h), 1e-7f);
             const float dot_n_h  = max(dot(s.normal, h), 0.0f);
             const float a   = max(s.roughness * s.roughness, 1e-3f);
             const float a2  = a * a;
@@ -221,11 +226,13 @@ void SampleBRDF(PathTracingSurface s, float3 wo, inout RNG rng,
     // the |wo.h| in the VNDF density leaving 1/dot(n,wo) in the BRDF
     // lobe pdf; using dot(n, h) here was an off-by-one against BRDFPdf's
     // formula and biased the MIS weight by dot(n,wo)/dot(n,h).
+    // Review 2026-07-16 B4: clamp dot(wo, h) from below instead of
+    // abs() (same reasoning as the TIR branch above).
     lobe = PT_LOBE_SPECULAR;
     const float3 h = SampleGGXVNDF(wo, s.normal, Rand2D(rng), s.roughness);
     wi = reflect(-wo, h);
 
-    const float dot_wo_h = max(abs(dot(wo, h)), 1e-7f);
+    const float dot_wo_h = max(dot(wo, h), 1e-7f);
     const float dot_n_h  = max(dot(s.normal, h), 0.0f);
     const float a   = max(s.roughness * s.roughness, 1e-3f);
     const float a2  = a * a;

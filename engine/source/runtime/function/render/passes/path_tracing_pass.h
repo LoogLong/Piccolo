@@ -332,6 +332,15 @@ namespace Piccolo
         // lights re-emits the warning instead of staying silent.
         bool      m_light_overflow_warned {false};
 
+        // Review 2026-07-16 B3: per-frame latch that records whether
+        // updateFrameData() set frame_data.reset_accumulation=1. The
+        // multi-sample loop in dispatch() consults this to break out
+        // early -- a reset inside the loop would otherwise cause later
+        // TraceRays to write reset_accumulation=1 and overwrite the
+        // earlier sample's contribution. Cleared at the start of every
+        // updateFrameData() call.
+        bool      m_force_accumulation_reset {false};
+
         RHIExtent2D m_extent {0, 0};
 
         Matrix4x4 m_last_proj_view_matrix_inv {Matrix4x4::IDENTITY};

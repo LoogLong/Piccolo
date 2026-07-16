@@ -399,6 +399,21 @@ namespace Piccolo
                     logDispatchFailureOnce("failed to update path tracing frame data (sample-loop)");
                     return false;
                 }
+                // Review 2026-07-16 B3: updateFrameData() may have flipped
+                // m_frame_data.reset_accumulation=1 in response to a
+                // camera-streak / accumulation-dirty / lights_changed
+                // signal. If we kept tracing with the rest of the
+                // sample-loop, each subsequent TraceRays would write
+                // `blended = radiance / 1` and overwrite the earlier
+                // sample's contribution. Break out so the post-loop
+                // accumulation state is consistent with the final
+                // sample_index. Trigger probability is very low (needs
+                // a reset condition inside the sample loop) but the
+                // fix is one line.
+                if (m_force_accumulation_reset)
+                {
+                    break;
+                }
             }
             m_rhi->cmdTraceRays(command_buffer, &dispatch_desc);
         }
@@ -1226,6 +1241,14 @@ namespace Piccolo
             m_render_resource_impl->m_mesh_perframe_storage_buffer_object.camera_position;
         const RHIExtent2D extent = m_rhi->getSwapchainInfo().extent;
 
+        // Review 2026-07-16 B3: clear the per-frame "did we just signal a
+        // reset?" latch at the start of every updateFrameData() call. The
+        // multi-sample loop in dispatch() reads this after each inner
+        // iteration to decide whether to keep tracing the rest of the
+        // sample loop or break (a reset inside the loop would otherwise
+        // cause later TraceRays to write reset_accumulation=1 and
+        // overwrite the earlier sample's contribution).
+        m_force_accumulation_reset = false;
         bool resetting = false;
 
         const bool camera_changed =
@@ -1299,6 +1322,11 @@ namespace Piccolo
         frame_data.extent[1]            = extent.height;
         frame_data.instance_count       = instance_count;
         frame_data.reset_accumulation   = resetting ? 1u : 0u;
+        if (resetting)
+        {
+            // Latch for the multi-sample loop in dispatch() to consult.
+            m_force_accumulation_reset = true;
+        }
         frame_data.light_count          = light_count;
         frame_data.infinite_light_count = infinite_light_count;
 
@@ -2351,6 +2379,36 @@ namespace Piccolo
             m_denoise_constants_buffers[frame_index] == nullptr)
         {
             return;
+        }
+
+        // Review 2026-07-16 B1: transition AOV images from GENERAL (the
+        // layout the raygen wrote them in) to SHADER_READ_ONLY_OPTIMAL
+        // before the denoise compute pass reads them. D3D12 handles this
+        // implicitly via state promotion; Vulkan validation flags a
+        // VUID-VkImageLayout mismatch and treats reads from a mismatched
+        // layout as undefined behavior. The AOVs are transitioned back
+        // to GENERAL at the start of the next raygen dispatch.
+        if (m_aov_albedo_image_layout != RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            transitionImage(m_aov_albedo_image,
+                            m_aov_albedo_image_layout,
+                            RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_ACCESS_SHADER_READ_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            m_aov_albedo_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        if (m_aov_normal_depth_image_layout != RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            transitionImage(m_aov_normal_depth_image,
+                            m_aov_normal_depth_image_layout,
+                            RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            RHI_ACCESS_SHADER_WRITE_BIT,
+                            RHI_ACCESS_SHADER_READ_BIT,
+                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                            RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            m_aov_normal_depth_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
 
         RHICommandBuffer* command_buffer = m_rhi->getCurrentCommandBuffer();

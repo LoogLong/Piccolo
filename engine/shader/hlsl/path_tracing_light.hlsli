@@ -59,18 +59,30 @@ StructuredBuffer<PathTracingLight> g_lights : register(t1035, space0);
 //   g_sky_row_marginal : shape (6*N, 1) -- per-(face,row) probability mass.
 //                        For a uniform distribution all rows hold 1/(6*N).
 //
-//   g_sky_row_cdf      : shape (6*N, N) -- within-row CDF. row_cdf[fr, c] is
-//                        the cumulative probability of selecting col <= c
-//                        within the row indexed by (face, row), normalised
-//                        so the last entry is 1.0.
+//   g_sky_row_cdf      : shape (N, 6*N) -- within-row CDF, width=N
+//                        (the number of col bins per face) and height=6*N
+//                        (one row per (face, row_in_face) pair).
+//                        row_cdf.Load(int3(c, fr, 0)) is the cumulative
+//                        probability of selecting col <= c within the row
+//                        indexed by fr = face*N + row, normalised so the
+//                        last entry is 1.0. Review 2026-07-16 R4
+//                        corrected this from the previous incorrect
+//                        (6*N, N) comment.
 //
 // SampleLight(PT_LIGHT_SKY, ...) does a two-step lookup (row + col) and
 // converts the resulting (face, row, col) triple to a 3D direction in
 // DirectX cubemap convention.
 //
-// The PDF returned by the new sampler integrates to 1 over the sphere, so
-// the NEE estimator stays unbiased. There is a small systematic bias from
-// ignoring the cubemap face-area Jacobian; documented in the C++ header.
+// The PDF returned by the new sampler integrates to 1 over the sphere
+// in the limit of uniform bin solid angle. There is a small systematic
+// bias from ignoring the cubemap face-area Jacobian (the per-bin solid
+// angle varies with position on a face), so the NEE estimator is a
+// small-bias estimator, not strictly unbiased. Review 2026-07-16 R5
+// softens the previous "unbiased" claim to match the C++ header. The
+// bias is bounded by the relative area variation across a single face
+// which is < 20% even at the face-corners of an N=32 grid; we accept
+// this for the first cut in exchange for skipping a per-bin precomputed
+// Jacobian texture.
 // =============================================================================
 Texture2D<float> g_sky_row_marginal : register(t1037, space0);
 Texture2D<float> g_sky_row_cdf      : register(t1038, space0);
