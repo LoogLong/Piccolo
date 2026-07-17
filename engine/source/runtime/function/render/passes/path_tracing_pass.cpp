@@ -2581,15 +2581,59 @@ namespace Piccolo
         //                   writes as storage image u2). Same layout but
         //                   Vulkan still needs an explicit barrier to
         //                   synchronize the write->read dependency.
+        //
+        // Review 2026-07-16 (the real E_INVALIDARG root cause):
+        // the previous code set src access = SHADER_WRITE | TRANSFER_READ
+        // unconditionally. When m_scene_output_image_layout was
+        // RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL (the previous
+        // frame's post-trace state -- the default when denoise is on
+        // because dispatchDenoise ends with scene_output in
+        // TRANSFER_SRC after the cmdCopyImageToImage and the post-trace
+        // then SHADER_READ_ONLY for the UI pass), the resource was in
+        // D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+        // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE -- a READ
+        // state. SHADER_WRITE is only valid when the src state has
+        // been written to, which a read-only state has not. D3D12
+        // rejected the transition with E_INVALIDARG at command-list
+        // Close. The 0x80004005 E_FAIL cascade followed because the
+        // poisoned command list fails every subsequent Close.
+        //
+        // Pick the src access per the current src layout:
+        //   SHADER_READ_ONLY  -> SHADER_READ | INPUT_ATTACHMENT_READ
+        //   TRANSFER_SRC      -> TRANSFER_READ
+        //   UNDEFINED         -> 0
+        //   GENERAL (the raygen UAV-write case, first frame) -> SHADER_WRITE
+        uint32_t scene_denoise_src_access;
+        uint32_t scene_denoise_src_stages;
+        if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            scene_denoise_src_access  = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+            scene_denoise_src_stages  = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                      | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
+        else if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            scene_denoise_src_access  = RHI_ACCESS_TRANSFER_READ_BIT;
+            scene_denoise_src_stages  = RHI_PIPELINE_STAGE_TRANSFER_BIT;
+        }
+        else if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_UNDEFINED)
+        {
+            scene_denoise_src_access  = 0;
+            scene_denoise_src_stages  = RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        }
+        else
+        {
+            scene_denoise_src_access  = RHI_ACCESS_SHADER_WRITE_BIT;
+            scene_denoise_src_stages  = RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+        }
         if (m_scene_output_image_layout != RHI_IMAGE_LAYOUT_GENERAL)
         {
             transitionImage(m_scene_output_image,
                             m_scene_output_image_layout,
                             RHI_IMAGE_LAYOUT_GENERAL,
-                            RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_TRANSFER_READ_BIT,
+                            scene_denoise_src_access,
                             RHI_ACCESS_SHADER_WRITE_BIT,
-                            RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
-                              | RHI_PIPELINE_STAGE_TRANSFER_BIT,
+                            scene_denoise_src_stages,
                             RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
             m_scene_output_image_layout = RHI_IMAGE_LAYOUT_GENERAL;
         }
