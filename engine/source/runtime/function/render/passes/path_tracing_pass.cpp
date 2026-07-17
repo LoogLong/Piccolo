@@ -538,20 +538,49 @@ namespace Piccolo
         }
 
         m_rhi->pushEvent(command_buffer, "PathTracing.postTraceBarriers", debug_color);
-        // Review 2026-07-17 B1': the previous code hard-coded the source
-        // layout as RHI_IMAGE_LAYOUT_GENERAL. That was wrong when
-        // dispatchDenoise left scene_output in TRANSFER_SRC_OPTIMAL
-        // (after the cmdCopyImageToImage step). Use the tracked layout
-        // field instead and broaden the source stage set to cover the
-        // compute + transfer sources.
+        // Review 2026-07-17 (real E_INVALIDARG root cause, second
+        // occurrence): the previous code set src access = SHADER_WRITE |
+        // TRANSFER_READ unconditionally. After dispatchDenoise() and the
+        // cmdCopyImageToImage that follows it, scene_output is in
+        // RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL (a read state -- the
+        // cmdCopyImageToImage is what produced it). SHADER_WRITE is
+        // only valid for a state that has been written to, not a read
+        // state. D3D12 rejects with E_INVALIDARG.
+        //
+        // Pick the src access per the actual current src layout:
+        //   GENERAL (the first-frame path, no denoise) -> SHADER_WRITE
+        //   TRANSFER_SRC (the denoise loop)              -> TRANSFER_READ
+        //   SHADER_READ_ONLY (denoise disabled)         -> SHADER_READ
+        //   UNDEFINED (defensive)                       -> 0
+        uint32_t post_src_access;
+        uint32_t post_src_stages;
+        if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_GENERAL)
+        {
+            post_src_access = RHI_ACCESS_SHADER_WRITE_BIT;
+            post_src_stages = RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+        }
+        else if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            post_src_access = RHI_ACCESS_TRANSFER_READ_BIT;
+            post_src_stages = RHI_PIPELINE_STAGE_TRANSFER_BIT;
+        }
+        else if (m_scene_output_image_layout == RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            post_src_access = RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+            post_src_stages = RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                              | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
+        else
+        {
+            post_src_access = 0;
+            post_src_stages = RHI_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        }
         transitionImage(m_scene_output_image,
                         m_scene_output_image_layout,
                         RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        RHI_ACCESS_SHADER_WRITE_BIT | RHI_ACCESS_TRANSFER_READ_BIT,
+                        post_src_access,
                         RHI_ACCESS_SHADER_READ_BIT | RHI_ACCESS_INPUT_ATTACHMENT_READ_BIT,
-                        RHI_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
-                          | RHI_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                          | RHI_PIPELINE_STAGE_TRANSFER_BIT,
+                        post_src_stages,
                         RHI_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | RHI_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
         m_scene_output_image_layout = RHI_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
