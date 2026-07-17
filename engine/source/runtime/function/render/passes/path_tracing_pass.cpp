@@ -1189,11 +1189,25 @@ namespace Piccolo
             return false;
         }
 
+        // Review 2026-07-16 (real E_INVALIDARG root cause):
+        // The accumulation image MUST carry RHI_IMAGE_USAGE_SAMPLED_BIT
+        // in addition to STORAGE_BIT. dispatchDenoise() transitions it
+        // to SHADER_READ_ONLY_OPTIMAL for the spatial-temporal read
+        // (5x5 kernel sampling t0). D3D12 default resource flags include
+        // D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE whenever ANY other
+        // flag is set -- so a STORAGE-only image is created with
+        // DENY_SHADER_RESOURCE baked in, and the SHADER_READ_ONLY
+        // transition that dispatchDenoise records is rejected by the
+        // D3D12 runtime with HRESULT=0x80070057 E_INVALIDARG at
+        // command-list Close. Adding SAMPLED_BIT tells
+        // imageResourceFlags() (and the underlying D3D12 createImage)
+        // to leave the DENY_SHADER_RESOURCE bit cleared, so the image
+        // is usable as both UAV (raygen) and SRV (denoise).
         m_rhi->createImage(extent.width,
                            extent.height,
                            RHI_FORMAT_R32G32B32A32_SFLOAT,
                            RHI_IMAGE_TILING_OPTIMAL,
-                           RHI_IMAGE_USAGE_STORAGE_BIT,
+                           RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            m_accumulation_image,
                            m_accumulation_memory,
