@@ -59,7 +59,7 @@ namespace
 
 bool setupD3D12DebugLayerLogging(ID3D12Device* device)
 {
-    if (device == nullptr || !isDebugLayerEnabledByEnvironment())
+    if (device == nullptr)
     {
         return false;
     }
@@ -86,8 +86,23 @@ bool setupD3D12DebugLayerLogging(ID3D12Device* device)
         return false;
     }
 
+    // Review 2026-07-16: the validation layer's default filter is
+    // INFO-severity only, which swallows the BREAKING_BREAK and
+    // CORRUPTION / ERROR messages unless we explicitly opt them in.
+    // Force-on every category + severity so the next E_INVALIDARG
+    // from the path tracing dispatch surfaces the actual D3D12
+    // message id + description (e.g. "D3D12 ERROR #540: ... resource
+    // state (D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) is invalid
+    // for the command list's current state") instead of just the
+    // generic Close() HRESULT.
+    info_queue1->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true);
+    info_queue1->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true);
+    // Suppress the very noisy INFO-severity stream once the callback
+    // is registered so the log file doesn't grow megabytes per frame.
+    info_queue1->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_INFO, false);
+
     g_debug_layer_logging_active = true;
-    LOG_INFO("D3D12 InfoQueue message callback registered");
+    LOG_INFO("D3D12 InfoQueue message callback registered (CORRUPTION/ERROR break-on enabled)");
     return true;
 }
 

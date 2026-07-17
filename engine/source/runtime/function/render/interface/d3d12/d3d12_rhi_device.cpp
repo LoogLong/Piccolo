@@ -364,20 +364,27 @@ void D3D12RHI::destroyDevice()
     {
         UINT dxgi_factory_flags = 0;
 #ifdef _DEBUG
-        char  debug_layer_env[16] {};
-        DWORD debug_layer_env_length =
-            GetEnvironmentVariableA("PICCOLO_D3D12_DEBUG_LAYER", debug_layer_env, static_cast<DWORD>(sizeof(debug_layer_env)));
-        const bool enable_debug_layer = debug_layer_env_length > 0 && debug_layer_env_length < sizeof(debug_layer_env) &&
-                                        (debug_layer_env[0] == '1' || debug_layer_env[0] == 't' ||
-                                         debug_layer_env[0] == 'T' || debug_layer_env[0] == 'y' ||
-                                         debug_layer_env[0] == 'Y');
+        // Review 2026-07-16: enable the D3D12 debug layer unconditionally
+        // in debug builds so the path tracing E_INVALIDARG / E_FAIL
+        // spam emits the actual D3D12 validation message into the log
+        // (the previous env-var gate required the user to set
+        // PICCOLO_D3D12_DEBUG_LAYER=1 before reproducing the error,
+        // and the messages get filtered out by the validation layer's
+        // default INFO-severity filter if it isn't enabled). The
+        // debug layer is only compiled in #ifdef _DEBUG so release
+        // builds are unaffected.
+        const bool enable_debug_layer = true;
 
         ComPtr<ID3D12Debug> debug_controller;
-        if (enable_debug_layer && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller))))
         {
             debug_controller->EnableDebugLayer();
             dxgi_factory_flags |= DXGI_CREATE_FACTORY_DEBUG;
-            LOG_INFO("D3D12 debug layer enabled by PICCOLO_D3D12_DEBUG_LAYER");
+            LOG_INFO("D3D12 debug layer enabled (debug build)");
+        }
+        else
+        {
+            LOG_WARN("D3D12 debug interface unavailable; validation messages will not be reported");
         }
 #endif
 
