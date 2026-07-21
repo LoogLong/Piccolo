@@ -1234,9 +1234,20 @@ namespace Piccolo
         // imageResourceFlags() (and the underlying D3D12 createImage)
         // to leave the DENY_SHADER_RESOURCE bit cleared, so the image
         // is usable as both UAV (raygen) and SRV (denoise).
+        //
+        // Review 2026-07-16: use m_scene_output_format here too so the
+        // first-frame seed's cmdCopyImageToImage (accumulation ->
+        // denoise_history) is a same-format copy. The previous
+        // hard-coded R32G32B32A32 was incompatible with the
+        // scene_output's actual format (R16G16B16A16_TYPELESS for HDR
+        // swapchains), producing D3D12 validation #874 on the very
+        // first frame after enabling denoise. The raygen's UAV write
+        // is float32 in registers; for HDR swapchains the hardware
+        // truncates to float16 on storage -- this is the standard HDR
+        // precision loss in any HDR path tracer, not a separate bug.
         m_rhi->createImage(extent.width,
                            extent.height,
-                           RHI_FORMAT_R32G32B32A32_SFLOAT,
+                           m_scene_output_format,
                            RHI_IMAGE_TILING_OPTIMAL,
                            RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1246,7 +1257,7 @@ namespace Piccolo
                            1,
                            1);
         m_rhi->createImageView(m_accumulation_image,
-                               RHI_FORMAT_R32G32B32A32_SFLOAT,
+                               m_scene_output_format,
                                RHI_IMAGE_ASPECT_COLOR_BIT,
                                RHI_IMAGE_VIEW_TYPE_2D,
                                1,
