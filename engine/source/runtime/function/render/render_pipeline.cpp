@@ -125,6 +125,14 @@ namespace Piccolo
         PathTracingPassInitInfo path_tracing_init_info {};
         path_tracing_init_info.scene_output_image      = main_camera_pass->getBackupOddImage();
         path_tracing_init_info.scene_output_image_view = main_camera_pass->getBackupOddImageView();
+        // Review 2026-07-16: the denoise history image is copied
+        // to/from scene_output_image by cmdCopyImageToImage, which
+        // requires source and destination to share the same DXGI
+        // format. Use the swapchain's image_format (which is what
+        // the backup image is created with) so the denoise history
+        // matches. Default R8G8B8A8_UNORM for SDR swapchains; the
+        // HDR swapchain path picks R16G16B16A16_TYPELESS here.
+        path_tracing_init_info.scene_output_format     = m_rhi->getSwapchainInfo().image_format;
         m_path_tracing_pass->initialize(&path_tracing_init_info);
 
         m_gpu_skinning_pass->initialize(nullptr);
@@ -334,7 +342,8 @@ namespace Piccolo
             main_camera_pass.getFramebufferImageViews()[_main_camera_pass_backup_buffer_odd],
             main_camera_pass.getFramebufferImageViews()[_main_camera_pass_backup_buffer_even]);
         path_tracing_pass.updateAfterFramebufferRecreate(main_camera_pass.getBackupOddImage(),
-                                                         main_camera_pass.getBackupOddImageView());
+                                                         main_camera_pass.getBackupOddImageView(),
+                                                         m_rhi->getSwapchainInfo().image_format);
         pick_pass.recreateFramebuffer();
         particle_pass.updateAfterFramebufferRecreate();
         g_runtime_global_context.m_debugdraw_manager->updateAfterRecreateSwapchain();

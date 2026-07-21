@@ -169,6 +169,7 @@ namespace Piccolo
         {
             m_scene_output_image      = path_tracing_init_info->scene_output_image;
             m_scene_output_image_view = path_tracing_init_info->scene_output_image_view;
+            m_scene_output_format     = path_tracing_init_info->scene_output_format;
         }
 
         m_render_resource_impl = std::static_pointer_cast<RenderResource>(m_render_resource);
@@ -595,10 +596,11 @@ namespace Piccolo
         return true;
     }
 
-    void PathTracingPass::updateAfterFramebufferRecreate(RHIImage* scene_output_image, RHIImageView* scene_output_image_view)
+    void PathTracingPass::updateAfterFramebufferRecreate(RHIImage* scene_output_image, RHIImageView* scene_output_image_view, RHIFormat scene_output_format)
     {
         m_scene_output_image      = scene_output_image;
         m_scene_output_image_view = scene_output_image_view;
+        m_scene_output_format     = scene_output_format;
         tagPathTracingSceneOutput(m_rhi.get(), m_scene_output_image, m_scene_output_image_view);
         m_scene_output_image_layout = RHI_IMAGE_LAYOUT_UNDEFINED;
         destroyAccumulationImage();
@@ -2422,11 +2424,21 @@ namespace Piccolo
             }
         }
 
-        // History image: same size as scene output, RGBA32F. Lazily written
-        // by the dispatch (frame_index == 0 uses identity).
+        // History image: same size and same format as scene output.
+        // Lazily written by the dispatch (frame_index == 0 uses
+        // identity). The format MUST match scene_output exactly --
+        // cmdCopyImageToImage requires the source and destination to
+        // have the same DXGI format (D3D12 validation error #874:
+        // "The source and destination resource formats are
+        // incompatible"). The previous hard-coded R32G32B32A32_SFLOAT
+        // worked for SDR swapchains (R8G8B8A8) but failed for HDR
+        // swapchains (R16G16B16A16). Use the same format as scene
+        // output_image, which the caller passes in via the init info
+        // / updateAfterFramebufferRecreate API.
+        const RHIFormat history_format = m_scene_output_format;
         m_rhi->createImage(extent.width,
                            extent.height,
-                           RHI_FORMAT_R32G32B32A32_SFLOAT,
+                           history_format,
                            RHI_IMAGE_TILING_OPTIMAL,
                            RHI_IMAGE_USAGE_STORAGE_BIT | RHI_IMAGE_USAGE_SAMPLED_BIT,
                            RHI_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -2436,7 +2448,7 @@ namespace Piccolo
                            1,
                            1);
         m_rhi->createImageView(m_denoise_history_image,
-                               RHI_FORMAT_R32G32B32A32_SFLOAT,
+                               history_format,
                                RHI_IMAGE_ASPECT_COLOR_BIT,
                                RHI_IMAGE_VIEW_TYPE_2D,
                                1,

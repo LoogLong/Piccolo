@@ -29,13 +29,22 @@ namespace Piccolo
 
 
     struct PathTracingPassInitInfo : RenderPassInitInfo
-
     {
+        RenderScene* render_scene {nullptr};
 
         RHIImage*     scene_output_image {nullptr};
-
         RHIImageView* scene_output_image_view {nullptr};
+        // Review 2026-07-16: the denoise history image is copied to/from
+        // scene_output_image by cmdCopyImageToImage, which requires
+        // source and destination to share the same DXGI format. The
+        // HDR swapchain path emits scene_output as R16G16B16A16_TYPELESS
+        // while the previous denoise history was hard-coded to
+        // R32G32B32A32_SFLOAT -- D3D12 validation #874 rejected the
+        // cross-format copy and poisoned the command list, producing
+        // the E_INVALIDARG / E_FAIL spam.
+        RHIFormat     scene_output_format {RHI_FORMAT_R8G8B8A8_UNORM};
 
+        const RHIBuffer* mesh_perframe_storage_buffer {nullptr};
     };
 
 
@@ -58,7 +67,7 @@ namespace Piccolo
 
         bool dispatch();
 
-        void updateAfterFramebufferRecreate(RHIImage* scene_output_image, RHIImageView* scene_output_image_view);
+        void updateAfterFramebufferRecreate(RHIImage* scene_output_image, RHIImageView* scene_output_image_view, RHIFormat scene_output_format);
 
         void resetAccumulation();
 
@@ -211,6 +220,7 @@ namespace Piccolo
 
 
         RHIImage*     m_scene_output_image {nullptr};
+        RHIFormat     m_scene_output_format {RHI_FORMAT_R8G8B8A8_UNORM};
 
         RHIImageView* m_scene_output_image_view {nullptr};
 
