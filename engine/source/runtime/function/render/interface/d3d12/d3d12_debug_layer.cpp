@@ -42,6 +42,16 @@ namespace
         }
 
         const uint32_t message_id = static_cast<uint32_t>(id);
+        // Suppress the noisy CreateSampler2 "comparison func with
+        // non-comparison filter" warning (D3D12_MESSAGE_ID 1361).
+        // The engine creates comparison-capable samplers but uses them
+        // as regular filter samplers; the warning is benign but fires
+        // for every sampler created (~40 log lines per editor
+        // startup).
+        if (message_id == 1361)
+        {
+            return;
+        }
         switch (severity)
         {
             case D3D12_MESSAGE_SEVERITY_CORRUPTION:
