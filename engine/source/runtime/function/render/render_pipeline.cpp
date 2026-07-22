@@ -128,11 +128,18 @@ namespace Piccolo
         // Review 2026-07-16: the denoise history image is copied
         // to/from scene_output_image by cmdCopyImageToImage, which
         // requires source and destination to share the same DXGI
-        // format. Use the swapchain's image_format (which is what
-        // the backup image is created with) so the denoise history
-        // matches. Default R8G8B8A8_UNORM for SDR swapchains; the
-        // HDR swapchain path picks R16G16B16A16_TYPELESS here.
-        path_tracing_init_info.scene_output_format     = m_rhi->getSwapchainInfo().image_format;
+        // format. m_scene_output_image for the path tracing is the
+        // backup image (main_camera_pass->getBackupOddImage()), NOT
+        // the swapchain backbuffer -- the backup is created as
+        // R16G16B16A16_SFLOAT (main_camera_pass.cpp:86) regardless
+        // of the swapchain's format, so the denoise history has to
+        // match the backup's R16G16B16A16_SFLOAT. Using the
+        // swapchain's image_format (which is R8G8B8A8_UNORM for SDR
+        // / R16G16B16A16_TYPELESS for HDR) made the post-denoise
+        // copy fail D3D12 #874 in HDR mode. The fix is to read the
+        // backup attachment's actual format.
+        path_tracing_init_info.scene_output_format =
+            main_camera_pass->getBackupOddImageFormat();
         m_path_tracing_pass->initialize(&path_tracing_init_info);
 
         m_gpu_skinning_pass->initialize(nullptr);

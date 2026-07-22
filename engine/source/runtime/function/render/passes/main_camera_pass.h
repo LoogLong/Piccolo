@@ -82,6 +82,7 @@ namespace Piccolo
 
         RHIImage* getBackupOddImage() const;
         RHIImageView* getBackupOddImageView() const;
+        RHIFormat getBackupOddImageFormat() const;
 
         void copyNormalAndDepthImage();
 

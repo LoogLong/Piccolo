@@ -3054,6 +3054,11 @@ namespace Piccolo
         return m_framebuffer.attachments[_main_camera_pass_backup_buffer_odd].view;
     }
 
+    RHIFormat MainCameraPass::getBackupOddImageFormat() const
+    {
+        return m_framebuffer.attachments[_main_camera_pass_backup_buffer_odd].format;
+    }
+
     void MainCameraPass::clearUIAttachment()
     {
         RHIClearAttachment clear_attachments[1];
