@@ -52,17 +52,6 @@ namespace
         {
             return;
         }
-        // Suppress DrawInstanced with InstanceCount=0 (D3D12_MESSAGE_ID
-        // 1418). The path tracing / particle / debug-draw passes issue
-        // empty draw calls when no instances are active (e.g. zero
-        // lights to draw). D3D12 considers the draw a no-op; the
-        // warning is benign but adds 1000+ lines per second to the
-        // log. Add an `if (instanceCount > 0)` guard in the caller
-        // separately to actually skip the draw.
-        if (message_id == 1418)
-        {
-            return;
-        }
         switch (severity)
         {
             case D3D12_MESSAGE_SEVERITY_CORRUPTION:

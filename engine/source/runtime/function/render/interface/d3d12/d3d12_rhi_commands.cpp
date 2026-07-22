@@ -1555,6 +1555,16 @@ void D3D12RHI::cmdCopyBuffer(RHICommandBuffer* commandBuffer, RHIBuffer* srcBuff
 void D3D12RHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
 {
 #ifdef _WIN32
+    // Review 2026-07-22: the path tracing / particle / debug-draw
+    // passes call DrawInstanced with instanceCount=0 when no instances
+    // are active (e.g. zero lights to draw). D3D12 considers the call a
+    // no-op and the validation layer's #1418 warning fires once per
+    // call -- 1000+ log lines per second at 60 fps. Guard at the RHI
+    // level so every backend benefits (no caller changes needed).
+    if (vertexCount == 0 || instanceCount == 0)
+    {
+        return;
+    }
     auto* d3d_command_buffer = static_cast<D3D12RHICommandBuffer*>(commandBuffer);
     if (auto* command_list = d3d12CommandListFor(commandBuffer))
     {
@@ -1569,7 +1579,7 @@ void D3D12RHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, ui
         }
         command_list->DrawInstanced(vertexCount, instanceCount, firstVertex, firstInstance);
     }
-    else if (commandBuffer != nullptr && vertexCount > 0 && instanceCount > 0)
+    else if (commandBuffer != nullptr)
     {
         LOG_WARN("D3D12 cmdDraw skipped because no command list is available");
         assert(false && "D3D12 cmdDraw invoked without a valid command list");

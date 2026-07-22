@@ -3359,6 +3359,12 @@ namespace Piccolo
 
     void VulkanRHI::cmdDraw(RHICommandBuffer* commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
     {
+        // Review 2026-07-22: skip empty draws at the RHI level so the
+        // #1418 validation warning never fires for instanceCount=0.
+        if (vertexCount == 0 || instanceCount == 0)
+        {
+            return;
+        }
         vkCmdDraw(((VulkanCommandBuffer*)commandBuffer)->getResource(), vertexCount, instanceCount, firstVertex, firstInstance);
     }
     
