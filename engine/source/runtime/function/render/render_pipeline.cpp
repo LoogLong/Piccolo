@@ -350,7 +350,7 @@ namespace Piccolo
             main_camera_pass.getFramebufferImageViews()[_main_camera_pass_backup_buffer_even]);
         path_tracing_pass.updateAfterFramebufferRecreate(main_camera_pass.getBackupOddImage(),
                                                          main_camera_pass.getBackupOddImageView(),
-                                                         m_rhi->getSwapchainInfo().image_format);
+                                                         main_camera_pass.getBackupOddImageFormat());
         pick_pass.recreateFramebuffer();
         particle_pass.updateAfterFramebufferRecreate();
         g_runtime_global_context.m_debugdraw_manager->updateAfterRecreateSwapchain();
